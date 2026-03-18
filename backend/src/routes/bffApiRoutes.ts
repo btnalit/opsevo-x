@@ -349,6 +349,19 @@ router.post('/syslog/rules', async (req: Request, res: Response) => {
 });
 
 /**
+ * Check if a regex pattern is safe from ReDoS attacks.
+ * Rejects nested quantifiers, overlapping alternations, and overly long patterns.
+ */
+function isSafeRegex(pattern: string): boolean {
+  if (pattern.length > 500) return false;
+  // Detect nested quantifiers like (a+)+, (a*)+, (a+){2,}, (a+)*, etc.
+  if (/(\([^)]*[+*][^)]*\))[+*{]/.test(pattern)) return false;
+  // Detect overlapping alternation with quantifier like (a|a)+
+  if (/\(([^|)]+)\|\1\)[+*{]/.test(pattern)) return false;
+  return true;
+}
+
+/**
  * POST /api/v1/syslog/rules/test — 测试 Syslog 解析规则
  */
 router.post('/syslog/rules/test', async (req: Request, res: Response) => {
@@ -356,6 +369,10 @@ router.post('/syslog/rules/test', async (req: Request, res: Response) => {
     const { pattern, testMessage } = req.body;
     if (!pattern || !testMessage) {
       res.status(400).json({ success: false, error: 'pattern and testMessage are required' });
+      return;
+    }
+    if (!isSafeRegex(pattern)) {
+      res.status(400).json({ success: false, error: 'Potentially unsafe regex pattern detected (nested quantifiers or excessive length)' });
       return;
     }
     const regex = new RegExp(pattern);

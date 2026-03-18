@@ -11,6 +11,7 @@ the mapping transparently.
 
 import json
 import logging
+import re
 import uuid
 from dataclasses import dataclass
 
@@ -328,6 +329,12 @@ class VectorStore:
             raise ValueError(
                 f"Unknown collection '{name}'. "
                 f"Valid collections: {', '.join(COLLECTIONS)}"
+            )
+        # Defensive check: ensure table name contains only safe characters
+        if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', cfg.table):
+            raise ValueError(
+                f"Invalid table name '{cfg.table}' for collection '{name}'. "
+                "Table names must contain only letters, digits, and underscores."
             )
         return cfg
 

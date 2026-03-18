@@ -979,14 +979,15 @@ export class AlertPipeline implements IAlertPipeline {
         });
       }
 
-      // Publish decision_execution_failed event to EventBus
+      // Publish decision execution failure event to EventBus using valid 'internal' type
       if (this._eventBus) {
         this._eventBus.publish({
-          type: 'decision_execution_failed',
+          type: 'internal',
           priority: 'high',
           source: 'alert_pipeline',
           schemaVersion: '1.0',
           payload: {
+            subType: 'decision_execution_failed',
             decisionId: decision.id,
             action: decision.action,
             error: errorMessage,
@@ -1152,14 +1153,15 @@ export class AlertPipeline implements IAlertPipeline {
                 });
               }
 
-              // Publish failure event to EventBus
+              // Publish failure event to EventBus using valid 'internal' type
               if (this._eventBus) {
                 this._eventBus.publish({
-                  type: 'decision_execution_failed',
+                  type: 'internal',
                   priority: 'high',
                   source: 'alert_pipeline',
                   schemaVersion: '1.0',
                   payload: {
+                    subType: 'decision_execution_failed',
                     decisionId: decision.id,
                     action: decision.action,
                     error: error instanceof Error ? error.message : String(error),

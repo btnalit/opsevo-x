@@ -396,6 +396,7 @@ export class SnmpTrapReceiver {
   private oidMappings: TrapOidMapping[] = [];
   private v3Credentials: SnmpV3Credential[] = [];
   private trapStats: Map<string, { trapCount: number; lastSeenAt: number }> = new Map();
+  private statsCleanupTimer: NodeJS.Timeout | null = null;
 
   private config: SnmpTrapReceiverConfig = {
     port: 162,
@@ -425,12 +426,14 @@ export class SnmpTrapReceiver {
     });
 
     await this.startUdp();
+    this.startStatsCleanup();
     this.running = true;
     logger.info(`[SnmpTrapReceiver] Started — UDP :${this.config.port}`);
   }
 
   async stop(): Promise<void> {
     if (!this.running) return;
+    if (this.statsCleanupTimer) { clearInterval(this.statsCleanupTimer); this.statsCleanupTimer = null; }
     if (this.udpServer) { try { this.udpServer.close(); } catch { /* ignore */ } this.udpServer = null; }
     this.running = false;
     logger.info('[SnmpTrapReceiver] Stopped');
@@ -564,6 +567,24 @@ export class SnmpTrapReceiver {
     const stats = this.trapStats.get(sourceIp);
     if (stats) { stats.trapCount++; stats.lastSeenAt = now; }
     else this.trapStats.set(sourceIp, { trapCount: 1, lastSeenAt: now });
+  }
+
+  /**
+   * Start periodic cleanup of stale trapStats entries (lastSeenAt > 24h).
+   * Runs every hour; timer is unref'd so it won't prevent process exit.
+   */
+  private startStatsCleanup(): void {
+    const CLEANUP_INTERVAL = 60 * 60 * 1000; // 1 hour
+    const MAX_AGE = 24 * 60 * 60 * 1000;     // 24 hours
+    this.statsCleanupTimer = setInterval(() => {
+      const now = Date.now();
+      for (const [ip, stats] of this.trapStats) {
+        if (now - stats.lastSeenAt > MAX_AGE) {
+          this.trapStats.delete(ip);
+        }
+      }
+    }, CLEANUP_INTERVAL);
+    this.statsCleanupTimer.unref();
   }
 
   getTrapStats(): Map<string, { trapCount: number; lastSeenAt: number }> {

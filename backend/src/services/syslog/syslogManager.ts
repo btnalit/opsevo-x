@@ -180,6 +180,7 @@ export class SyslogManager {
 
   /** In-memory per-source stats */
   private sourceStats: Map<string, SourceStats> = new Map();
+  private statsCleanupTimer: NodeJS.Timeout | null = null;
 
   private config: SyslogManagerConfig = {
     udpPort: 514,
@@ -228,6 +229,7 @@ export class SyslogManager {
     // Start listeners
     await this.startUdp();
     await this.startTcp();
+    this.startStatsCleanup();
 
     this.running = true;
     logger.info(
@@ -240,6 +242,11 @@ export class SyslogManager {
    */
   async stop(): Promise<void> {
     if (!this.running) return;
+
+    if (this.statsCleanupTimer) {
+      clearInterval(this.statsCleanupTimer);
+      this.statsCleanupTimer = null;
+    }
 
     if (this.udpServer) {
       try { this.udpServer.close(); } catch { /* ignore */ }
@@ -722,6 +729,24 @@ export class SyslogManager {
     stats.recentTimestamps.push(now);
     const cutoff = now - 60_000;
     stats.recentTimestamps = stats.recentTimestamps.filter((t) => t >= cutoff);
+  }
+
+  /**
+   * Start periodic cleanup of stale sourceStats entries (lastSeenAt > 24h).
+   * Runs every hour; timer is unref'd so it won't prevent process exit.
+   */
+  private startStatsCleanup(): void {
+    const CLEANUP_INTERVAL = 60 * 60 * 1000; // 1 hour
+    const MAX_AGE = 24 * 60 * 60 * 1000;     // 24 hours
+    this.statsCleanupTimer = setInterval(() => {
+      const now = Date.now();
+      for (const [ip, stats] of this.sourceStats) {
+        if (now - stats.lastSeenAt > MAX_AGE) {
+          this.sourceStats.delete(ip);
+        }
+      }
+    }, CLEANUP_INTERVAL);
+    this.statsCleanupTimer.unref();
   }
 
   /**

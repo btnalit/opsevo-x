@@ -362,14 +362,20 @@ export class KnowledgeGraphBuilder extends EventEmitter {
     if (this.hasPg) {
       const edgeRows = await this.dataStore!.query<DbEdgeRow>(
         `WITH RECURSIVE hop AS (
-           SELECT id, source_id, target_id, type, properties, weight, created_at, updated_at, 1 AS depth
+           SELECT id, source_id, target_id, type, properties, weight, created_at, updated_at, 1 AS depth,
+                  ARRAY[source_id, target_id] AS visited_ids
            FROM knowledge_graph_edges
            WHERE source_id = $1 OR target_id = $1
-         UNION
-           SELECT e.id, e.source_id, e.target_id, e.type, e.properties, e.weight, e.created_at, e.updated_at, h.depth + 1
+         UNION ALL
+           SELECT e.id, e.source_id, e.target_id, e.type, e.properties, e.weight, e.created_at, e.updated_at, h.depth + 1,
+                  h.visited_ids || CASE WHEN e.source_id = ANY(h.visited_ids) THEN e.target_id ELSE e.source_id END
            FROM knowledge_graph_edges e
-           INNER JOIN hop h ON (e.source_id = h.target_id OR e.source_id = h.source_id
-                             OR e.target_id = h.target_id OR e.target_id = h.source_id)
+           INNER JOIN hop h ON (
+             (e.source_id = h.target_id AND NOT e.target_id = ANY(h.visited_ids))
+             OR (e.source_id = h.source_id AND NOT e.target_id = ANY(h.visited_ids))
+             OR (e.target_id = h.target_id AND NOT e.source_id = ANY(h.visited_ids))
+             OR (e.target_id = h.source_id AND NOT e.source_id = ANY(h.visited_ids))
+           )
              AND e.id != h.id
            WHERE h.depth < $2
         )
