@@ -1,16 +1,15 @@
 /**
  * Intent Registry — 绝对白名单制
  * 
- * 大脑只生成结构化的 JSON Intent，服务端翻译为 RouterOS 命令。
+ * 大脑只生成结构化的 JSON Intent，服务端翻译为设备命令。
  * 未注册的 Intent 一律丢弃，根治 AI 幻觉安全风险。
  * 
  * 设计原则（师傅教导）：
  * - 不要试图限制 AI "不能想什么"，而是严格限制系统"只接受什么"
- * - 大脑绝不能生成原始 RouterOS 命令行脚本
+ * - 大脑绝不能生成原始设备命令行脚本
  * - 每个合法意图都有完整的解析、校验、执行路径
  */
 
-import { routerosClient, RouterOSClient } from '../../routerosClient';
 import { logger } from '../../../utils/logger';
 import { v4 as uuidv4 } from 'uuid';
 import { serviceRegistry } from '../../serviceRegistry';
@@ -58,19 +57,19 @@ export interface IntentParams {
     /** AI 提供的原始设备标识符（名称或 IP），用于返回给 AI 的反馈信息，防止 UUID 泄漏 */
     originalDeviceId?: string;
     /** @internal 由 executeIntent 注入的设备专属客户端，resolver 优先使用 */
-    _client?: RouterOSClient;
+    _client?: any;
     /** @internal add_firewall_rule resolver 写回的唯一 comment，供 checkFn 精确匹配 */
     _verifyComment?: string;
     [key: string]: unknown;
 }
 
 /**
- * 获取 Intent 应使用的 RouterOS 客户端
+ * 获取 Intent 应使用的设备客户端
  * 优先使用 params._client（由 executeIntent 通过 DevicePool 注入），
- * 不存在时回退到全局 routerosClient（向后兼容）
+ * 不存在时返回 null（单设备模式已在路由逻辑中处理）
  */
-function getClient(params: IntentParams): RouterOSClient {
-    return (params._client as RouterOSClient) || routerosClient;
+function getClient(params: IntentParams): any {
+    return params._client || null;
 }
 
 /**
@@ -79,7 +78,7 @@ function getClient(params: IntentParams): RouterOSClient {
  * @note 这是一个 TOCTOU (Time-of-check to time-of-use) 检查。在检查和使用之间，连接仍可能断开。
  *       因此，外层的 try/catch 依然是必须的最终保障。
  */
-function preflightConnectivityCheck(client: RouterOSClient): { ok: boolean; errorCode?: IntentErrorCode; errorMsg?: string } {
+function preflightConnectivityCheck(client: any): { ok: boolean; errorCode?: IntentErrorCode; errorMsg?: string } {
     try {
         if (!client.isConnected()) {
             const config = client.getConfig();
@@ -87,7 +86,7 @@ function preflightConnectivityCheck(client: RouterOSClient): { ok: boolean; erro
             return {
                 ok: false,
                 errorCode: 'DEVICE_DISCONNECTED',
-                errorMsg: `[DEVICE_DISCONNECTED] 设备 ${host} 的 RouterOS 连接已断开。请检查设备状态或等待自动重连。`,
+                errorMsg: `[DEVICE_DISCONNECTED] 设备 ${host} 的连接已断开。请检查设备状态或等待自动重连。`,
             };
         }
         return { ok: true };
@@ -148,7 +147,7 @@ export interface RegisteredIntent {
     requiresApproval: boolean;
     /** 参数校验：列出合法参数名及是否必填 */
     paramSchema: Record<string, { required: boolean; description: string }>;
-    /** 意图解析器：将参数翻译为安全的 RouterOS API 调用 */
+    /** 意图解析器：将参数翻译为安全的设备 API 调用 */
     resolver: (params: IntentParams) => Promise<unknown>;
     /** 意图所属类别（可属于多个类别），用于按场景按需注入 */
     category: IntentCategory[];
@@ -632,7 +631,7 @@ registerIntent({
 
 registerIntent({
     action: 'query_system_license',
-    description: '查询 RouterOS 授权信息',
+    description: '查询设备授权信息',
     riskLevel: 'low',
     requiresApproval: false,
     paramSchema: {},
@@ -1390,7 +1389,7 @@ registerIntent({
 
 registerIntent({
     action: 'system_update',
-    description: '检查并安装 RouterOS 系统升级',
+    description: '检查并安装设备系统升级',
     riskLevel: 'critical',
     requiresApproval: true,
     category: ['system_danger'],
@@ -1414,7 +1413,7 @@ registerIntent({
 
 registerIntent({
     action: 'export_config',
-    description: '导出 RouterOS 设备完整配置',
+    description: '导出设备完整配置',
     riskLevel: 'low',
     requiresApproval: false,
     paramSchema: {
@@ -1426,12 +1425,12 @@ registerIntent({
 
 registerIntent({
     action: 'execute_command',
-    description: '在 RouterOS 设备上执行任意命令（极高风险，需审批）',
+    description: '在设备上执行任意命令（极高风险，需审批）',
     riskLevel: 'critical',
     requiresApproval: true,
     paramSchema: {
         deviceId: { required: true, description: '目标设备 ID' },
-        command: { required: true, description: 'RouterOS 命令' },
+        command: { required: true, description: '设备命令' },
     },
     category: ['system_danger'],
     resolver: async (p) => {
@@ -1661,7 +1660,7 @@ export async function executeIntent(action: string, params: IntentParams): Promi
     // 路径 A — 有 deviceId：强制走 DevicePool，tenantId 必须有，失败绝不降级
     // 路径 B — 无 deviceId：
     //   - DeviceManager 有受管设备 → 系统层面拒绝（防止 LLM 漏传 deviceId 时静默操作错设备）
-    //   - DeviceManager 无受管设备 → 走全局 routerosClient（真正的单设备模式）
+    //   - DeviceManager 无受管设备 → 无可用客户端（需先注册设备）
     //
     // 注意：params._client 由 Brain tick 在单设备模式下注入，多设备路径不使用它
     if (!params._client) {
@@ -1798,8 +1797,8 @@ export async function executeIntent(action: string, params: IntentParams): Promi
                     };
                 }
             } else {
-                // 真正的单设备模式：DB 中无任何设备记录，使用全局 routerosClient
-                logger.debug(`[IntentRegistry] [ROUTE_B] Single-device mode: no devices in database, using global routerosClient.`);
+                // 无受管设备模式：DB 中无任何设备记录，需先注册设备
+                logger.debug(`[IntentRegistry] [ROUTE_B] No managed devices in database. Device registration required.`);
             }
         }
     }

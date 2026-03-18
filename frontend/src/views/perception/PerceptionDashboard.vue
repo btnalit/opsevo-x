@@ -9,7 +9,7 @@
       </el-col>
       <el-col :span="8">
         <el-card shadow="hover">
-          <el-statistic title="队列深度" :value="stats.queueDepth" />
+          <el-statistic title="事件发布总数" :value="stats.totalPublishedCount" />
         </el-card>
       </el-col>
       <el-col :span="8">
@@ -65,7 +65,7 @@ defineOptions({ name: 'PerceptionDashboard' })
 
 const loading = ref(false)
 const sources = ref<PerceptionSource[]>([])
-const stats = reactive<PerceptionStats>({ totalEvents: 0, eventsByType: {}, queueDepth: 0 })
+const stats = reactive<PerceptionStats>({ totalEvents: 0, eventsByType: {}, totalPublishedCount: 0 })
 
 const activeSources = computed(() => sources.value.filter(s => s.status === 'active'))
 

@@ -99,7 +99,7 @@ router.get('/status', (_req: Request, res: Response) => {
   }));
 
   res.json({
-    queueDepth: globalEventBus.getQueueDepth(),
+    totalPublishedCount: globalEventBus.getTotalPublishedCount(),
     activeSources: sourceList,
   });
 });

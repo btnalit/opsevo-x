@@ -5,7 +5,7 @@
  * 路由分组：
  * - /api/ai/configs - API 配置管理
  * - /api/ai/chat - 聊天功能
- * - /api/ai/context - RouterOS 上下文
+ * - /api/ai/context - 设备上下文
  * - /api/ai/scripts - 脚本执行
  * - /api/ai/sessions - 会话管理
  * - /api/ai/providers - 提供商信息
@@ -109,7 +109,7 @@ router.post('/chat', chat);
 // POST /api/ai/chat/stream - 发送聊天消息（流式 SSE）
 router.post('/chat/stream', chatStream);
 
-// ==================== RouterOS 上下文 ====================
+// ==================== 设备上下文 ====================
 
 // GET /api/ai/context - 获取当前上下文
 router.get('/context', getContext);

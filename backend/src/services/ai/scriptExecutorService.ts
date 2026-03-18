@@ -1,10 +1,10 @@
 /**
  * ScriptExecutorService - 脚本执行服务
  *
- * 执行 AI 生成的 RouterOS 脚本，管理执行历史记录
+ * 执行 AI 生成的设备脚本，管理执行历史记录
  *
  * 功能：
- * - 执行 RouterOS 脚本（直接透传到设备）
+ * - 执行设备脚本（直接透传到设备）
  * - 基本脚本验证
  * - 记录执行历史
  * - 执行日志记录
@@ -29,9 +29,9 @@ import {
   AIAgentData,
   AIAgentSettings,
 } from '../../types/ai';
-import { routerosClient } from '../routerosClient';
 import { logger } from '../../utils/logger';
-import { convertToApiFormat as sharedConvertToApiFormat } from '../../utils/routerosCliParser';
+import { serviceRegistry } from '../serviceRegistry';
+import { SERVICE_NAMES } from '../bootstrap';
 
 /**
  * 数据文件路径配置
@@ -71,7 +71,7 @@ const DANGEROUS_KEYWORDS = [
 /**
  * ScriptExecutorService 实现类
  *
- * 采用直接透传方式：将命令发送到 RouterOS，返回设备的原始响应
+ * 采用直接透传方式：将命令发送到设备，返回设备的原始响应
  */
 export class ScriptExecutorService implements IScriptExecutor {
   /**
@@ -135,7 +135,7 @@ export class ScriptExecutorService implements IScriptExecutor {
   }
 
   /**
-   * 执行 RouterOS 脚本
+   * 执行设备脚本
    * 直接透传命令到设备，返回设备的原始响应或错误
    */
   async execute(request: ScriptExecuteRequest): Promise<ScriptExecuteResult> {
@@ -164,15 +164,23 @@ export class ScriptExecutorService implements IScriptExecutor {
       };
     }
 
-    // 多设备支持：使用请求级客户端，回退到全局单例
+    // 多设备支持：通过 DevicePool 获取设备连接
     // Requirements: 8.1, 8.2
-    const client = request.routerosClient || routerosClient;
+    const devicePool = serviceRegistry.tryGet<any>(SERVICE_NAMES.DEVICE_POOL);
+    let client: any = null;
+    if (devicePool && (request as any).tenantId && (request as any).deviceId) {
+      try {
+        client = await devicePool.getConnection((request as any).tenantId, (request as any).deviceId);
+      } catch {
+        // fall through — client stays null
+      }
+    }
 
     // 检查连接状态
-    if (!client.isConnected()) {
+    if (!client || !client.isConnected()) {
       return {
         success: false,
-        error: '未连接到 RouterOS 设备',
+        error: '未连接到设备',
         executedAt,
       };
     }
@@ -198,7 +206,7 @@ export class ScriptExecutorService implements IScriptExecutor {
   /**
    * 执行脚本并返回输出
    */
-  private async executeScript(script: string, client?: import('../routerosClient').RouterOSClient): Promise<string> {
+  private async executeScript(script: string, client?: any): Promise<string> {
     const lines = script
       .split('\n')
       .map(line => line.trim())
@@ -222,20 +230,20 @@ export class ScriptExecutorService implements IScriptExecutor {
   }
 
   /**
-   * 执行单个 RouterOS 命令
+   * 执行单个设备命令
    * 将 CLI 格式转换为 API 格式，然后透传到设备
    * 
-   * @param command RouterOS 命令
-   * @param client 可选的请求级 RouterOS 客户端（Requirements: 8.1, 8.2）
+   * @param command 设备命令
+   * @param client 可选的请求级设备客户端（Requirements: 8.1, 8.2）
    */
-  private async executeCommand(command: string, client?: import('../routerosClient').RouterOSClient): Promise<string> {
+  private async executeCommand(command: string, client?: any): Promise<string> {
     const { apiCommand, params } = this.convertToApiFormat(command);
     
     logger.info(`Executing: ${apiCommand}, params: ${JSON.stringify(params)}`);
     
-    // 多设备支持：使用请求级客户端，回退到全局单例
+    // 多设备支持：使用传入客户端
     // Requirements: 8.1, 8.2
-    const effectiveClient = client || routerosClient;
+    const effectiveClient = client;
     
     // 直接透传到设备
     const response = await effectiveClient.executeRaw(apiCommand, params);
@@ -258,11 +266,20 @@ export class ScriptExecutorService implements IScriptExecutor {
 
 
   /**
-   * 将 CLI 格式命令转换为 API 格式
-   * 委托给共享工具函数，统一修复引号参数、where 子句、特殊字符等边界情况
+   * 将命令转换为可执行格式
+   * 在通用平台中，命令格式由设备驱动插件负责解析
+   * 此处做最小化的路径/参数分离
    */
   private convertToApiFormat(command: string): { apiCommand: string; params: string[] } {
-    return sharedConvertToApiFormat(command);
+    const trimmed = command.trim();
+    const spaceIdx = trimmed.indexOf(' ');
+    if (spaceIdx < 0) {
+      return { apiCommand: trimmed, params: [] };
+    }
+    const apiCommand = trimmed.substring(0, spaceIdx);
+    const rest = trimmed.substring(spaceIdx + 1).trim();
+    const params = rest ? rest.split(/\s+/) : [];
+    return { apiCommand, params };
   }
 
   /**

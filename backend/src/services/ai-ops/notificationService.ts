@@ -28,8 +28,7 @@ import {
   AlertSeverity,
 } from '../../types/ai-ops';
 import { logger } from '../../utils/logger';
-import type { DataStore } from '../core/dataStore';
-import type { DataStore as PgDataStore } from '../dataStore';
+import type { DataStore } from '../dataStore';
 
 const DATA_DIR = path.join(process.cwd(), 'data', 'ai-ops');
 const CHANNELS_FILE = path.join(DATA_DIR, 'channels.json');
@@ -115,21 +114,16 @@ export class NotificationService implements INotificationService {
   private initialized = false;
 
   // ==================== DataStore 集成 ====================
-  // Requirements: 2.1, 2.2 - 使用 SQLite 替代 JSON 文件存储，注入 tenant_id
+  // Requirements: 2.1, 2.2 - 使用 DataStore (PostgreSQL) 替代 JSON 文件存储，注入 tenant_id
   private dataStore: DataStore | null = null;
 
-  // ==================== PgDataStore 集成 (PostgreSQL) ====================
-  // Requirements: J7.18, J7.19, J7.20, J7.21 - PostgreSQL 迁移
-  private pgDataStore: PgDataStore | null = null;
 
   /**
    * 设置 DataStore 实例
-   * 当 DataStore 可用时，通知渠道配置将使用 SQLite 存储
-   * Requirements: 2.1, 2.2
    */
   setDataStore(dataStore: DataStore): void {
     this.dataStore = dataStore;
-    logger.info('NotificationService: DataStore backend configured, using SQLite for notification channels storage');
+    logger.info('NotificationService: DataStore backend configured, using PostgreSQL for notification channels storage');
   }
 
   /**
@@ -137,8 +131,8 @@ export class NotificationService implements INotificationService {
    * 当 PgDataStore 可用时，优先使用 PostgreSQL 存储渠道和通知历史
    * Requirements: J7.18, J7.19, J7.20, J7.21
    */
-  setPgDataStore(ds: PgDataStore): void {
-    this.pgDataStore = ds;
+  setPgDataStore(ds: DataStore): void {
+    this.dataStore = ds;
     logger.info('NotificationService: PgDataStore backend configured, using PostgreSQL for channels and notification history');
   }
 
@@ -177,9 +171,9 @@ export class NotificationService implements INotificationService {
    */
   private async loadChannels(): Promise<void> {
     // 当 PgDataStore 可用时，优先从 PostgreSQL 读取
-    if (this.pgDataStore) {
+    if (this.dataStore) {
       try {
-        const rows = await this.pgDataStore.query<{
+        const rows = await this.dataStore.query<{
           id: string;
           name: string;
           type: string;
@@ -206,61 +200,6 @@ export class NotificationService implements INotificationService {
       }
     }
 
-    // 当 DataStore 可用时，从 SQLite 读取
-    if (this.dataStore) {
-      try {
-        const rows = this.dataStore.query<{
-          id: string;
-          tenant_id: string;
-          name: string;
-          type: string;
-          config: string;
-          enabled: number;
-          created_at: string;
-        }>('SELECT * FROM notification_channels');
-
-        this.channels = rows.map((row) => {
-          const config = JSON.parse(row.config || '{}');
-          // Extract severityFilter from config if it exists (persistence hack)
-          const severityFilter = config._severityFilter;
-          if (config._severityFilter !== undefined) {
-            delete config._severityFilter;
-          }
-
-          return {
-            id: row.id,
-            name: row.name,
-            type: row.type as ChannelType,
-            config: config,
-            enabled: row.enabled === 1,
-            createdAt: new Date(row.created_at).getTime(),
-            tenant_id: row.tenant_id,
-            severityFilter: severityFilter,
-          };
-        }) as (NotificationChannel & { tenant_id?: string })[];
-
-        // 🔴 FIX: DB 为空时，尝试从 channels.json 迁移已有配置
-        if (this.channels.length === 0) {
-          try {
-            const jsonData = await fs.readFile(CHANNELS_FILE, 'utf-8');
-            const jsonChannels = JSON.parse(jsonData) as NotificationChannel[];
-            if (jsonChannels.length > 0) {
-              this.channels = jsonChannels;
-              await this.saveChannels(); // 写入 DB 持久化
-              logger.info(`Migrated ${jsonChannels.length} notification channels from channels.json to DataStore`);
-            }
-          } catch {
-            // channels.json 不存在或解析失败，忽略
-          }
-        }
-
-        logger.info(`Loaded ${this.channels.length} notification channels from DataStore`);
-        return;
-      } catch (error) {
-        logger.error('Failed to load notification channels from DataStore, falling back to JSON:', error);
-      }
-    }
-
     // Fallback: 从 JSON 文件读取
     try {
       const data = await fs.readFile(CHANNELS_FILE, 'utf-8');
@@ -283,9 +222,9 @@ export class NotificationService implements INotificationService {
    */
   private async saveChannels(): Promise<void> {
     // 当 PgDataStore 可用时，优先写入 PostgreSQL（使用 upsert 策略）
-    if (this.pgDataStore) {
+    if (this.dataStore) {
       try {
-        await this.pgDataStore.transaction(async (tx) => {
+        await this.dataStore.transaction(async (tx) => {
           // 获取当前数据库中的渠道 ID 列表
           const existingRows = await tx.query<{ id: string }>('SELECT id FROM notification_channels');
           const existingIds = new Set(existingRows.map(r => r.id));
@@ -331,51 +270,6 @@ export class NotificationService implements INotificationService {
       }
     }
 
-    // 当 DataStore 可用时，写入 SQLite（使用 upsert 策略）
-    // Requirements: 5.1, 5.2 - 使用 INSERT OR REPLACE 替代 DELETE + re-INSERT
-    if (this.dataStore) {
-      try {
-        this.dataStore.transaction(() => {
-          // 获取当前数据库中的渠道 ID 列表
-          const existingIds = new Set(
-            this.dataStore!.query<{ id: string }>('SELECT id FROM notification_channels').map(r => r.id)
-          );
-          const currentIds = new Set(this.channels.map(c => c.id));
-
-          // 删除不再存在的渠道
-          for (const id of existingIds) {
-            if (!currentIds.has(id)) {
-              this.dataStore!.run('DELETE FROM notification_channels WHERE id = ?', [id]);
-            }
-          }
-
-          // Upsert 当前渠道
-          for (const channel of this.channels) {
-            const channelAny = channel as NotificationChannel & { tenant_id?: string };
-            const tenantId = channelAny.tenant_id || 'default';
-
-            // Inject severityFilter into config for persistence
-            const configToSave = {
-              ...channel.config,
-              _severityFilter: channel.severityFilter
-            };
-            const config = JSON.stringify(configToSave);
-
-            const createdAt = new Date(channel.createdAt).toISOString();
-
-            this.dataStore!.run(
-              `INSERT OR REPLACE INTO notification_channels (id, tenant_id, name, type, config, enabled, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)`,
-              [channel.id, tenantId, channel.name, channel.type, config, channel.enabled ? 1 : 0, createdAt]
-            );
-          }
-        });
-        return;
-      } catch (error) {
-        logger.error('Failed to save channels to DataStore, falling back to JSON:', error);
-      }
-    }
-
     // Fallback: 写入 JSON 文件
     await this.ensureDataDir();
     await fs.writeFile(CHANNELS_FILE, JSON.stringify(this.channels, null, 2), 'utf-8');
@@ -416,12 +310,12 @@ export class NotificationService implements INotificationService {
    */
   private async saveNotification(notification: Notification): Promise<void> {
     // PG path: INSERT or UPDATE into notifications table
-    if (this.pgDataStore) {
+    if (this.dataStore) {
       try {
         const sentAt = notification.sentAt ? new Date(notification.sentAt).toISOString() : null;
         const severity = notification.data?.severity as string || notification.type || null;
 
-        await this.pgDataStore.execute(
+        await this.dataStore.execute(
           `INSERT INTO notifications (id, channel_id, title, content, severity, status, retry_count, error_message, sent_at)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
            ON CONFLICT (id) DO UPDATE SET
@@ -960,10 +854,10 @@ export class NotificationService implements INotificationService {
    */
   async getNotificationHistory(limit?: number): Promise<Notification[]> {
     // PG path: query notifications table
-    if (this.pgDataStore) {
+    if (this.dataStore) {
       try {
         const targetLimit = limit || 100;
-        const rows = await this.pgDataStore.query<{
+        const rows = await this.dataStore.query<{
           id: string;
           channel_id: string;
           title: string;
@@ -1043,11 +937,11 @@ export class NotificationService implements INotificationService {
    */
   async cleanupHistory(retentionDays: number = 30): Promise<number> {
     // PG path: DELETE from notifications table
-    if (this.pgDataStore) {
+    if (this.dataStore) {
       try {
         const cutoffDate = new Date();
         cutoffDate.setDate(cutoffDate.getDate() - retentionDays);
-        const result = await this.pgDataStore.execute(
+        const result = await this.dataStore.execute(
           'DELETE FROM notifications WHERE created_at < $1',
           [cutoffDate.toISOString()]
         );

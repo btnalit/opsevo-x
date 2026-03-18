@@ -7,7 +7,7 @@
  * Requirements: 8.4 - 对话历史按 tenant_id 和 device_id 隔离存储
  */
 
-import { MigrationDefinition } from '../services/core/dataStore';
+import { MigrationDefinition } from '../types/migration';
 
 const migration: MigrationDefinition = {
   version: 2,

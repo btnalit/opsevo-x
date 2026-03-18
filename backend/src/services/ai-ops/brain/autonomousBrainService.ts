@@ -4,7 +4,7 @@
  * 大脑的运行轨迹基于连续不断的 OODA (观察-调整-决策-行动) 循环。
  * - Observe: 汇聚全域数据 (Alerts, Metrics, Syslogs)
  * - Orient & Decide: 依赖现有智能进化子模块 (AP/PL/KG) 与大模型推理
- * - Act: 下发指令给 StateMachineOrchestrator 或 RouterOSClient
+ * - Act: 下发指令给 StateMachineOrchestrator 或 DeviceDriver
  */
 
 import { logger } from '../../../utils/logger';
@@ -512,44 +512,38 @@ export class AutonomousBrainService {
                 logger.debug(`[Brain] AI adapter created/refreshed for config: ${configKey}`);
             }
 
-            // 🔴 FIX: 获取 fresh routerosClient 传递给执行上下文
             // tickDeviceId 已在 buildPrompt 之前通过 inferTickDeviceId() 推断完成
-            let tickRouterosClient: import('../../routerosClient').RouterOSClient | undefined;
-
+            // 单设备模式下尝试确保默认设备连接可用（副作用：触发自动重连）
             const hasManagedDevices = context.managedDevices && context.managedDevices.length > 0;
 
             if (hasManagedDevices) {
                 const devices = context.managedDevices;
 
-                // 单台受管设备时，获取全局 routerosClient 作为后备
+                // 单台受管设备时，尝试确保默认设备连接可用
                 if (devices.length === 1) {
                     try {
-                        const { routerosClient: globalClient } = await import('../../routerosClient');
-                        const reconnected = await globalClient.ensureConnectedOrReconnect();
-                        if (reconnected) {
-                            tickRouterosClient = globalClient;
-                            logger.info(`[Brain] Single managed device: global routerosClient acquired as fallback for standalone mode.`);
+                        const devicePool = serviceRegistry.tryGet<any>(SERVICE_NAMES.DEVICE_POOL);
+                        if (devicePool) {
+                            logger.info(`[Brain] Single managed device: will use DevicePool for device connection.`);
                         }
                     } catch (err) {
-                        logger.debug(`[Brain] Single managed device: global routerosClient unavailable (${err instanceof Error ? err.message : String(err)}). Will rely on DevicePool Route A.`);
+                        logger.debug(`[Brain] Single managed device: DevicePool unavailable (${err instanceof Error ? err.message : String(err)}). Will rely on DevicePool Route A.`);
                     }
                 }
-                // 多设备（>1）不获取 tickRouterosClient — 让 intentRegistry Route A 按 deviceId 独立获取连接
+                // 多设备（>1）— 让 intentRegistry Route A 按 deviceId 独立获取连接
             }
 
             if (!hasManagedDevices) {
-                // ── 单设备模式（无受管设备）：保持全局 routerosClient 自愈 ──
+                // ── 单设备模式（无受管设备）：通过 DevicePool 获取连接 ──
                 try {
-                    const { routerosClient: globalClient } = await import('../../routerosClient');
-                    const reconnected = await globalClient.ensureConnectedOrReconnect();
-                    if (reconnected) {
-                        tickRouterosClient = globalClient;
-                        logger.debug('[Brain] Using global routerosClient (auto-reconnected if needed).');
+                    const devicePool = serviceRegistry.tryGet<any>(SERVICE_NAMES.DEVICE_POOL);
+                    if (devicePool) {
+                        logger.debug('[Brain] DevicePool available for standalone mode.');
                     } else {
-                        logger.warn('[Brain] Global routerosClient unavailable. execute_intent will fail gracefully with _brainHint.');
+                        logger.warn('[Brain] DevicePool not registered in ServiceRegistry. Continuing without device connection.');
                     }
                 } catch (err) {
-                    logger.warn(`[Brain] Failed to obtain routerosClient for tick: ${err instanceof Error ? err.message : String(err)}. Continuing without it.`);
+                    logger.warn(`[Brain] Failed to obtain DevicePool for tick: ${err instanceof Error ? err.message : String(err)}. Continuing without it.`);
                 }
             }
 
@@ -560,8 +554,7 @@ export class AutonomousBrainService {
                 aiConfig.model,
                 0.2, // Brain 使用低温度保持决策稳定性
                 undefined, // skillContext — Brain 不使用 Skill 系统
-                tickRouterosClient, // 单设备模式：fresh routerosClient；多设备模式：undefined
-                tickDeviceId // 🔴 FIX: tick 上下文推断的目标设备 ID，brainTools 用作 LLM 未传 deviceId 时的兜底
+                tickDeviceId // tick 上下文推断的目标设备 ID，brainTools 用作 LLM 未传 deviceId 时的兜底
             );
             // Brain 的完整 Prompt 作为系统提示词覆盖
             executionContext.systemPromptOverride = prompt;
@@ -1203,8 +1196,7 @@ export class AutonomousBrainService {
                 const results = await parallelCollectWithLimit(
                     devices,
                     async (device) => {
-                        const client = await pool!.getConnection(device.tenantId, device.id);
-                        return healthMonitor.collectMetrics(client);
+                        return healthMonitor.collectMetrics(device.id);
                     },
                     10
                 );
@@ -1371,7 +1363,7 @@ export class AutonomousBrainService {
         } catch (err) {
             logger.debug(`[Brain Tick ${tickId}] DeviceManager not available, using single-device mode.`, { error: err });
             perceptionHealth.push({ source: 'deviceManager', ok: false, error: String(err) });
-            // 单设备模式：不阻断，继续使用全局 routerosClient
+            // 单设备模式：不阻断，继续使用默认设备客户端
         }
 
         // ── 连通性探测：对每台受管设备做 tick 级别的可达性快照 ──────────────────
@@ -1439,14 +1431,13 @@ export class AutonomousBrainService {
         // 定义 6 个感知源的采集 lambda
         const collectHealthMonitor = async (): Promise<SystemHealthSummary> => {
             // 修复：条件从 > 1 改为 > 0，确保单台受管设备也通过 DevicePool 采集
-            // 只有在无受管设备（length === 0）时才回退到全局 routerosClient
+            // 只有在无受管设备（length === 0）时才回退到默认设备客户端
             if (managedDevices.length > 0 && pool) {
                 // 5.2: 多设备健康指标并行采集（parallelCollectWithLimit）
                 const metricsResults = await parallelCollectWithLimit(
                     managedDevices,
                     async (device) => {
-                        const deviceClient = await pool.getConnection(device.tenantId || 'default', device.id);
-                        return { device, metrics: await healthMonitor.collectMetrics(deviceClient) };
+                        return { device, metrics: await healthMonitor.collectMetrics(device.id) };
                     },
                     10
                 );
@@ -2018,7 +2009,7 @@ Focus ONLY on knowledge management or wait for sensor recovery in subsequent tic
 ` : ''}
 
 [SECURITY: ABSOLUTE WHITELIST POLICY]
-☢️ CRITICAL: You are FORBIDDEN from generating raw RouterOS commands.
+☢️ CRITICAL: You are FORBIDDEN from generating raw device CLI commands.
 You MUST ONLY use the 'execute_intent' tool with a pre-registered intent action.
 Any attempt to bypass this by generating raw CLI commands will be rejected by the system.
 
@@ -2099,7 +2090,7 @@ P4 — ORCHESTRATION & COMMUNICATION:
     ${this.getAvailableSkillsLine()}
 
 [HARD RULES]
-HR-1. SECURITY: NEVER generate raw RouterOS commands. ONLY use execute_intent with whitelisted actions from [REGISTERED INTENTS].
+HR-1. SECURITY: NEVER generate raw device CLI commands. ONLY use execute_intent with whitelisted actions from [REGISTERED INTENTS].
 HR-2. FRESHNESS: IF topology freshnessMs > 30000 → call query_topology to refresh BEFORE trusting stale topology data.
 HR-3. VERIFICATION: After any remediation or config change → call execute_intent to verify the fix took effect.
 HR-4. LEARNING: Record significant findings via manage_knowledge("add") for future reference. The knowledge base is your long-term memory.

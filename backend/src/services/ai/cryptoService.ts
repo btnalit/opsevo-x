@@ -22,7 +22,7 @@ interface CryptoConfig {
  * 默认加密密钥（生产环境应使用环境变量覆盖）
  */
 const DEFAULT_SECRET_KEY =
-  process.env.AI_CRYPTO_SECRET_KEY || 'routeros-web-manager-ai-agent-secret-key-2024';
+  process.env.AI_CRYPTO_SECRET_KEY || 'ai-ops-agent-secret-key-2024';
 
 /**
  * CryptoService 实现类

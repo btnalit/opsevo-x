@@ -46,11 +46,8 @@ jest.mock('./configSnapshotService', () => ({
   },
 }));
 
-jest.mock('../routerosClient', () => ({
-  routerosClient: {
-    isConnected: jest.fn().mockReturnValue(false),
-    executeRaw: jest.fn(),
-  },
+jest.mock('../device/devicePool', () => ({
+  DevicePool: jest.fn(),
 }));
 
 jest.mock('./rag', () => ({

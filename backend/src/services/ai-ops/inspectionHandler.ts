@@ -192,7 +192,7 @@ async function collectSystemStatus(deviceId?: string) {
     }
 
     // 如果没有缓存数据，抛出错误
-    throw new Error('无法采集系统状态：RouterOS 连接失败且无缓存数据');
+    throw new Error('无法采集系统状态：设备连接失败且无缓存数据');
   }
 }
 

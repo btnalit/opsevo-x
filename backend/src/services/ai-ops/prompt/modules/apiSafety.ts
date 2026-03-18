@@ -30,7 +30,7 @@ export interface APIPathEntry {
   queryHints?: string;
 }
 
-/** Top 20 高频 API 路径 */
+/** Top 20 高频 API 路径（默认安全参考数据，可被 CapabilityManifest 覆盖） */
 export const TOP_API_PATHS: APIPathEntry[] = [
   // 🔴 高危
   { path: '/ip/firewall/filter', riskLevel: RiskLevel.HIGH, description: '防火墙规则', queryHints: 'limit=20, proplist=chain,action,src-address,dst-address,comment' },

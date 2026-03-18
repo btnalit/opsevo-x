@@ -19,18 +19,12 @@ RUN NODE_OPTIONS="--max-old-space-size=4096" npm run build
 # Stage 2: Build Backend
 FROM node:20-alpine AS backend-builder
 
-# Install build dependencies for native modules
-RUN apk add --no-cache python3 make g++
-
 WORKDIR /app/backend
 
 # Copy backend package files
 COPY backend/package*.json ./
 
-# Copy patches directory for patch-package
-COPY backend/patches ./patches/
-
-# Install dependencies (postinstall will apply patches)
+# Install dependencies
 RUN npm ci
 
 # Copy backend source
@@ -53,16 +47,6 @@ COPY backend/package*.json ./backend/
 # Install production dependencies (skip scripts to avoid patch-package error since it's a devDep)
 # Clean npm cache to reduce image size
 RUN cd backend && npm ci --omit=dev --ignore-scripts && npm cache clean --force
-
-# Copy pre-compiled better-sqlite3 native module from backend-builder
-# This avoids QEMU compilation issues on ARM64 cross-builds
-# Only copy the compiled binding, strip source/deps to save ~10MB
-COPY --from=backend-builder /app/backend/node_modules/better-sqlite3/build ./backend/node_modules/better-sqlite3/build
-COPY --from=backend-builder /app/backend/node_modules/better-sqlite3/lib ./backend/node_modules/better-sqlite3/lib
-COPY --from=backend-builder /app/backend/node_modules/better-sqlite3/package.json ./backend/node_modules/better-sqlite3/package.json
-
-# Copy patched node_modules from backend-builder (already has patches applied)
-COPY --from=backend-builder /app/backend/node_modules/node-routeros ./backend/node_modules/node-routeros
 
 # Copy built backend
 COPY --from=backend-builder /app/backend/dist ./backend/dist
@@ -100,6 +84,7 @@ ENV NODE_OPTIONS="--max-old-space-size=512"
 # Expose ports
 EXPOSE 3099
 EXPOSE 514/udp
+EXPOSE 162/udp
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \

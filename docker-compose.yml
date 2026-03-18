@@ -8,7 +8,7 @@ services:
     environment:
       POSTGRES_DB: ${PG_DATABASE:-opsevo}
       POSTGRES_USER: ${PG_USER:-opsevo}
-      POSTGRES_PASSWORD: ${PG_PASSWORD:?PG_PASSWORD is required}
+      POSTGRES_PASSWORD: ${PG_PASSWORD:-opsevo123}
     ports:
       - "${PG_PORT:-5432}:5432"
     volumes:
@@ -32,11 +32,12 @@ services:
     ports:
       - "${PORT:-8080}:3099"
       - "${SYSLOG_PORT:-514}:514/udp"
+      - "${SNMP_TRAP_PORT:-162}:162/udp"
     environment:
       - NODE_ENV=production
       - PORT=3099
       - LOG_LEVEL=${LOG_LEVEL:-info}
-      - DATABASE_URL=postgresql://${PG_USER:-opsevo}:${PG_PASSWORD}@postgres:5432/${PG_DATABASE:-opsevo}
+      - DATABASE_URL=postgresql://${PG_USER:-opsevo}:${PG_PASSWORD:-opsevo123}@postgres:5432/${PG_DATABASE:-opsevo}
       - INTERNAL_API_KEY=${INTERNAL_API_KEY:-changeme-internal-key}
       - PYTHON_CORE_URL=http://python-core:8001
     volumes:
@@ -65,7 +66,7 @@ services:
     container_name: opsevo-python-core
     restart: unless-stopped
     environment:
-      - DATABASE_URL=postgresql://${PG_USER:-opsevo}:${PG_PASSWORD}@postgres:5432/${PG_DATABASE:-opsevo}
+      - DATABASE_URL=postgresql://${PG_USER:-opsevo}:${PG_PASSWORD:-opsevo123}@postgres:5432/${PG_DATABASE:-opsevo}
       - INTERNAL_API_KEY=${INTERNAL_API_KEY:-changeme-internal-key}
       - EMBEDDING_MODEL=${EMBEDDING_MODEL:-all-MiniLM-L6-v2}
       - EMBEDDING_REMOTE_URL=${EMBEDDING_REMOTE_URL:-}
@@ -83,24 +84,6 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
-
-  # Optional: Nginx reverse proxy with SSL support
-  nginx:
-    image: nginx:alpine
-    container_name: opsevo-nginx
-    restart: unless-stopped
-    ports:
-      - "${NGINX_HTTP_PORT:-80}:80"
-      - "${NGINX_HTTPS_PORT:-443}:443"
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./certs:/etc/nginx/certs:ro
-    depends_on:
-      - opsevo-bff
-    networks:
-      - opsevo-network
-    profiles:
-      - with-nginx
 
 volumes:
   opsevo-data:

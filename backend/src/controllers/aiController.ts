@@ -525,7 +525,7 @@ export async function chatStream(req: Request, res: Response): Promise<void> {
 
 
 /**
- * 获取 RouterOS 上下文
+ * 获取设备上下文
  * GET /api/ai/context
  */
 export async function getContext(_req: Request, res: Response): Promise<void> {

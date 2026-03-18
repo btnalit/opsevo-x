@@ -3,7 +3,7 @@
  *
  * 验证统一人设定义、核心职责描述和 Token 预算合规。
  *
- * @see Requirements 5.1 - 统一人设为"RouterOS 智能运维助手"
+ * @see Requirements 5.1 - 统一人设为"AIOps 智能运维助手"
  * @see Requirements 5.5 - 包含核心职责描述
  */
 
@@ -23,9 +23,9 @@ describe('BasePersona module', () => {
     expect(basePersona.dependencies).toEqual([]);
   });
 
-  it('should define the unified persona as "RouterOS 智能运维助手"', () => {
+  it('should define the unified persona as "AIOps 智能运维助手"', () => {
     const content = basePersona.render();
-    expect(content).toContain('RouterOS 智能运维助手');
+    expect(content).toContain('AIOps 智能运维助手');
   });
 
   it('should include the core responsibility: 设备监控与诊断', () => {

@@ -1,11 +1,11 @@
 /**
  * SyslogReceiver - Syslog 接收服务
- * 负责监听 UDP 端口接收 RouterOS 设备推送的 Syslog 日志
+ * 负责监听 UDP 端口接收设备推送的 Syslog 日志
  *
  * Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 1.7
  * - 1.1: 绑定 UDP 端口监听传入消息
  * - 1.2: 解析 Syslog 消息，提取 facility、severity、timestamp 和消息内容
- * - 1.3: 正确识别 RouterOS 特定格式，包括 topic 和消息体
+ * - 1.3: 正确识别设备特定格式，包括 topic 和消息体
  * - 1.4: 将有效的 Syslog 消息转换为内部事件格式
  * - 1.5: 处理格式错误的消息，记录错误并继续处理后续消息
  * - 1.7: 支持通过配置设置监听端口
@@ -290,8 +290,8 @@ export class SyslogReceiver implements ISyslogReceiver {
     const messageStart = afterTimestamp.indexOf(parts[1] || '');
     const fullMessage = messageStart >= 0 ? afterTimestamp.substring(messageStart) : afterTimestamp;
 
-    // 解析 RouterOS 特定格式的 topic
-    const { topic, message } = this.parseRouterOSMessage(fullMessage);
+    // 解析 Syslog topic
+    const { topic, message } = this.parseSyslogTopicMessage(fullMessage);
 
     return {
       facility,
@@ -307,7 +307,7 @@ export class SyslogReceiver implements ISyslogReceiver {
   /**
    * 解析 RFC 5424 格式的 Syslog 消息
    * 格式: <PRI>VERSION TIMESTAMP HOSTNAME APP-NAME PROCID MSGID STRUCTURED-DATA MSG
-   * 例如: <134>1 2026-01-15T10:30:00.000Z router1 routeros - - - system,info user admin logged in
+   * 例如: <134>1 2026-01-15T10:30:00.000Z router1 syslog - - - system,info user admin logged in
    */
   private parseRFC5424(raw: string): SyslogMessage | null {
     // 匹配 PRI 和 VERSION
@@ -369,8 +369,8 @@ export class SyslogReceiver implements ISyslogReceiver {
       }
     }
 
-    // 解析 RouterOS 特定格式的 topic
-    const { topic, message } = this.parseRouterOSMessage(fullMessage);
+    // 解析 Syslog topic
+    const { topic, message } = this.parseSyslogTopicMessage(fullMessage);
 
     return {
       facility,
@@ -384,7 +384,7 @@ export class SyslogReceiver implements ISyslogReceiver {
   }
 
   /**
-   * 解析 RouterOS 特定格式的消息
+   * 解析 Syslog 消息中的 topic 和消息体
    * 支持多种格式:
    * 1. default 格式 (带冒号): topic1,topic2: message
    *    例如: system,info: user admin logged in
@@ -393,9 +393,9 @@ export class SyslogReceiver implements ISyslogReceiver {
    * 3. 应用程序格式: app-name: message
    *    例如: app-cloudflared: download/extract error
    */
-  private parseRouterOSMessage(fullMessage: string): { topic: string; message: string } {
-    // 常见 RouterOS topics
-    const routerOSTopics = [
+  private parseSyslogTopicMessage(fullMessage: string): { topic: string; message: string } {
+    // 已知的 Syslog topic 关键词（设备无关，涵盖常见网络设备 topic）
+    const knownTopics = [
       'system', 'info', 'warning', 'error', 'critical', 'debug',
       'firewall', 'dhcp', 'wireless', 'interface', 'ppp', 'l2tp',
       'pptp', 'sstp', 'ovpn', 'ipsec', 'ospf', 'bgp', 'rip',
@@ -419,9 +419,9 @@ export class SyslogReceiver implements ISyslogReceiver {
     if (topicWithColonMatch) {
       const potentialTopic = topicWithColonMatch[1];
       const topics = potentialTopic.toLowerCase().split(',');
-      const isRouterOSTopic = topics.some((t) => routerOSTopics.includes(t));
+      const isKnownTopic = topics.some((t) => knownTopics.includes(t));
 
-      if (isRouterOSTopic) {
+      if (isKnownTopic) {
         return {
           topic: potentialTopic.toLowerCase(),
           message: topicWithColonMatch[2],
@@ -434,9 +434,9 @@ export class SyslogReceiver implements ISyslogReceiver {
     if (topicWithSpaceMatch) {
       const potentialTopic = topicWithSpaceMatch[1];
       const topics = potentialTopic.toLowerCase().split(',');
-      const isRouterOSTopic = topics.some((t) => routerOSTopics.includes(t));
+      const isKnownTopic = topics.some((t) => knownTopics.includes(t));
 
-      if (isRouterOSTopic) {
+      if (isKnownTopic) {
         return {
           topic: potentialTopic.toLowerCase(),
           message: topicWithSpaceMatch[2],
@@ -467,7 +467,7 @@ export class SyslogReceiver implements ISyslogReceiver {
       };
     }
 
-    // 如果不是 RouterOS 格式，尝试从消息中检测 topic
+    // 如果不是已知 topic 格式，尝试从消息中检测 topic
     const topic = this.detectTopicFromMessage(fullMessage);
     return {
       topic: topic || 'unknown',

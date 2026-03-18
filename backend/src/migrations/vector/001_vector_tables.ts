@@ -11,7 +11,7 @@
  * Requirements: 7.1, 7.2
  */
 
-import { MigrationDefinition } from '../../services/core/dataStore';
+import { MigrationDefinition } from '../../types/migration';
 
 const migration: MigrationDefinition = {
   version: 1,

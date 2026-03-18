@@ -28,7 +28,7 @@
     <div v-if="activeTab === 'graph'" class="topology-container">
       <el-skeleton v-if="loading && !nodes.length" :rows="10" animated />
       <el-empty v-else-if="!nodes.length" description="暂无拓扑数据" />
-      <div v-else class="topology-canvas" ref="canvasRef">
+      <div v-else class="topology-canvas">
         <!-- SVG 拓扑图 -->
         <svg :width="canvasWidth" :height="canvasHeight" class="topology-svg">
           <!-- 边 -->
@@ -100,7 +100,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import api from '@/api/index'
 
@@ -124,7 +124,6 @@ const edges = ref<TopoEdge[]>([])
 const changeHistory = ref<ChangeRecord[]>([])
 const selectedNode = ref<TopoNode | null>(null)
 const nodeDrawerVisible = ref(false)
-const canvasRef = ref<HTMLElement>()
 const canvasWidth = ref(1200)
 const canvasHeight = ref(700)
 
@@ -171,7 +170,7 @@ function applyLayout() {
     })
   } else {
     // Simple force-directed approximation
-    nodes.value.forEach((n, i) => {
+    nodes.value.forEach((n, _i) => {
       n.x = cx + (Math.random() - 0.5) * 500
       n.y = cy + (Math.random() - 0.5) * 400
     })

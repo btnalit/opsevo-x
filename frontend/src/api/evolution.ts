@@ -443,7 +443,7 @@ export const TEMPLATE_USAGE_LOCATIONS: Record<string, string> = {
   '查询改写提示词': '查询改写器 (queryRewriter)',
   '意图分析提示词': '意图分析器 (intentAnalyzer)',
   '元数据增强提示词': '元数据增强器 (metadataEnhancer)',
-  'RouterOS 系统提示词': 'AI 对话系统提示词 (设备通用)',
+  'AIOps 系统提示词': 'AI 对话系统提示词 (设备通用)',
   '知识库检索提示词': '知识库检索增强',
   '告警分析提示词': 'AI-OPS 告警分析',
   '修复方案生成提示词': '修复方案生成',

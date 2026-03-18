@@ -22,7 +22,7 @@ import {
 } from '../../types/ai-ops';
 import { logger } from '../../utils/logger';
 import { auditLogger } from './auditLogger';
-import type { DataStore } from '../core/dataStore';
+import type { DataStore } from '../dataStore';
 import { CronExpressionParser } from 'cron-parser';
 
 const SCHEDULER_DIR = path.join(process.cwd(), 'data', 'ai-ops', 'scheduler');
@@ -57,17 +57,14 @@ export class Scheduler implements IScheduler {
   private taskHandlers: Map<string, TaskHandler> = new Map();
 
   // ==================== DataStore 集成 ====================
-  // Requirements: 2.1, 2.2 - 使用 SQLite 替代 JSON 文件存储，注入 tenant_id
   private dataStore: DataStore | null = null;
 
   /**
    * 设置 DataStore 实例
-   * 当 DataStore 可用时，调度任务将使用 SQLite 存储
-   * Requirements: 2.1, 2.2
    */
   setDataStore(dataStore: DataStore): void {
     this.dataStore = dataStore;
-    logger.info('Scheduler: DataStore backend configured, using SQLite for scheduled tasks storage');
+    logger.info('Scheduler: DataStore backend configured for scheduled tasks storage');
   }
 
   /**
@@ -87,18 +84,18 @@ export class Scheduler implements IScheduler {
    * Requirements: 2.1 - 当 DataStore 可用时从 scheduled_tasks 表读取
    */
   private async loadTasks(): Promise<void> {
-    // 当 DataStore 可用时，从 SQLite 读取
+    // 当 DataStore 可用时，从 PostgreSQL 读取
     if (this.dataStore) {
       try {
-        const rows = this.dataStore.query<{
+        const rows = await this.dataStore.query<{
           id: string;
           tenant_id: string;
           device_id: string | null;
           name: string;
           type: string;
           cron_expression: string;
-          config: string;
-          enabled: number;
+          config: string | Record<string, unknown>;
+          enabled: boolean;
           last_run: string | null;
           next_run: string | null;
           created_at: string;
@@ -108,16 +105,15 @@ export class Scheduler implements IScheduler {
         let i = 0;
         for (const row of rows) {
           if (++i % 100 === 0) {
-            // Break tight loops for very large dataset loading
             await new Promise(resolve => setImmediate(resolve));
           }
-          const config = JSON.parse(row.config || '{}');
+          const config = typeof row.config === 'string' ? JSON.parse(row.config || '{}') : (row.config || {});
           const task: ScheduledTask = {
             id: row.id,
             name: row.name,
             type: row.type as ScheduledTaskType,
             cron: row.cron_expression,
-            enabled: row.enabled === 1,
+            enabled: row.enabled,
             lastRunAt: row.last_run ? new Date(row.last_run).getTime() : undefined,
             nextRunAt: row.next_run ? new Date(row.next_run).getTime() : undefined,
             config,
@@ -156,10 +152,10 @@ export class Scheduler implements IScheduler {
    * Requirements: 2.1 - 当 DataStore 可用时写入 scheduled_tasks 表
    */
   private async saveTasks(): Promise<void> {
-    // 当 DataStore 可用时，写入 SQLite
+    // 当 DataStore 可用时，写入 PostgreSQL
     if (this.dataStore) {
       try {
-        this.dataStore.transaction(() => {
+        await this.dataStore.transaction(async (tx) => {
           for (const task of this.tasks.values()) {
             const tenantId = task.tenantId || 'default';
             const deviceId = task.deviceId || null;
@@ -168,10 +164,20 @@ export class Scheduler implements IScheduler {
             const lastRun = task.lastRunAt ? new Date(task.lastRunAt).toISOString() : null;
             const nextRun = task.nextRunAt ? new Date(task.nextRunAt).toISOString() : null;
 
-            this.dataStore!.run(
-              `INSERT OR REPLACE INTO scheduled_tasks (id, tenant_id, device_id, name, type, cron_expression, config, enabled, last_run, next_run, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-              [task.id, tenantId, deviceId, task.name, task.type, task.cron, config, task.enabled ? 1 : 0, lastRun, nextRun, createdAt]
+            await tx.execute(
+              `INSERT INTO scheduled_tasks (id, tenant_id, device_id, name, type, cron_expression, config, enabled, last_run, next_run, created_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+               ON CONFLICT (id) DO UPDATE SET
+                 tenant_id = EXCLUDED.tenant_id,
+                 device_id = EXCLUDED.device_id,
+                 name = EXCLUDED.name,
+                 type = EXCLUDED.type,
+                 cron_expression = EXCLUDED.cron_expression,
+                 config = EXCLUDED.config,
+                 enabled = EXCLUDED.enabled,
+                 last_run = EXCLUDED.last_run,
+                 next_run = EXCLUDED.next_run`,
+              [task.id, tenantId, deviceId, task.name, task.type, task.cron, config, task.enabled, lastRun, nextRun, createdAt]
             );
           }
         });
@@ -565,10 +571,10 @@ export class Scheduler implements IScheduler {
     // 从列表中删除
     this.tasks.delete(id);
 
-    // 当 DataStore 可用时，直接从 SQLite 删除
+    // 当 DataStore 可用时，从 PostgreSQL 删除
     if (this.dataStore) {
       try {
-        this.dataStore.run('DELETE FROM scheduled_tasks WHERE id = ?', [id]);
+        await this.dataStore.execute('DELETE FROM scheduled_tasks WHERE id = $1', [id]);
         logger.info(`Deleted scheduled task from DataStore: ${task.name} (${id})`);
         return;
       } catch (error) {

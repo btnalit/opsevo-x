@@ -188,7 +188,7 @@ export interface ExecutableStep {
   order: number;
   /** 步骤描述 */
   description: string;
-  /** RouterOS 命令 */
+  /** 设备命令 */
   command: string;
   /** 风险等级 */
   riskLevel: RiskLevel;
@@ -1583,7 +1583,7 @@ ${contextText}
 1. 问题分析摘要
 2. 详细分析说明
 3. 处理建议列表
-4. 可执行的 RouterOS 修复命令（如果适用）
+4. 可执行的设备修复命令（如果适用）
 
 请以 JSON 格式返回，包含以下字段：
 {
@@ -1595,7 +1595,7 @@ ${contextText}
     {
       "order": 1,
       "description": "步骤描述",
-      "command": "RouterOS命令",
+      "command": "设备命令（如 CLI、SSH 命令等）",
       "riskLevel": "low|medium|high",
       "autoExecutable": true/false,
       "estimatedDuration": 秒数
@@ -1604,7 +1604,7 @@ ${contextText}
 }
 
 注意：
-- executableSteps 应包含具体的 RouterOS 命令
+- executableSteps 应包含具体的设备操作命令（根据设备类型使用对应的 CLI 语法）
 - 高风险命令（如重启、删除配置）应设置 autoExecutable 为 false
 - 如果无法确定具体命令，可以省略 executableSteps 字段`;
 
@@ -2085,7 +2085,7 @@ ${failedPlans.map(p => `- 方案 ${p.planId}: 成功率仅 ${(p.successRate * 10
 
   /**
    * 从历史方案中提取步骤
-   * 改进：支持从文档内容中智能提取 RouterOS 命令，并根据根因类型生成针对性步骤
+   * 改进：支持从文档内容中智能提取设备命令，并根据根因类型生成针对性步骤
    */
   private extractStepsFromHistory(
     documents: KnowledgeSearchResult[],
@@ -2102,7 +2102,7 @@ ${failedPlans.map(p => `- 方案 ${p.planId}: 成功率仅 ${(p.successRate * 10
       const successRate = historicalPlan?.successRate || 0.5;
 
       // 提取命令 - 支持多种格式
-      const extractedCommands = this.extractRouterOSCommands(content);
+      const extractedCommands = this.extractDeviceCommands(content);
 
       for (const cmd of extractedCommands) {
         if (cmd.command && !steps.some(s => s.command === cmd.command)) {
@@ -2156,10 +2156,10 @@ ${failedPlans.map(p => `- 方案 ${p.planId}: 成功率仅 ${(p.successRate * 10
   }
 
   /**
-   * 从文档内容中提取 RouterOS 命令
+   * 从文档内容中提取设备命令（支持 API 路径格式）
    * 支持多种格式：命令：xxx、`xxx`、/xxx/xxx 等
    */
-  private extractRouterOSCommands(content: string): Array<{
+  private extractDeviceCommands(content: string): Array<{
     command: string;
     description?: string;
     verification?: string;
@@ -2177,7 +2177,7 @@ ${failedPlans.map(p => `- 方案 ${p.planId}: 成功率仅 ${(p.successRate * 10
     if (format1) {
       for (const match of format1) {
         const cmd = match.replace(/^命令[：:]\s*/, '').trim();
-        if (cmd && this.isValidRouterOSCommand(cmd)) {
+        if (cmd && this.isValidDeviceCommand(cmd)) {
           commands.push({ command: cmd });
         }
       }
@@ -2191,7 +2191,7 @@ ${failedPlans.map(p => `- 方案 ${p.planId}: 成功率仅 ${(p.successRate * 10
       const lines = codeContent.split('\n').filter(l => l.trim());
       for (const line of lines) {
         const trimmed = line.trim();
-        if (trimmed && this.isValidRouterOSCommand(trimmed) && !trimmed.startsWith('#')) {
+        if (trimmed && this.isValidDeviceCommand(trimmed) && !trimmed.startsWith('#')) {
           commands.push({ command: trimmed });
         }
       }
@@ -2202,7 +2202,7 @@ ${failedPlans.map(p => `- 方案 ${p.planId}: 成功率仅 ${(p.successRate * 10
     let inlineMatch;
     while ((inlineMatch = inlineCodeRegex.exec(content)) !== null) {
       const cmd = inlineMatch[1].trim();
-      if (cmd && this.isValidRouterOSCommand(cmd)) {
+      if (cmd && this.isValidDeviceCommand(cmd)) {
         commands.push({ command: cmd });
       }
     }
@@ -2212,7 +2212,7 @@ ${failedPlans.map(p => `- 方案 ${p.planId}: 成功率仅 ${(p.successRate * 10
     let directMatch;
     while ((directMatch = directCmdRegex.exec(content)) !== null) {
       const cmd = directMatch[1].trim();
-      if (cmd && this.isValidRouterOSCommand(cmd)) {
+      if (cmd && this.isValidDeviceCommand(cmd)) {
         commands.push({ command: cmd });
       }
     }
@@ -2227,10 +2227,10 @@ ${failedPlans.map(p => `- 方案 ${p.planId}: 成功率仅 ${(p.successRate * 10
   }
 
   /**
-   * 检查是否为有效的 RouterOS 命令
+   * 检查是否为有效的设备命令（支持 API 路径格式）
    */
-  private isValidRouterOSCommand(cmd: string): boolean {
-    // RouterOS 命令通常以 / 开头
+  private isValidDeviceCommand(cmd: string): boolean {
+    // 设备命令通常以 / 开头（API 路径格式）
     if (cmd.startsWith('/')) return true;
     // 或者是常见的命令关键词
     const validPrefixes = ['print', 'set', 'add', 'remove', 'enable', 'disable', 'ping', 'traceroute'];

@@ -12,33 +12,12 @@
 import { Request, Response } from 'express';
 import { createAuthController, getStatusCodeForError } from './authController';
 import { AuthService } from '../services/auth/authService';
-import { DataStore } from '../services/core/dataStore';
-import * as path from 'path';
+import type { DataStore } from '../services/dataStore';
+import { createMockPgDataStore } from '../test/helpers/mockPgDataStore';
 
 // ─── Test Helpers ────────────────────────────────────────────────────────────
 
 const TEST_JWT_SECRET = 'test-controller-secret';
-
-async function createTestDataStore(): Promise<DataStore> {
-  const store = new DataStore({
-    inMemory: true,
-    migrationsPath: path.join(__dirname, '__no_migrations__'),
-  });
-  await store.initialize();
-
-  store.run(`
-    CREATE TABLE IF NOT EXISTS users (
-      id TEXT PRIMARY KEY,
-      username TEXT UNIQUE NOT NULL,
-      email TEXT UNIQUE NOT NULL,
-      password_hash TEXT NOT NULL,
-      created_at TEXT DEFAULT (datetime('now')),
-      updated_at TEXT DEFAULT (datetime('now'))
-    )
-  `);
-
-  return store;
-}
 
 function createMockResponse(): Response {
   const res: Partial<Response> = {
@@ -63,7 +42,7 @@ describe('authController', () => {
   let controller: ReturnType<typeof createAuthController>;
 
   beforeEach(async () => {
-    dataStore = await createTestDataStore();
+    dataStore = createMockPgDataStore();
     authService = new AuthService(dataStore, {
       jwtSecret: TEST_JWT_SECRET,
       saltRounds: 4,

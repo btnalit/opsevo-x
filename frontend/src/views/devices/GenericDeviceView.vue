@@ -78,7 +78,7 @@
 
     <!-- 添加设备对话框 -->
     <el-dialog v-model="showAddDialog" title="添加设备" width="560px" destroy-on-close>
-      <DeviceConnectionForm ref="addFormRef" @submit="handleAddDevice" @cancel="showAddDialog = false" />
+      <DeviceConnectionForm @submit="handleAddDevice" @cancel="showAddDialog = false" />
     </el-dialog>
   </div>
 </template>
@@ -98,7 +98,6 @@ const router = useRouter()
 const deviceStore = useDeviceStore()
 
 const showAddDialog = ref(false)
-const addFormRef = ref()
 const selectedIds = ref<string[]>([])
 const filters = ref({ keyword: '', status: '', driverType: '' })
 const sortState = ref({ prop: '', order: '' })

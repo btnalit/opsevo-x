@@ -61,6 +61,7 @@ class SearchRequest(BaseModel):
     query_embedding: list[float] | None = None
     top_k: int = 5
     filter: dict | None = None
+    min_score: float = 0.0
 
     @field_validator("collection")
     @classmethod
@@ -186,6 +187,7 @@ async def search_vectors(body: SearchRequest, request: Request):
             query_embedding=query_embedding,
             top_k=body.top_k,
             filter=body.filter,
+            min_score=body.min_score,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

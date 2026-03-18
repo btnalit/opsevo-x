@@ -274,7 +274,7 @@ export class DecisionEngine implements IDecisionEngine {
   private metricsCollector: { getLatestMetrics?(): { cpuUsage?: number; memoryUsage?: number } } | null = null;
 
   // Optional dependency: EventBus (duck-typed to avoid circular imports)
-  private eventBus: { publish(event: { type: string; payload: Record<string, unknown>; priority?: string }): Promise<unknown> } | null = null;
+  private eventBus: { publish(event: { type: string; payload: Record<string, unknown>; priority?: string; source?: string; schemaVersion?: string }): Promise<unknown> } | null = null;
 
   constructor() {
     // Register default factors
@@ -398,7 +398,7 @@ export class DecisionEngine implements IDecisionEngine {
   /**
    * Set optional EventBus for publishing decision events
    */
-  setEventBus(eb: { publish(event: { type: string; payload: Record<string, unknown>; priority?: string }): Promise<unknown> }): void {
+  setEventBus(eb: { publish(event: { type: string; payload: Record<string, unknown>; priority?: string; source?: string; schemaVersion?: string }): Promise<unknown> }): void {
     this.eventBus = eb;
     logger.info('DecisionEngine: EventBus set');
   }

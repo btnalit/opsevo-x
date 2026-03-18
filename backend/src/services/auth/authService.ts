@@ -13,8 +13,7 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { v4 as uuidv4 } from 'uuid';
-import { DataStore, DataStoreError } from '../core/dataStore';
-import type { DataStore as PgDataStoreInterface } from '../dataStore';
+import type { DataStore } from '../dataStore';
 import { logger } from '../../utils/logger';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -69,8 +68,7 @@ export class AuthServiceError extends Error {
 // ─── AuthService Class ───────────────────────────────────────────────────────
 
 export class AuthService {
-  private readonly dataStore: DataStore;
-  private pgDataStore: PgDataStoreInterface | null = null;
+  private dataStore: DataStore;
   private readonly jwtSecret: string;
   private readonly accessTokenExpiry: number;
   private readonly refreshTokenExpiry: number;
@@ -85,10 +83,10 @@ export class AuthService {
   }
 
   /**
-   * 注入 PgDataStore，启用 PostgreSQL 用户存储
+   * 注入 PgDataStore（向后兼容，替换构造函数注入的 DataStore）
    */
-  setPgDataStore(dataStore: PgDataStoreInterface): void {
-    this.pgDataStore = dataStore;
+  setPgDataStore(dataStore: DataStore): void {
+    this.dataStore = dataStore;
     logger.info('AuthService: PgDataStore injected, using PostgreSQL for user storage');
   }
 
@@ -108,7 +106,6 @@ export class AuthService {
    * @throws AuthServiceError 用户名或邮箱已存在时抛出 CONFLICT 错误
    */
   async register(username: string, email: string, password: string): Promise<User> {
-    // 参数验证
     if (!username || username.trim().length === 0) {
       throw new AuthServiceError('用户名不能为空', 'INVALID_INPUT');
     }
@@ -120,73 +117,26 @@ export class AuthService {
     }
 
     try {
-      // PgDataStore 路径
-      if (this.pgDataStore) {
-        const existingByUsername = await this.pgDataStore.query<User>(
-          'SELECT id FROM users WHERE username = $1', [username]);
-        if (existingByUsername.length > 0) {
-          throw new AuthServiceError('用户名已存在', 'USERNAME_CONFLICT');
-        }
-        const existingByEmail = await this.pgDataStore.query<User>(
-          'SELECT id FROM users WHERE email = $1', [email]);
-        if (existingByEmail.length > 0) {
-          throw new AuthServiceError('邮箱已存在', 'EMAIL_CONFLICT');
-        }
-        const passwordHash = await bcrypt.hash(password, this.saltRounds);
-        const userId = uuidv4();
-        await this.pgDataStore.execute(
-          `INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)`,
-          [userId, username, email, passwordHash]);
-        const users = await this.pgDataStore.query<User>(
-          'SELECT * FROM users WHERE id = $1', [userId]);
-        if (users.length === 0) {
-          throw new AuthServiceError('用户创建失败', 'INTERNAL_ERROR');
-        }
-        logger.info(`用户注册成功: ${username} (${userId})`);
-        return users[0];
-      }
-
-      // SQLite DataStore 路径
-      // 检查用户名唯一性
-      const existingByUsername = this.dataStore.query<User>(
-        'SELECT id FROM users WHERE username = ?',
-        [username],
-      );
+      const existingByUsername = await this.dataStore.query<User>(
+        'SELECT id FROM users WHERE username = $1', [username]);
       if (existingByUsername.length > 0) {
         throw new AuthServiceError('用户名已存在', 'USERNAME_CONFLICT');
       }
-
-      // 检查邮箱唯一性
-      const existingByEmail = this.dataStore.query<User>(
-        'SELECT id FROM users WHERE email = ?',
-        [email],
-      );
+      const existingByEmail = await this.dataStore.query<User>(
+        'SELECT id FROM users WHERE email = $1', [email]);
       if (existingByEmail.length > 0) {
         throw new AuthServiceError('邮箱已存在', 'EMAIL_CONFLICT');
       }
-
-      // 哈希密码
       const passwordHash = await bcrypt.hash(password, this.saltRounds);
-
-      // 生成用户 ID
       const userId = uuidv4();
-
-      // 插入用户记录
-      this.dataStore.run(
-        `INSERT INTO users (id, username, email, password_hash) VALUES (?, ?, ?, ?)`,
-        [userId, username, email, passwordHash],
-      );
-
-      // 查询并返回创建的用户
-      const users = this.dataStore.query<User>(
-        'SELECT * FROM users WHERE id = ?',
-        [userId],
-      );
-
+      await this.dataStore.execute(
+        `INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)`,
+        [userId, username, email, passwordHash]);
+      const users = await this.dataStore.query<User>(
+        'SELECT * FROM users WHERE id = $1', [userId]);
       if (users.length === 0) {
         throw new AuthServiceError('用户创建失败', 'INTERNAL_ERROR');
       }
-
       logger.info(`用户注册成功: ${username} (${userId})`);
       return users[0];
     } catch (error) {
@@ -199,14 +149,6 @@ export class AuthService {
 
   /**
    * 用户登录
-   *
-   * - 验证用户名和密码
-   * - 生成 JWT access token（15 分钟）和 refresh token（7 天）
-   *
-   * @param username 用户名
-   * @param password 明文密码
-   * @returns TokenPair（accessToken + refreshToken）
-   * @throws AuthServiceError 凭据无效时抛出 INVALID_CREDENTIALS 错误
    */
   async login(username: string, password: string): Promise<TokenPair> {
     const result = await this.loginWithUser(username, password);
@@ -215,15 +157,6 @@ export class AuthService {
 
   /**
    * 用户登录（含用户信息）
-   *
-   * - 验证用户名和密码
-   * - 生成 JWT access token（15 分钟）和 refresh token（7 天）
-   * - 返回用户信息和令牌
-   *
-   * @param username 用户名
-   * @param password 明文密码
-   * @returns { tokenPair, user }
-   * @throws AuthServiceError 凭据无效时抛出 INVALID_CREDENTIALS 错误
    */
   async loginWithUser(username: string, password: string): Promise<{ tokenPair: TokenPair; user: User }> {
     if (!username || username.trim().length === 0) {
@@ -234,45 +167,17 @@ export class AuthService {
     }
 
     try {
-      // PgDataStore 路径
-      if (this.pgDataStore) {
-        const users = await this.pgDataStore.query<User>(
-          'SELECT * FROM users WHERE username = $1', [username]);
-        if (users.length === 0) {
-          throw new AuthServiceError('用户名或密码错误', 'INVALID_CREDENTIALS');
-        }
-        const user = users[0];
-        const isPasswordValid = await bcrypt.compare(password, user.password_hash);
-        if (!isPasswordValid) {
-          throw new AuthServiceError('用户名或密码错误', 'INVALID_CREDENTIALS');
-        }
-        const tokenPair = this.generateTokenPair(user.id, user.username);
-        logger.info(`用户登录成功: ${username} (${user.id})`);
-        return { tokenPair, user };
-      }
-
-      // SQLite DataStore 路径
-      // 查找用户
-      const users = this.dataStore.query<User>(
-        'SELECT * FROM users WHERE username = ?',
-        [username],
-      );
-
+      const users = await this.dataStore.query<User>(
+        'SELECT * FROM users WHERE username = $1', [username]);
       if (users.length === 0) {
         throw new AuthServiceError('用户名或密码错误', 'INVALID_CREDENTIALS');
       }
-
       const user = users[0];
-
-      // 验证密码
       const isPasswordValid = await bcrypt.compare(password, user.password_hash);
       if (!isPasswordValid) {
         throw new AuthServiceError('用户名或密码错误', 'INVALID_CREDENTIALS');
       }
-
-      // 生成 token pair
       const tokenPair = this.generateTokenPair(user.id, user.username);
-
       logger.info(`用户登录成功: ${username} (${user.id})`);
       return { tokenPair, user };
     } catch (error) {
@@ -285,13 +190,6 @@ export class AuthService {
 
   /**
    * 刷新令牌
-   *
-   * - 验证 refresh token 有效性
-   * - 生成新的 token pair
-   *
-   * @param refreshToken 刷新令牌
-   * @returns 新的 TokenPair
-   * @throws AuthServiceError refresh token 无效或过期时抛出错误
    */
   async refreshToken(refreshToken: string): Promise<TokenPair> {
     if (!refreshToken || refreshToken.trim().length === 0) {
@@ -299,34 +197,18 @@ export class AuthService {
     }
 
     try {
-      // 验证 refresh token
       const decoded = jwt.verify(refreshToken, this.jwtSecret) as TokenPayload & { iat: number; exp: number };
-
-      // 确保是 refresh token 类型
       if (decoded.type !== 'refresh') {
         throw new AuthServiceError('无效的 refresh token 类型', 'INVALID_TOKEN');
       }
 
-      // 验证用户仍然存在
-      if (this.pgDataStore) {
-        const users = await this.pgDataStore.query<User>(
-          'SELECT * FROM users WHERE id = $1', [decoded.tenantId]);
-        if (users.length === 0) {
-          throw new AuthServiceError('用户不存在', 'USER_NOT_FOUND');
-        }
-      } else {
-        const users = this.dataStore.query<User>(
-          'SELECT * FROM users WHERE id = ?',
-          [decoded.tenantId],
-        );
-        if (users.length === 0) {
-          throw new AuthServiceError('用户不存在', 'USER_NOT_FOUND');
-        }
+      const users = await this.dataStore.query<User>(
+        'SELECT * FROM users WHERE id = $1', [decoded.tenantId]);
+      if (users.length === 0) {
+        throw new AuthServiceError('用户不存在', 'USER_NOT_FOUND');
       }
 
-      // 生成新的 token pair
       const tokenPair = this.generateTokenPair(decoded.tenantId, decoded.username);
-
       logger.info(`令牌刷新成功: ${decoded.username} (${decoded.tenantId})`);
       return tokenPair;
     } catch (error) {
@@ -345,14 +227,6 @@ export class AuthService {
 
   /**
    * 验证令牌
-   *
-   * - 验证 JWT 签名和有效期
-   * - 提取 tenant_id 和 username
-   * - 验证用户是否存在于数据库（防止数据库重置后旧令牌导致的 FK 错误）
-   *
-   * @param token JWT 令牌
-   * @returns 包含 tenantId 和 username 的对象
-   * @throws AuthServiceError 令牌无效、过期或用户不存在时抛出错误
    */
   async validateToken(token: string): Promise<{ tenantId: string; username: string }> {
     if (!token || token.trim().length === 0) {
@@ -361,28 +235,14 @@ export class AuthService {
 
     try {
       const decoded = jwt.verify(token, this.jwtSecret) as TokenPayload & { iat: number; exp: number };
-
-      // 确保是 access token 类型
       if (decoded.type !== 'access') {
         throw new AuthServiceError('无效的令牌类型，需要 access token', 'INVALID_TOKEN');
       }
 
-      // 验证用户是否存在
-      //这是为了防止数据库重置后，客户端仍持有旧的有效令牌，导致 Foreign Key 错误
-      if (this.pgDataStore) {
-        const users = await this.pgDataStore.query<User>(
-          'SELECT id FROM users WHERE id = $1', [decoded.tenantId]);
-        if (users.length === 0) {
-          throw new AuthServiceError('用户不存在或已删除', 'USER_NOT_FOUND');
-        }
-      } else {
-        const users = this.dataStore.query<User>(
-          'SELECT id FROM users WHERE id = ?',
-          [decoded.tenantId],
-        );
-        if (users.length === 0) {
-          throw new AuthServiceError('用户不存在或已删除', 'USER_NOT_FOUND');
-        }
+      const users = await this.dataStore.query<User>(
+        'SELECT id FROM users WHERE id = $1', [decoded.tenantId]);
+      if (users.length === 0) {
+        throw new AuthServiceError('用户不存在或已删除', 'USER_NOT_FOUND');
       }
 
       return {

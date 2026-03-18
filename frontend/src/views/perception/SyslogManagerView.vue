@@ -234,7 +234,7 @@ const sourceForm = reactive({ source_ip: '', source_cidr: '', description: '' })
 // Rule dialog
 const ruleDialogVisible = ref(false)
 const editingRule = ref<SyslogParseRule | null>(null)
-const ruleForm = reactive({ name: '', type: 'regex' as const, pattern: '', priority: 0, enabled: true })
+const ruleForm = reactive({ name: '', type: 'regex' as 'regex' | 'grok', pattern: '', priority: 0, enabled: true })
 
 // Filter dialog
 const filterDialogVisible = ref(false)

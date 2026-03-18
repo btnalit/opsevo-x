@@ -243,7 +243,7 @@ async function rollbackToVersion(ver: any) {
   }
 }
 
-function editTemplate(tpl: PromptTemplate) {
+function editTemplate(_tpl: PromptTemplate) {
   // Navigate to existing PromptTemplateView for editing
   window.location.hash = ''
   window.location.pathname = '/ai-ops/templates'

@@ -3,7 +3,7 @@
  * 测试 saveChannels() 的 upsert 策略（Requirements: 5.1, 5.2）
  *
  * Verifies:
- * - Uses INSERT OR REPLACE instead of DELETE all + re-INSERT
+ * - Uses INSERT ... ON CONFLICT (PG upsert) instead of DELETE all + re-INSERT
  * - Only deletes channels that no longer exist in memory
  * - Preserves existing channels that are still present
  * - Wraps operations in a transaction
@@ -32,34 +32,52 @@ jest.mock('nodemailer', () => ({
   }),
 }));
 
-/** Helper: create a mock DataStore that tracks SQL operations */
+/** Helper: create a mock PG DataStore that tracks SQL operations */
 function createMockDataStore(existingChannelIds: string[] = []) {
-  const runCalls: { sql: string; params?: unknown[] }[] = [];
-  const transactionFn = jest.fn((fn: () => void) => fn());
+  const executeCalls: { sql: string; params?: unknown[] }[] = [];
+  const transactionFn = jest.fn(async (fn: (tx: any) => Promise<void>) => {
+    const tx = {
+      query: async (sql: string, params?: unknown[]) => {
+        if (sql.includes('SELECT id FROM')) {
+          return existingChannelIds.map(id => ({ id }));
+        }
+        return [];
+      },
+      queryOne: async () => null,
+      execute: async (sql: string, params?: unknown[]) => {
+        executeCalls.push({ sql, params });
+        return { rowCount: 1 };
+      },
+    };
+    await fn(tx);
+  });
 
   return {
-    query: jest.fn().mockReturnValue(existingChannelIds.map(id => ({ id }))),
-    run: jest.fn((sql: string, params?: unknown[]) => {
-      runCalls.push({ sql, params });
+    query: jest.fn().mockImplementation(async (sql: string) => {
+      if (sql.includes('SELECT id FROM')) {
+        return existingChannelIds.map(id => ({ id }));
+      }
+      // SELECT * for loadChannels — return full rows
+      return existingChannelIds.map(id => ({
+        id,
+        tenant_id: 'default',
+        name: `Channel ${id}`,
+        type: 'webhook',
+        config: JSON.stringify({ url: `https://example.com/${id}` }),
+        severity_filter: JSON.stringify(['critical', 'high', 'medium', 'low']),
+        enabled: true,
+        created_at: '2024-01-01T00:00:00.000Z',
+      }));
     }),
+    queryOne: jest.fn().mockResolvedValue(null),
+    execute: jest.fn().mockResolvedValue({ rowCount: 1 }),
     transaction: transactionFn,
-    initialize: jest.fn(),
-    close: jest.fn(),
-    _runCalls: runCalls,
+    getPool: jest.fn(),
+    healthCheck: jest.fn().mockResolvedValue(true),
+    close: jest.fn().mockResolvedValue(undefined),
+    _executeCalls: executeCalls,
     _transactionFn: transactionFn,
   } as any;
-}
-
-/** Helper: create a minimal notification channel */
-function makeChannel(id: string, name: string = `Channel ${id}`) {
-  return {
-    id,
-    name,
-    type: 'webhook' as const,
-    config: { url: `https://example.com/${id}` },
-    enabled: true,
-    createdAt: '2024-01-01T00:00:00.000Z',
-  };
 }
 
 describe('NotificationService.saveChannels() - upsert strategy', () => {
@@ -70,7 +88,7 @@ describe('NotificationService.saveChannels() - upsert strategy', () => {
     jest.clearAllMocks();
   });
 
-  it('should use INSERT OR REPLACE instead of DELETE all', async () => {
+  it('should use ON CONFLICT (PG upsert) instead of DELETE all', async () => {
     const mockDataStore = createMockDataStore([]);
     service.setDataStore(mockDataStore);
 
@@ -82,54 +100,43 @@ describe('NotificationService.saveChannels() - upsert strategy', () => {
       enabled: true,
     });
 
+    // transaction should have been called
+    expect(mockDataStore._transactionFn).toHaveBeenCalled();
+
     // Verify no "DELETE FROM notification_channels" without WHERE clause was issued
-    const deleteAllCalls = mockDataStore._runCalls.filter(
+    const deleteAllCalls = mockDataStore._executeCalls.filter(
       (c: any) => c.sql.includes('DELETE FROM notification_channels') && !c.sql.includes('WHERE')
     );
     expect(deleteAllCalls).toHaveLength(0);
 
-    // Verify INSERT OR REPLACE was used
-    const upsertCalls = mockDataStore._runCalls.filter(
-      (c: any) => c.sql.includes('INSERT OR REPLACE')
+    // Verify ON CONFLICT (PG upsert) was used
+    const upsertCalls = mockDataStore._executeCalls.filter(
+      (c: any) => c.sql.includes('ON CONFLICT')
     );
     expect(upsertCalls.length).toBeGreaterThan(0);
   });
 
   it('should delete only channels that no longer exist in memory', async () => {
-    // Set up: DB has channels A, B, C loaded initially
-    const fullRows = [
-      { id: 'chan-a', tenant_id: 'default', name: 'A', type: 'webhook', config: '{"url":"https://a.com"}', enabled: 1, created_at: '2024-01-01T00:00:00.000Z' },
-      { id: 'chan-b', tenant_id: 'default', name: 'B', type: 'webhook', config: '{"url":"https://b.com"}', enabled: 1, created_at: '2024-01-01T00:00:00.000Z' },
-      { id: 'chan-c', tenant_id: 'default', name: 'C', type: 'webhook', config: '{"url":"https://c.com"}', enabled: 1, created_at: '2024-01-01T00:00:00.000Z' },
-    ];
-    const mockDataStore = createMockDataStore([]);
-    // loadChannels() uses SELECT * - return full rows
-    // saveChannels() uses SELECT id - return id-only rows
-    mockDataStore.query.mockImplementation((sql: string) => {
-      if (sql.includes('SELECT id FROM')) {
-        return [{ id: 'chan-a' }, { id: 'chan-b' }, { id: 'chan-c' }];
-      }
-      return fullRows; // SELECT * for loadChannels
-    });
+    const mockDataStore = createMockDataStore(['chan-a', 'chan-b', 'chan-c']);
     service.setDataStore(mockDataStore);
 
     // Initialize loads A, B, C into memory
     await service.initialize();
-    mockDataStore._runCalls.length = 0; // Clear calls from init
+    mockDataStore._executeCalls.length = 0; // Clear calls from init
 
     // Delete channel C via public API
     await service.deleteChannel('chan-c');
 
     // saveChannels should delete chan-c (no longer in memory) but keep chan-a and chan-b
-    const deleteCalls = mockDataStore._runCalls.filter(
-      (c: any) => c.sql.includes('DELETE FROM notification_channels WHERE id = ?')
+    const deleteCalls = mockDataStore._executeCalls.filter(
+      (c: any) => c.sql.includes('DELETE FROM notification_channels WHERE id')
     );
     expect(deleteCalls).toHaveLength(1);
     expect(deleteCalls[0].params![0]).toBe('chan-c');
 
     // chan-a and chan-b should be upserted
-    const upsertCalls = mockDataStore._runCalls.filter(
-      (c: any) => c.sql.includes('INSERT OR REPLACE')
+    const upsertCalls = mockDataStore._executeCalls.filter(
+      (c: any) => c.sql.includes('ON CONFLICT')
     );
     expect(upsertCalls).toHaveLength(2);
     const upsertedIds = upsertCalls.map((c: any) => c.params![0]);
@@ -153,11 +160,10 @@ describe('NotificationService.saveChannels() - upsert strategy', () => {
   });
 
   it('should not delete channels that still exist in memory', async () => {
-    // Start with empty DB
     const mockDataStore = createMockDataStore([]);
     service.setDataStore(mockDataStore);
 
-    // Create two channels
+    // Create first channel
     const ch1 = await service.createChannel({
       name: 'Channel 1',
       type: 'webhook',
@@ -165,9 +171,22 @@ describe('NotificationService.saveChannels() - upsert strategy', () => {
       enabled: true,
     });
 
-    // Now update the mock to return the first channel's ID as existing
-    mockDataStore.query.mockReturnValue([{ id: ch1.id }]);
-    mockDataStore._runCalls.length = 0; // Clear previous calls
+    // Update mock to return the first channel's ID as existing in DB
+    mockDataStore._transactionFn.mockImplementation(async (fn: any) => {
+      const tx = {
+        query: async (sql: string) => {
+          if (sql.includes('SELECT id FROM')) return [{ id: ch1.id }];
+          return [];
+        },
+        queryOne: async () => null,
+        execute: async (sql: string, params?: unknown[]) => {
+          mockDataStore._executeCalls.push({ sql, params });
+          return { rowCount: 1 };
+        },
+      };
+      await fn(tx);
+    });
+    mockDataStore._executeCalls.length = 0;
 
     const ch2 = await service.createChannel({
       name: 'Channel 2',
@@ -177,14 +196,14 @@ describe('NotificationService.saveChannels() - upsert strategy', () => {
     });
 
     // ch1 exists in both DB and memory, so it should NOT be deleted
-    const deleteCalls = mockDataStore._runCalls.filter(
-      (c: any) => c.sql.includes('DELETE FROM notification_channels WHERE id = ?')
+    const deleteCalls = mockDataStore._executeCalls.filter(
+      (c: any) => c.sql.includes('DELETE FROM notification_channels WHERE id')
     );
     expect(deleteCalls).toHaveLength(0);
 
     // Both channels should be upserted
-    const upsertCalls = mockDataStore._runCalls.filter(
-      (c: any) => c.sql.includes('INSERT OR REPLACE')
+    const upsertCalls = mockDataStore._executeCalls.filter(
+      (c: any) => c.sql.includes('ON CONFLICT')
     );
     expect(upsertCalls).toHaveLength(2);
   });
@@ -208,22 +227,35 @@ describe('NotificationService.saveChannels() - upsert strategy', () => {
     });
 
     // Update mock to return both channel IDs as existing
-    mockDataStore.query.mockReturnValue([{ id: ch1.id }, { id: ch2.id }]);
-    mockDataStore._runCalls.length = 0;
+    mockDataStore._transactionFn.mockImplementation(async (fn: any) => {
+      const tx = {
+        query: async (sql: string) => {
+          if (sql.includes('SELECT id FROM')) return [{ id: ch1.id }, { id: ch2.id }];
+          return [];
+        },
+        queryOne: async () => null,
+        execute: async (sql: string, params?: unknown[]) => {
+          mockDataStore._executeCalls.push({ sql, params });
+          return { rowCount: 1 };
+        },
+      };
+      await fn(tx);
+    });
+    mockDataStore._executeCalls.length = 0;
 
     // Delete ch2
     await service.deleteChannel(ch2.id);
 
     // Only ch2 should be deleted from DB
-    const deleteCalls = mockDataStore._runCalls.filter(
-      (c: any) => c.sql.includes('DELETE FROM notification_channels WHERE id = ?')
+    const deleteCalls = mockDataStore._executeCalls.filter(
+      (c: any) => c.sql.includes('DELETE FROM notification_channels WHERE id')
     );
     expect(deleteCalls).toHaveLength(1);
     expect(deleteCalls[0].params![0]).toBe(ch2.id);
 
     // ch1 should still be upserted
-    const upsertCalls = mockDataStore._runCalls.filter(
-      (c: any) => c.sql.includes('INSERT OR REPLACE')
+    const upsertCalls = mockDataStore._executeCalls.filter(
+      (c: any) => c.sql.includes('ON CONFLICT')
     );
     expect(upsertCalls).toHaveLength(1);
     expect(upsertCalls[0].params![0]).toBe(ch1.id);
@@ -250,9 +282,7 @@ describe('NotificationService.saveChannels() - upsert strategy', () => {
 
   it('should log error and fall back to JSON when DataStore transaction fails', async () => {
     const mockDataStore = createMockDataStore([]);
-    mockDataStore.transaction.mockImplementation(() => {
-      throw new Error('Transaction failed');
-    });
+    mockDataStore.transaction.mockRejectedValue(new Error('Transaction failed'));
     service.setDataStore(mockDataStore);
 
     const fsMock = require('fs/promises');
@@ -269,7 +299,7 @@ describe('NotificationService.saveChannels() - upsert strategy', () => {
     });
 
     expect(logger.error).toHaveBeenCalledWith(
-      'Failed to save channels to DataStore, falling back to JSON:',
+      'Failed to save channels to PostgreSQL, falling back:',
       expect.any(Error)
     );
     expect(fsMock.writeFile).toHaveBeenCalled();

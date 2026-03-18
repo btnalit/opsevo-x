@@ -120,7 +120,17 @@ export class VectorStoreClient {
         min_score: query.min_score ?? 0,
       });
       degradationManager.recordSuccess('vectorOperations');
-      return resp.data.results ?? [];
+
+      // Map Python Core response field 'content' → VectorSearchResult 'text'
+      // Python Core SearchResultItem returns { id, content, score, metadata }
+      // but VectorSearchResult interface expects { id, text, score, metadata }
+      const rawResults: Array<Record<string, unknown>> = resp.data.results ?? [];
+      return rawResults.map(r => ({
+        id: String(r.id ?? ''),
+        text: String(r.text ?? r.content ?? ''),
+        score: Number(r.score ?? 0),
+        metadata: (r.metadata as Record<string, unknown>) ?? {},
+      }));
     } catch (err) {
       logger.error(`VectorStoreClient search failed for collection=${collection}`, err);
       degradationManager.recordFailure('vectorOperations', this.extractErrorMessage(err));
@@ -172,6 +182,137 @@ export class VectorStoreClient {
       degradationManager.recordFailure('vectorOperations', this.extractErrorMessage(err));
       return []; // Graceful degradation: return empty
     }
+  }
+
+  // ── KnowledgeBase compatibility methods ──────────────────────────
+  // These methods provide the same interface as the former SQLiteVectorStore
+  // so that KnowledgeBase, ragRoutes, etc. can work without changes.
+
+  private _initialized = false;
+
+  /** Mark client as initialized (called after healthCheck succeeds). */
+  isInitialized(): boolean {
+    return this._initialized;
+  }
+
+  /** No-op initialize — Python Core manages its own state. */
+  async initialize(): Promise<void> {
+    const healthy = await this.healthCheck();
+    this._initialized = healthy;
+    if (!healthy) {
+      logger.warn('VectorStoreClient initialize: Python Core not reachable, marking as initialized anyway');
+      this._initialized = true; // Allow graceful degradation
+    }
+  }
+
+  /** No-op close. */
+  async close(): Promise<void> {
+    this._initialized = false;
+  }
+
+  /**
+   * Insert documents into a collection (delegates to upsert).
+   * Compatible with SQLiteVectorStore.insert(collection, docs) signature.
+   */
+  async insert(collection: string, docs: VectorDocument[]): Promise<void> {
+    await this.upsert(collection, docs);
+  }
+
+  /**
+   * Get a single document by ID.
+   * Returns null if not found or Python Core is unavailable.
+   */
+  async get(collection: string, id: string): Promise<VectorDocument | null> {
+    // Use search with exact ID filter as a workaround
+    // Python Core doesn't have a direct GET endpoint, so we return null gracefully
+    if (!degradationManager.isAvailable('vectorOperations')) {
+      return null;
+    }
+    try {
+      // Search with a filter for the specific ID
+      const results = await this.search(collection, {
+        collection,
+        query: '',
+        top_k: 1,
+        filter: { id },
+        min_score: 0,
+      });
+      if (results.length > 0) {
+        return {
+          id: results[0].id,
+          content: results[0].text,
+          metadata: results[0].metadata,
+        };
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Delete multiple documents by IDs.
+   * Compatible with SQLiteVectorStore.delete(collection, ids) signature.
+   */
+  async bulkDelete(collection: string, ids: string[]): Promise<void> {
+    for (const id of ids) {
+      await this.delete(collection, id);
+    }
+  }
+
+  /**
+   * Search with raw embedding vector — compatibility with former SQLiteVectorStore.
+   * Signature: searchByVector(collection, vector, options) → SearchResult[]
+   * Returns results in the legacy { document, score } format.
+   */
+  async searchByVector(
+    collection: string,
+    vector: number[],
+    options?: { topK?: number; minScore?: number; filter?: Record<string, unknown>; includeVector?: boolean },
+  ): Promise<Array<{ document: { id: string; content: string; vector: number[]; metadata: Record<string, unknown> }; score: number; distance: number }>> {
+    const results = await this.search(collection, {
+      collection,
+      query_embedding: vector,
+      top_k: options?.topK ?? 5,
+      filter: options?.filter,
+      min_score: options?.minScore ?? 0,
+    });
+
+    return results.map(r => ({
+      document: {
+        id: r.id,
+        content: r.text,
+        vector: [], // Python Core doesn't return vectors
+        metadata: r.metadata,
+      },
+      score: r.score,
+      distance: 1 - r.score,
+    }));
+  }
+
+  /** No-op — Python Core manages collections via pgvector tables. */
+  async createCollection(_name: string): Promise<void> {
+    // Collections are auto-created by Python Core on first upsert
+  }
+
+  /** No-op — dropping collections not supported via Python Core API. */
+  async dropCollection(_name: string): Promise<void> {
+    logger.warn('VectorStoreClient.dropCollection is a no-op; Python Core manages collections');
+  }
+
+  /** List known collections (returns static list). */
+  async listCollections(): Promise<string[]> {
+    return ['prompt_knowledge', 'tool_vectors', 'vector_documents'];
+  }
+
+  /** Get collection stats (returns placeholder). */
+  async getCollectionStats(_name: string): Promise<{ documentCount: number; totalSize: number }> {
+    return { documentCount: 0, totalSize: 0 };
+  }
+
+  /** Get overall stats (returns placeholder). */
+  async getStats(): Promise<{ collections: Array<{ documentCount: number; totalSize: number }>; totalSize: number }> {
+    return { collections: [], totalSize: 0 };
   }
 
   // ── Health ──────────────────────────────────────────────────────

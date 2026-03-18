@@ -162,9 +162,6 @@ export interface DeviceContext {
   }[]
 }
 
-/** @deprecated Use DeviceContext instead */
-export type RouterOSContext = DeviceContext
-
 /**
  * Token 使用统计
  */

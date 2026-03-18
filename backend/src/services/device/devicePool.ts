@@ -1,7 +1,7 @@
 /**
  * DevicePool - 设备连接池
  *
- * 管理多个 RouterOS 设备的连接生命周期：
+ * 管理多个设备的连接生命周期：
  * - getConnection()：查找已有连接或创建新连接（同一 deviceId 复用同一实例）
  * - releaseConnection()：释放指定设备的连接
  * - disconnectAll()：断开所有连接（可按 tenantId 过滤）
@@ -14,7 +14,6 @@
  */
 
 import { EventEmitter } from 'events';
-import { RouterOSClient } from '../routerosClient';
 import { DeviceManager } from './deviceManager';
 import { deviceDriverManager } from './deviceDriverManager';
 import type { DeviceDriver } from '../../types/device-driver';
@@ -23,10 +22,24 @@ import { logger } from '../../utils/logger';
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 /**
+ * 通用设备客户端接口
+ * 替代原 RouterOSClient 硬依赖，由设备驱动插件实现
+ */
+export interface DeviceClient {
+  connect(config: Record<string, unknown>): Promise<boolean>;
+  disconnect(): Promise<void>;
+  isConnected(): boolean;
+  print<T>(path: string, query?: Record<string, string>, options?: Record<string, unknown>): Promise<T[]>;
+  executeRaw(command: string, params?: string[]): Promise<unknown>;
+  getConfig(): Record<string, unknown> | null;
+  [key: string]: unknown;
+}
+
+/**
  * 连接池中的连接条目
  */
 export interface PooledConnection {
-  client: RouterOSClient;
+  client: DeviceClient;
   deviceId: string;
   tenantId: string;
   lastUsed: number;
@@ -95,14 +108,14 @@ export class DevicePool {
    * 获取设备连接
    *
    * 查找已有连接并复用，或创建新连接。
-   * 同一 deviceId 始终返回同一 RouterOSClient 实例（连接存活期间）。
+   * 同一 deviceId 始终返回同一 DeviceClient 实例（连接存活期间）。
    *
    * @param tenantId 租户 ID
    * @param deviceId 设备 ID
    * @param options 可选参数 { force: boolean }
-   * @returns RouterOSClient 实例
+   * @returns DeviceClient 实例
    */
-  async getConnection(tenantId: string, deviceId: string, options?: { force?: boolean }): Promise<RouterOSClient> {
+  async getConnection(tenantId: string, deviceId: string, options?: { force?: boolean }): Promise<DeviceClient> {
     const force = options?.force ?? false;
 
     // 检查是否已有连接
@@ -154,7 +167,7 @@ export class DevicePool {
 
   /**
    * 获取泛化设备驱动实例
-   * 优先从 DeviceDriverManager 获取，回退到 RouterOSClient 包装
+   * 从 DeviceDriverManager 获取
    * Requirements: A4.17
    */
   getDeviceDriver(deviceId: string): DeviceDriver | null {
@@ -263,7 +276,7 @@ export class DevicePool {
   /**
    * 创建新的设备连接
    */
-  private async createConnection(tenantId: string, deviceId: string): Promise<RouterOSClient> {
+  private async createConnection(tenantId: string, deviceId: string): Promise<DeviceClient> {
     // 从 DeviceManager 获取设备配置
     const device = await this.deviceManager.getDevice(tenantId, deviceId);
     if (!device) {
@@ -280,8 +293,10 @@ export class DevicePool {
       throw new DevicePoolError(`设备密码解密失败: ${deviceId}`, 'DECRYPT_FAILED');
     }
 
-    // 创建 RouterOSClient 实例
-    const client = new RouterOSClient();
+    // 通过 DeviceDriverManager 获取或创建设备驱动
+    const driver = deviceDriverManager.getDriver(deviceId);
+    // 使用驱动作为客户端（duck typing 兼容 DeviceClient 接口）
+    const client = (driver || { connect: async () => false, disconnect: async () => {}, isConnected: () => false, print: async () => [], getConfig: () => null }) as unknown as DeviceClient;
 
     // 标记为正在连接
     const pooledConn: PooledConnection = {

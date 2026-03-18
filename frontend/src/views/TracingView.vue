@@ -116,7 +116,7 @@
           <div v-if="selectedSpan.logs?.length" style="margin-top:8px">
             <h5>日志</h5>
             <el-timeline>
-              <el-timeline-item v-for="(log, i) in selectedSpan.logs" :key="i" :timestamp="formatTime(log.timestamp)" size="small">
+              <el-timeline-item v-for="(log, _i) in selectedSpan.logs" :key="_i" :timestamp="formatTime(log.timestamp)" size="normal">
                 {{ log.message }}
               </el-timeline-item>
             </el-timeline>

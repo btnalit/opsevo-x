@@ -11,41 +11,21 @@
  * Requirements: 4.1, 4.2, 4.3, 4.6
  */
 
-import { DataStore } from '../core/dataStore';
+import type { DataStore } from '../dataStore';
+import { createMockPgDataStore } from '../../test/helpers/mockPgDataStore';
 import { AuthService, AuthServiceError, User, TokenPair } from './authService';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import * as path from 'path';
 
 // ─── Test Helpers ────────────────────────────────────────────────────────────
 
 const TEST_JWT_SECRET = 'test-secret-key-for-unit-tests';
 
 /**
- * Create a DataStore with the users table created directly via SQL.
- * This avoids loading migration test files that conflict with Jest.
+ * Create a mock PgDataStore for testing.
  */
 async function createTestDataStore(): Promise<DataStore> {
-  const store = new DataStore({
-    inMemory: true,
-    // Use a non-existent path to skip file-based migrations
-    migrationsPath: path.join(__dirname, '__no_migrations__'),
-  });
-  await store.initialize();
-
-  // Create the users table directly (matches 001_initial_schema.ts)
-  store.run(`
-    CREATE TABLE IF NOT EXISTS users (
-      id TEXT PRIMARY KEY,
-      username TEXT UNIQUE NOT NULL,
-      email TEXT UNIQUE NOT NULL,
-      password_hash TEXT NOT NULL,
-      created_at TEXT DEFAULT (datetime('now')),
-      updated_at TEXT DEFAULT (datetime('now'))
-    )
-  `);
-
-  return store;
+  return createMockPgDataStore();
 }
 
 /** Create an AuthService with test configuration */
@@ -153,8 +133,8 @@ describe('AuthService', () => {
     it('should store user in the database', async () => {
       const user = await authService.register('dbuser', 'db@example.com', 'password');
 
-      const rows = dataStore.query<User>(
-        'SELECT * FROM users WHERE id = ?',
+      const rows = await dataStore.query<User>(
+        'SELECT * FROM users WHERE id = $1',
         [user.id],
       );
       expect(rows).toHaveLength(1);
@@ -231,14 +211,14 @@ describe('AuthService', () => {
     });
 
     it('should set access token tenant_id to the user id', async () => {
-      const user = dataStore.query<User>(
-        'SELECT * FROM users WHERE username = ?',
+      const users = await dataStore.query<User>(
+        'SELECT * FROM users WHERE username = $1',
         ['loginuser'],
       );
       const tokenPair = await authService.login('loginuser', 'correctPassword');
 
       const decoded = jwt.verify(tokenPair.accessToken, TEST_JWT_SECRET) as any;
-      expect(decoded.tenantId).toBe(user[0].id);
+      expect(decoded.tenantId).toBe(users[0].id);
     });
   });
 

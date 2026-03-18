@@ -800,7 +800,7 @@ const handleRowClick = async (row: AlertRule) => {
   detailVisible.value = true
   // Load trigger history for this rule
   try {
-    const res = await alertEventsApi.getEvents({ source: 'all' })
+    const res = await alertEventsApi.getActive()
     if (res.data.success && res.data.data) {
       const events = Array.isArray(res.data.data) ? res.data.data : (res.data.data as any).events || []
       ruleTriggerHistory.value = events

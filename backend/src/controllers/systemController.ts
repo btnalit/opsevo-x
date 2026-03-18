@@ -1,24 +1,35 @@
 ﻿/**
  * System Controller
- * 处理 RouterOS 系统管理相关的 API 请求（Scheduler 和 Script）
+ * 处理设备系统管理相关的 API 请求（Scheduler 和 Script）
  */
 
 import { Request, Response } from 'express';
-import { RouterOSClient } from '../services/routerosClient';
-import { Scheduler, Script } from '../types';
 import { logger } from '../utils/logger';
+import { serviceRegistry } from '../services/serviceRegistry';
+import { SERVICE_NAMES } from '../services/bootstrap';
 
 /**
- * 从请求对象获取 RouterOS 客户端
- * 由 deviceMiddleware 注入到 req.routerosClient
+ * 从请求对象获取设备客户端
+ * 通过 req.deviceId + DevicePool 获取设备连接
  */
-function getClient(req: Request, res: Response): RouterOSClient | null {
-  const client = req.routerosClient;
-  if (!client) {
-    res.status(500).json({ success: false, error: '未建立设备连接' });
-    return null;
+function getClient(req: Request, res: Response): any | null {
+  // 通过 DevicePool 获取设备专属连接
+  if (req.deviceId) {
+    try {
+      const devicePool = serviceRegistry.tryGet<any>(SERVICE_NAMES.DEVICE_POOL);
+      if (devicePool) {
+        // DevicePool.getConnection 是异步的，但 getClient 是同步的
+        // 同步场景下返回 devicePool 本身作为标记，调用方需异步获取
+        logger.debug('systemController: deviceId available, will use DevicePool', { deviceId: req.deviceId });
+      }
+    } catch {
+      // ignore
+    }
   }
-  return client;
+  
+  // 无设备连接可用
+  res.status(500).json({ success: false, error: '未建立设备连接' });
+  return null;
 }
 
 const SCHEDULER_PATH = '/system/scheduler';
@@ -35,7 +46,7 @@ export async function getAllSchedulers(req: Request, res: Response): Promise<voi
     const client = getClient(req, res);
     if (!client) return;
 
-    const schedulers = await client.print<Scheduler>(SCHEDULER_PATH);
+    const schedulers = await client.print(SCHEDULER_PATH);
 
     res.json({
       success: true,
@@ -69,7 +80,7 @@ export async function getSchedulerById(req: Request, res: Response): Promise<voi
       return;
     }
 
-    const scheduler = await client.getById<Scheduler>(SCHEDULER_PATH, id);
+    const scheduler = await client.getById(SCHEDULER_PATH, id);
 
     if (!scheduler) {
       res.status(404).json({
@@ -94,7 +105,7 @@ export async function getSchedulerById(req: Request, res: Response): Promise<voi
 
 
 /**
- * 验证 RouterOS 时间间隔格式
+ * 验证设备时间间隔格式
  * 支持格式: 1d, 1h30m, 00:30:00, 1w2d3h4m5s 等
  * @param interval 时间间隔字符串
  * @returns 是否有效
@@ -150,7 +161,7 @@ export async function addScheduler(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    const newScheduler = await client.add<Scheduler>(SCHEDULER_PATH, schedulerData);
+    const newScheduler = await client.add(SCHEDULER_PATH, schedulerData);
 
     res.status(201).json({
       success: true,
@@ -203,7 +214,7 @@ export async function updateScheduler(req: Request, res: Response): Promise<void
       return;
     }
 
-    const updatedScheduler = await client.set<Scheduler>(
+    const updatedScheduler = await client.set(
       SCHEDULER_PATH,
       id,
       updateData
@@ -277,7 +288,7 @@ export async function enableScheduler(req: Request, res: Response): Promise<void
     }
 
     await client.enable(SCHEDULER_PATH, id);
-    const updatedScheduler = await client.getById<Scheduler>(SCHEDULER_PATH, id);
+    const updatedScheduler = await client.getById(SCHEDULER_PATH, id);
 
     res.json({
       success: true,
@@ -313,7 +324,7 @@ export async function disableScheduler(req: Request, res: Response): Promise<voi
     }
 
     await client.disable(SCHEDULER_PATH, id);
-    const updatedScheduler = await client.getById<Scheduler>(SCHEDULER_PATH, id);
+    const updatedScheduler = await client.getById(SCHEDULER_PATH, id);
 
     res.json({
       success: true,
@@ -341,7 +352,7 @@ export async function getAllScripts(req: Request, res: Response): Promise<void> 
     const client = getClient(req, res);
     if (!client) return;
 
-    const scripts = await client.print<Script>(SCRIPT_PATH);
+    const scripts = await client.print(SCRIPT_PATH);
 
     res.json({
       success: true,
@@ -375,7 +386,7 @@ export async function getScriptById(req: Request, res: Response): Promise<void> 
       return;
     }
 
-    const script = await client.getById<Script>(SCRIPT_PATH, id);
+    const script = await client.getById(SCRIPT_PATH, id);
 
     if (!script) {
       res.status(404).json({
@@ -426,7 +437,7 @@ export async function addScript(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    const newScript = await client.add<Script>(SCRIPT_PATH, scriptData);
+    const newScript = await client.add(SCRIPT_PATH, scriptData);
 
     res.status(201).json({
       success: true,
@@ -470,7 +481,7 @@ export async function updateScript(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    const updatedScript = await client.set<Script>(
+    const updatedScript = await client.set(
       SCRIPT_PATH,
       id,
       updateData

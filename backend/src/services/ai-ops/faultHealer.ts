@@ -4,7 +4,7 @@
  *
  * Requirements: 7.1-7.12
  * - 7.1: 支持预定义常见故障模式和对应的修复脚本
- * - 7.2: 内置故障模式：PPPoE 断线重连、DHCP 池耗尽扩容、接口 down 重启
+ * - 7.2: 内置故障模式：CPU 过载降级、内存不足清理、接口 down 重启
  * - 7.3: 支持用户自定义故障模式和修复脚本
  * - 7.4: 告警触发时检查是否匹配已定义的故障模式
  * - 7.5: 匹配到故障模式时调用 AI 服务确认故障诊断
@@ -22,6 +22,7 @@ import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import {
   FaultPattern,
+  FaultCondition,
   CreateFaultPatternInput,
   UpdateFaultPatternInput,
   RemediationExecution,
@@ -42,6 +43,7 @@ import { notificationService } from './notificationService';
 import { configSnapshotService } from './configSnapshotService';
 import { getServiceAsync, SERVICE_NAMES } from '../bootstrap';
 import { DevicePool } from '../device/devicePool';
+import type { DeviceDriver } from '../../types/device-driver';
 import { knowledgeBase } from './rag';
 import type { DeviceManager } from '../device/deviceManager';
 import type { EventBus } from '../eventBus';
@@ -70,51 +72,53 @@ function getRemediationsFilePath(dateStr: string): string {
 }
 
 /**
- * 内置故障模式定义
+ * 内置故障模式定义（通用 AIOps 示例模板）
+ * 注意：脚本使用设备无关的操作意图格式 "intent:category/operation param=value"
+ * 实际执行时由 DeviceDriver 将意图翻译为具体设备命令
  */
 const BUILTIN_PATTERNS: Omit<FaultPattern, 'id' | 'createdAt' | 'updatedAt'>[] = [
   {
-    name: 'PPPoE 断线重连',
-    description: '当 PPPoE 接口断开时，自动尝试重新连接',
+    name: 'CPU 过载自动降级',
+    description: '当设备 CPU 使用率持续过高时，自动执行降级策略减轻负载',
     enabled: true,
     autoHeal: false, // 默认禁用自动修复，需要用户手动启用
     builtin: true,
     conditions: [
       {
-        metric: 'interface_status',
-        metricLabel: 'pppoe-out1',
-        operator: 'eq',
-        threshold: 0, // 0 表示 down
+        metric: 'cpu',
+        operator: 'gt',
+        threshold: 95,
       },
     ],
-    remediationScript: `/interface pppoe-client disable pppoe-out1
-:delay 3s
-/interface pppoe-client enable pppoe-out1`,
-    rollbackScript: `/interface pppoe-client disable pppoe-out1`,
-    verificationScript: `/interface pppoe-client print where name=pppoe-out1`,
+    remediationScript: `# 操作意图：执行 CPU 过载降级策略
+# 具体命令由设备驱动根据 CapabilityManifest 翻译
+intent:system/diagnostics action=cpu-profile
+intent:service/degrade level=non-critical`,
+    rollbackScript: `intent:service/restore level=all`,
+    verificationScript: `intent:system/resource action=print`,
   },
   {
-    name: 'DHCP 池耗尽扩容',
-    description: '当 DHCP 地址池使用率过高时，自动扩展地址范围',
+    name: '内存不足清理',
+    description: '当设备内存使用率过高时，自动清理缓存释放内存',
     enabled: true,
     autoHeal: false,
     builtin: true,
     conditions: [
       {
-        metric: 'memory', // 使用内存作为代理指标，实际应检查 DHCP 池使用率
+        metric: 'memory',
         operator: 'gt',
         threshold: 95,
       },
     ],
-    remediationScript: `# DHCP 池扩容需要根据实际配置调整
-# /ip pool set [find name=dhcp-pool] ranges=192.168.1.10-192.168.1.250`,
-    rollbackScript: `# 回滚 DHCP 池配置
-# /ip pool set [find name=dhcp-pool] ranges=192.168.1.10-192.168.1.200`,
-    verificationScript: `/ip pool print`,
+    remediationScript: `# 操作意图：清理设备缓存释放内存
+intent:system/cache action=flush
+intent:system/resource action=reclaim`,
+    rollbackScript: `# 缓存清理无需回滚`,
+    verificationScript: `intent:system/resource action=print`,
   },
   {
     name: '接口 Down 重启',
-    description: '当网络接口异常断开时，自动重启接口',
+    description: '当网络接口异常断开时，自动重启接口恢复连接',
     enabled: true,
     autoHeal: false,
     builtin: true,
@@ -125,13 +129,13 @@ const BUILTIN_PATTERNS: Omit<FaultPattern, 'id' | 'createdAt' | 'updatedAt'>[] =
         threshold: 0,
       },
     ],
-    remediationScript: `# 接口重启脚本，需要指定具体接口名称
-# /interface disable [find name=ether1]
-# :delay 3s
-# /interface enable [find name=ether1]`,
+    remediationScript: `# 接口重启脚本，metricLabel 指定具体接口名称
+# intent:interface/disable name={metricLabel}
+# intent:system/delay seconds=3
+# intent:interface/enable name={metricLabel}`,
     rollbackScript: `# 回滚接口状态
-# /interface disable [find name=ether1]`,
-    verificationScript: `/interface print`,
+# intent:interface/disable name={metricLabel}`,
+    verificationScript: `intent:interface/print name={metricLabel}`,
   },
 ];
 
@@ -160,6 +164,10 @@ interface SafeModeConfig {
 export class FaultHealer implements IFaultHealer {
   private patterns: FaultPattern[] = [];
   private initialized = false;
+
+  // 写锁：防止并发 read-modify-write 竞态条件
+  private patternsWriteLock: Promise<void> = Promise.resolve();
+  private remediationWriteLocks: Map<string, Promise<void>> = new Map();
 
   // 安全模式相关 (Requirements: 4.4, 4.6)
   private safeMode = false;
@@ -299,7 +307,14 @@ export class FaultHealer implements IFaultHealer {
         snapshotId = snapshot.id;
         logger.info(`[heal] Created pre-remediation snapshot: ${snapshotId}`);
       } catch (snapErr) {
-        logger.warn('[heal] Failed to create pre-remediation snapshot, continuing:', snapErr);
+        logger.error('[heal] Failed to create pre-remediation snapshot, aborting heal to prevent unrecoverable changes:', snapErr);
+        return {
+          success: false,
+          planId,
+          error: '无法创建修复前配置快照，中止修复以防止不可回滚的变更',
+          steps: [],
+          duration: Date.now() - startTime,
+        };
       }
 
       // Step 4: 通过 DeviceDriver 执行修复步骤
@@ -452,8 +467,19 @@ export class FaultHealer implements IFaultHealer {
       return { apiCommand, params };
     }
 
-    // Fallback: 尝试作为传统 CLI 命令解析
-    return this.convertToApiFormat(trimmed);
+    // 尝试作为简单路径格式解析: "/path/to/action param=value"
+    if (trimmed.startsWith('/')) {
+      const parts = trimmed.split(/\s+/);
+      const apiCommand = parts[0];
+      const params = parts.slice(1)
+        .filter(p => p.includes('='))
+        .map(p => `=${p}`);
+      return { apiCommand, params };
+    }
+
+    // 无法识别的格式
+    logger.warn(`Unrecognized intent format: ${trimmed}`);
+    return { apiCommand: '', params: [] };
   }
 
   /**
@@ -504,8 +530,17 @@ export class FaultHealer implements IFaultHealer {
    * 保存故障模式
    */
   private async savePatterns(): Promise<void> {
-    await this.ensureDataDir();
-    await fs.writeFile(PATTERNS_FILE, JSON.stringify(this.patterns, null, 2), 'utf-8');
+    // 使用写锁防止并发 read-modify-write 竞态
+    const prevLock = this.patternsWriteLock;
+    const currentLock = prevLock.then(async () => {
+      await this.ensureDataDir();
+      await fs.writeFile(PATTERNS_FILE, JSON.stringify(this.patterns, null, 2), 'utf-8');
+    }).catch((err) => {
+      logger.error('Failed to save fault patterns:', err);
+    });
+
+    this.patternsWriteLock = currentLock;
+    await currentLock;
   }
 
   /**
@@ -572,16 +607,29 @@ export class FaultHealer implements IFaultHealer {
    */
   private async saveRemediation(remediation: RemediationExecution): Promise<void> {
     const dateStr = getDateString(remediation.startedAt);
-    const remediations = await this.readRemediationsFile(dateStr);
 
-    const existingIndex = remediations.findIndex((r) => r.id === remediation.id);
-    if (existingIndex >= 0) {
-      remediations[existingIndex] = remediation;
-    } else {
-      remediations.push(remediation);
-    }
+    // 使用 per-date 写锁防止并发 read-modify-write 竞态
+    const prevLock = this.remediationWriteLocks.get(dateStr) ?? Promise.resolve();
+    const currentLock = prevLock.then(async () => {
+      const remediations = await this.readRemediationsFile(dateStr);
+      const existingIndex = remediations.findIndex((r) => r.id === remediation.id);
+      if (existingIndex >= 0) {
+        remediations[existingIndex] = remediation;
+      } else {
+        remediations.push(remediation);
+      }
+      await this.writeRemediationsFile(dateStr, remediations);
+    }).catch((err) => {
+      logger.error(`Failed to save remediation ${remediation.id}:`, err);
+    }).finally(() => {
+      // 清理已完成的写锁条目，防止 Map 无限增长
+      if (this.remediationWriteLocks.get(dateStr) === currentLock) {
+        this.remediationWriteLocks.delete(dateStr);
+      }
+    });
 
-    await this.writeRemediationsFile(dateStr, remediations);
+    this.remediationWriteLocks.set(dateStr, currentLock);
+    await currentLock;
   }
 
   /**
@@ -783,34 +831,53 @@ export class FaultHealer implements IFaultHealer {
   }
 
   /**
+   * 检查单个条件是否匹配告警事件
+   */
+  private evaluateSingleCondition(
+    alertEvent: AlertEvent,
+    condition: FaultCondition
+  ): boolean {
+    // 检查指标类型是否匹配
+    if (condition.metric !== alertEvent.metric) {
+      return false;
+    }
+
+    // 检查指标标签是否匹配（如接口名称）
+    if (condition.metricLabel) {
+      if (!alertEvent.metricLabel || condition.metricLabel !== alertEvent.metricLabel) {
+        return false;
+      }
+    }
+
+    // 检查条件阈值是否满足
+    return this.evaluateCondition(
+      alertEvent.currentValue,
+      condition.operator,
+      condition.threshold
+    );
+  }
+
+  /**
    * 检查告警事件是否匹配故障模式的条件
+   * 支持 conditionLogic: 'AND'（所有条件必须满足）| 'OR'（任一条件满足，默认）
    */
   private matchesConditions(
     alertEvent: AlertEvent,
     pattern: FaultPattern
   ): boolean {
-    // 检查每个条件是否匹配
-    for (const condition of pattern.conditions) {
-      // 检查指标类型是否匹配
-      if (condition.metric !== alertEvent.metric) {
-        continue; // 尝试下一个条件
-      }
-
-      // 检查指标标签是否匹配（如果指定了）
-      // 注意：AlertEvent 没有 metricLabel 字段，我们需要从其他地方获取
-      // 这里简化处理，只检查指标类型和阈值
-
-      // 检查条件是否满足
-      if (this.evaluateCondition(
-        alertEvent.currentValue,
-        condition.operator,
-        condition.threshold
-      )) {
-        return true; // 至少一个条件匹配
-      }
+    if (pattern.conditions.length === 0) {
+      return false;
     }
 
-    return false;
+    const logic = pattern.conditionLogic ?? 'OR';
+
+    if (logic === 'AND') {
+      // AND 模式：所有条件都必须匹配
+      return pattern.conditions.every(c => this.evaluateSingleCondition(alertEvent, c));
+    }
+
+    // OR 模式（默认）：至少一个条件匹配
+    return pattern.conditions.some(c => this.evaluateSingleCondition(alertEvent, c));
   }
 
   /**
@@ -925,7 +992,7 @@ export class FaultHealer implements IFaultHealer {
   }
 
   /**
-   * 执行 RouterOS 脚本
+   * 通过 DeviceDriver 执行修复脚本
    */
   private async executeScript(script: string, tenantId?: string, deviceId?: string): Promise<{ output: string; error?: string }> {
     if (!tenantId || !deviceId) {
@@ -934,10 +1001,14 @@ export class FaultHealer implements IFaultHealer {
 
     try {
       const devicePool = await getServiceAsync<DevicePool>(SERVICE_NAMES.DEVICE_POOL);
-      const client = await devicePool.getConnection(tenantId, deviceId);
 
-      if (!client.isConnected()) {
-        return { output: '', error: 'RouterOS client not connected' };
+      // 优先使用 DeviceDriver（插件化设备抽象），回退到连接池直连
+      const driver = devicePool.getDeviceDriver(deviceId);
+      if (!driver) {
+        const client = await devicePool.getConnection(tenantId, deviceId);
+        if (!client.isConnected()) {
+          return { output: '', error: 'Device client not connected' };
+        }
       }
 
       const lines = script
@@ -950,32 +1021,52 @@ export class FaultHealer implements IFaultHealer {
 
       for (const line of lines) {
         try {
-          // 处理延迟命令
-          if (line.startsWith(':delay')) {
-            const match = line.match(/:delay\s+(\d+)s?/);
-            if (match) {
-              const seconds = parseInt(match[1], 10);
-              await new Promise((resolve) => setTimeout(resolve, seconds * 1000));
-              outputs.push(`Delayed ${seconds} seconds`);
-            }
+          // 处理延迟意图: "intent:system/delay seconds=N" 或旧格式 ":delay Ns"
+          const delayIntentMatch = line.match(/^intent:system\/delay\s+seconds=(\d+)/);
+          const legacyDelayMatch = !delayIntentMatch ? line.match(/^:delay\s+(\d+)s?/) : null;
+          if (delayIntentMatch || legacyDelayMatch) {
+            const match = delayIntentMatch || legacyDelayMatch;
+            const seconds = parseInt(match![1], 10);
+            await new Promise((resolve) => setTimeout(resolve, seconds * 1000));
+            outputs.push(`Delayed ${seconds} seconds`);
             continue;
           }
 
-          const { apiCommand, params } = this.convertToApiFormat(line);
+          // 解析意图格式命令
+          const { apiCommand, params } = this.convertIntentToCommand(line);
           if (!apiCommand) {
             continue;
           }
 
-          const response = await client.executeRaw(apiCommand, params);
-
-          if (response !== null && response !== undefined) {
-            if (Array.isArray(response) && response.length > 0) {
-              outputs.push(JSON.stringify(response, null, 2));
-            } else if (typeof response === 'object') {
-              outputs.push(JSON.stringify(response, null, 2));
+          // 通过 DeviceDriver 执行（设备无关）
+          if (driver) {
+            const actionType = apiCommand.replace(/^\//, '');
+            const payload: Record<string, unknown> = {};
+            for (const p of params) {
+              const clean = p.replace(/^[=?]/, '');
+              const eqIdx = clean.indexOf('=');
+              if (eqIdx > 0) {
+                payload[clean.substring(0, eqIdx)] = clean.substring(eqIdx + 1);
+              }
             }
+            const result = await driver.execute(actionType, payload);
+            if (result.data !== null && result.data !== undefined) {
+              outputs.push(JSON.stringify(result.data, null, 2));
+            }
+            outputs.push(`Executed: ${line}`);
+          } else {
+            // 回退: 通过连接池直连执行
+            const client = await devicePool.getConnection(tenantId, deviceId);
+            const response = await client.executeRaw(apiCommand, params);
+            if (response !== null && response !== undefined) {
+              if (Array.isArray(response) && response.length > 0) {
+                outputs.push(JSON.stringify(response, null, 2));
+              } else if (typeof response === 'object') {
+                outputs.push(JSON.stringify(response, null, 2));
+              }
+            }
+            outputs.push(`Executed: ${line}`);
           }
-          outputs.push(`Executed: ${line}`);
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : String(error);
           lastError = `命令 "${line}" 执行失败: ${errorMessage}`;
@@ -994,7 +1085,7 @@ export class FaultHealer implements IFaultHealer {
   }
 
   /**
-   * 执行 RouterOS 脚本（带超时保护）
+   * 通过 DeviceDriver 执行修复脚本（带超时保护）
    * Requirements: 2.1, 2.2
    * 使用 Promise.race 添加超时保护，防止脚本执行卡住导致系统阻塞
    */
@@ -1058,9 +1149,9 @@ export class FaultHealer implements IFaultHealer {
       await notificationService.send(enabledChannelIds, {
         type: 'alert',
         title: '⚠️ 脚本执行超时',
-        body: `RouterOS 脚本执行超时（${timeoutMs}ms）。\n\n` +
+        body: `设备脚本执行超时（${timeoutMs}ms）。\n\n` +
           `脚本预览:\n\`\`\`\n${script.substring(0, 500)}${script.length > 500 ? '\n...' : ''}\n\`\`\`\n\n` +
-          `建议检查 RouterOS 连接状态和脚本内容。`,
+          `建议检查设备连接状态和脚本内容。`,
         data: {
           type: 'script_timeout',
           timeoutMs,
@@ -1070,59 +1161,6 @@ export class FaultHealer implements IFaultHealer {
     } catch (error) {
       logger.warn('Failed to send script timeout notification:', error);
     }
-  }
-
-  /**
-   * 将 CLI 格式命令转换为 API 格式
-   */
-  private convertToApiFormat(command: string): { apiCommand: string; params: string[] } {
-    const trimmed = command.trim();
-
-    // 跳过空行和注释
-    if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith(':')) {
-      return { apiCommand: '', params: [] };
-    }
-
-    const parts = trimmed.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || [];
-
-    const pathParts: string[] = [];
-    const params: string[] = [];
-
-    let inWhere = false;
-    let foundFirstParam = false;
-
-    for (const part of parts) {
-      if (part.toLowerCase() === 'where') {
-        inWhere = true;
-        continue;
-      }
-
-      if (inWhere) {
-        if (part.includes('=')) {
-          params.push(`?${part}`);
-        }
-        continue;
-      }
-
-      if (part.includes('=')) {
-        foundFirstParam = true;
-        params.push(`=${part}`);
-      } else if (!foundFirstParam && (part.startsWith('/') || /^[a-z0-9\-]+$/i.test(part))) {
-        pathParts.push(part);
-      }
-    }
-
-    let apiCommand = '';
-    for (const part of pathParts) {
-      if (part.startsWith('/')) {
-        apiCommand += part;
-      } else {
-        apiCommand += '/' + part;
-      }
-    }
-    apiCommand = apiCommand.replace(/\/+/g, '/');
-
-    return { apiCommand, params };
   }
 
   /**
@@ -1171,7 +1209,7 @@ export class FaultHealer implements IFaultHealer {
       `错误信息: ${error}`,
       '',
       '建议的手动修复步骤:',
-      '1. 检查 RouterOS 连接状态',
+      '1. 检查设备连接状态',
       '2. 验证修复脚本语法是否正确',
       '3. 手动执行以下修复脚本:',
       '```',
@@ -1220,14 +1258,23 @@ export class FaultHealer implements IFaultHealer {
       return { valid: false, message: '回滚脚本为空或只包含注释' };
     }
 
-    // 基本语法检查
+    // 基本格式检查：每行应为意图格式 (intent:xxx) 或路径格式 (/xxx)
     for (const line of lines) {
-      if (line.startsWith(':') && !line.startsWith(':delay') && !line.startsWith(':log')) {
-        // 允许 :delay 和 :log 命令
-        if (!line.match(/^:(delay|log|put|global|local|if|foreach|while|do|for)/)) {
-          return { valid: false, message: `回滚脚本包含不支持的命令: ${line}` };
+      // 允许意图格式: "intent:category/operation params"
+      if (line.includes(':') && !line.startsWith('/')) {
+        const colonIdx = line.indexOf(':');
+        const prefix = line.substring(0, colonIdx);
+        if (!/^[a-z_]+$/i.test(prefix)) {
+          return { valid: false, message: `回滚脚本包含无法识别的命令格式: ${line}` };
         }
+        continue;
       }
+      // 允许路径格式: "/category/operation params"
+      if (line.startsWith('/')) {
+        continue;
+      }
+      // 不识别的格式
+      return { valid: false, message: `回滚脚本包含无法识别的命令格式: ${line}` };
     }
 
     return { valid: true, message: '回滚脚本验证通过' };
@@ -1256,13 +1303,13 @@ export class FaultHealer implements IFaultHealer {
     }
 
     try {
-      // 检查 RouterOS 连接
+      // 检查设备连接
       const devicePool = await getServiceAsync<DevicePool>(SERVICE_NAMES.DEVICE_POOL);
       const client = await devicePool.getConnection(tenantId, deviceId);
       if (!client.isConnected()) {
         return {
           success: false,
-          error: 'RouterOS 未连接，无法执行回滚',
+          error: '设备未连接，无法执行回滚',
           duration: Date.now() - startTime,
         };
       }
@@ -1412,7 +1459,15 @@ export class FaultHealer implements IFaultHealer {
       await this.saveRemediation(remediation);
       logger.info(`Created pre-remediation snapshot: ${preSnapshot.id}`);
     } catch (error) {
-      logger.warn('Failed to create pre-remediation snapshot:', error);
+      logger.error('Failed to create pre-remediation snapshot, aborting remediation:', error);
+      remediation.status = 'failed';
+      remediation.completedAt = Date.now();
+      remediation.executionResult = {
+        output: '',
+        error: '无法创建修复前配置快照，中止修复以防止不可回滚的变更',
+      };
+      await this.saveRemediation(remediation);
+      return remediation;
     }
 
     // 记录执行意图到审计日志
@@ -1446,7 +1501,7 @@ export class FaultHealer implements IFaultHealer {
       }
 
       try {
-        // 检查 RouterOS 连接
+        // 检查设备连接
         // Note: Connection check is now implicit in executeScript (via DevicePool)
         if (!tenantId || !deviceId) {
           throw new Error('TenantId and DeviceId required for remediation');
@@ -1693,13 +1748,13 @@ export class FaultHealer implements IFaultHealer {
       return;
     }
 
-    // 执行恢复检查（检查 RouterOS 连接状态）(Requirements: 3.3)
+    // 执行恢复检查（检查设备连接状态）(Requirements: 3.3)
     try {
       // 简单检查连接池是否有任何活动连接
       const devicePool = await getServiceAsync<DevicePool>(SERVICE_NAMES.DEVICE_POOL);
       const stats = devicePool.getPoolStats();
       if (stats.connected > 0) {
-        await this.exitSafeModeWithReason('RouterOS connection(s) restored');
+        await this.exitSafeModeWithReason('Device connection(s) restored');
       }
     } catch (error) {
       logger.debug('Safe mode recovery check failed:', error);

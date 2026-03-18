@@ -183,8 +183,8 @@ describe('Task 33.2 — EventBus 事件流集成验证', () => {
   });
 
   describe('优先级队列', () => {
-    it('队列深度应正确反映入队事件数', () => {
-      expect(eventBus.getQueueDepth()).toBe(0);
+    it('已发布事件总数初始为 0', () => {
+      expect(eventBus.getTotalPublishedCount()).toBe(0);
     });
 
     it('getSubscriberCount 应返回正确的订阅者数量', () => {

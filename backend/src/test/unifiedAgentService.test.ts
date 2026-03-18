@@ -7,8 +7,6 @@ import { ContextBuilderService } from '../services/ai/contextBuilderService';
 jest.mock('../services/ai/chatSessionService');
 jest.mock('../services/ai/apiConfigService');
 jest.mock('../services/ai/contextBuilderService');
-jest.mock('../services/routerosClient');
-jest.mock('../services/core/dataStore');
 
 describe('UnifiedAgentService Chat Flow', () => {
     let service: UnifiedAgentService;

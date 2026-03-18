@@ -217,17 +217,10 @@ export class EventBus {
   // ─── 队列操作 ───
 
   /**
-   * 获取已发布事件总数（原为队列深度，但队列从未被消费导致内存泄漏，现改为计数器）
+   * 获取已发布事件总数（纯 pub/sub 模式，无实际队列）
    */
-  getQueueDepth(): number {
+  getTotalPublishedCount(): number {
     return this.publishedCount;
-  }
-
-  /**
-   * @deprecated PriorityQueue removed — was never dequeued in production (memory leak)
-   */
-  dequeue(): PerceptionEvent | undefined {
-    return undefined;
   }
 
   /**

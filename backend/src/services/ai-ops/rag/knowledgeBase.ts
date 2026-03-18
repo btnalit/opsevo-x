@@ -17,7 +17,7 @@
  * - 5.3: 支持启用/禁用混合检索
  */
 
-import { SQLiteVectorStore } from './sqliteVectorStore';
+import { VectorStoreClient } from './vectorStoreClient';
 import type { VectorDocument, SearchOptions, SearchResult } from './vectorDatabase';
 import { DocumentProcessor, documentProcessor, DocumentSource } from './documentProcessor';
 import { EmbeddingService, embeddingService } from './embeddingService';
@@ -41,7 +41,6 @@ import { MetadataEnhancer } from './metadataEnhancer';
 import { KeywordIndexManager } from './keywordIndexManager';
 import { RRFRanker } from './rrfRanker';
 import { EnhancedMetadata } from './types/hybridSearch';
-import type { VectorStoreClient } from './vectorStoreClient';
 
 // ==================== 类型定义 ====================
 
@@ -259,7 +258,7 @@ const COLLECTION_MAP: Record<KnowledgeEntryType, string> = {
  * KnowledgeBase 知识库服务类
  */
 export class KnowledgeBase {
-  private _vectorDatabase: SQLiteVectorStore | null;
+  private _vectorDatabase: VectorStoreClient | null;
   private documentProcessor: DocumentProcessor;
   private embeddingService: EmbeddingService;
   private entries: Map<string, StoredKnowledgeEntry> = new Map();
@@ -281,7 +280,7 @@ export class KnowledgeBase {
   /**
    * 获取向量数据库实例（确保已初始化）
    */
-  private get vectorDatabase(): SQLiteVectorStore {
+  private get vectorDatabase(): VectorStoreClient {
     if (!this._vectorDatabase) {
       throw new Error('VectorDatabase 未初始化，请先调用 initialize()');
     }
@@ -293,9 +292,6 @@ export class KnowledgeBase {
   private metadataEnhancer: MetadataEnhancer | null = null;
   private keywordIndexManager: KeywordIndexManager | null = null;
   private rrfRanker: RRFRanker | null = null;
-
-  // Python Core 向量检索客户端（Requirements: J5.12, J5.13, J5.14）
-  private vectorClient: VectorStoreClient | null = null;
 
   // 混合检索配置
   private hybridSearchConfig: {
@@ -309,7 +305,7 @@ export class KnowledgeBase {
     };
 
   constructor(
-    vectorDb?: SQLiteVectorStore,
+    vectorDb?: VectorStoreClient,
     docProcessor?: DocumentProcessor,
     embeddingSvc?: EmbeddingService,
     dataDir?: string,
@@ -334,16 +330,15 @@ export class KnowledgeBase {
   }
 
   /**
-   * 设置 VectorStoreClient（通过 Python Core 执行向量检索）
+   * 设置 VectorStoreClient（兼容方法，更新 HybridSearchEngine）
    * Requirements: J5.12, J5.13, J5.14
    */
   setVectorClient(client: VectorStoreClient): void {
-    this.vectorClient = client;
-    // 如果 HybridSearchEngine 已创建，立即转发
+    this._vectorDatabase = client;
     if (this.hybridSearchEngine) {
       this.hybridSearchEngine.setVectorClient(client);
     }
-    logger.info('KnowledgeBase: VectorStoreClient set for Python Core vector search');
+    logger.info('KnowledgeBase: VectorStoreClient updated');
   }
 
   /**
@@ -370,12 +365,12 @@ export class KnowledgeBase {
 
       // 初始化向量数据库
       if (!this._vectorDatabase) {
-        // 从服务注册表获取 SQLiteVectorStore 实例
+        // 从服务注册表获取 VectorStoreClient 实例
         try {
           const { getService } = await import('../../bootstrap');
-          this._vectorDatabase = getService<SQLiteVectorStore>('vectorDatabase');
+          this._vectorDatabase = getService<VectorStoreClient>('vectorDatabase');
         } catch {
-          throw new Error('VectorDatabase 服务未注册，请先初始化 SQLiteVectorStore 或通过构造函数注入');
+          throw new Error('VectorDatabase 服务未注册，请先初始化 VectorStoreClient 或通过构造函数注入');
         }
       }
       if (!this._vectorDatabase.isInitialized()) {
@@ -445,11 +440,6 @@ export class KnowledgeBase {
 
       // 设置条目缓存引用
       this.hybridSearchEngine.setEntryCache(this.entries as Map<string, KnowledgeEntry>);
-
-      // 转发 VectorStoreClient（如果已设置）
-      if (this.vectorClient) {
-        this.hybridSearchEngine.setVectorClient(this.vectorClient);
-      }
 
       // 同步关键词索引（确保所有条目都已索引）
       await this.syncKeywordIndex();
@@ -636,7 +626,7 @@ export class KnowledgeBase {
           .filter(Boolean);
 
         if (oldVectorIds.length > 0) {
-          await this.vectorDatabase.delete(collection, oldVectorIds);
+          await this.vectorDatabase.bulkDelete(collection, oldVectorIds);
         }
 
         // 重新处理文档
@@ -732,7 +722,7 @@ export class KnowledgeBase {
         }
       }
 
-      await this.vectorDatabase.delete(collection, vectorIds);
+      await this.vectorDatabase.bulkDelete(collection, vectorIds);
 
       // 从关键词索引删除 (Requirements: 5.4)
       if (this.keywordIndexManager) {
@@ -882,7 +872,7 @@ export class KnowledgeBase {
       };
 
       // 执行向量搜索
-      const results = await this.vectorDatabase.search(collection, queryEmbedding.vector, searchOptions);
+      const results = await this.vectorDatabase.searchByVector(collection, queryEmbedding.vector, searchOptions);
 
       // 转换为知识搜索结果
       for (const result of results) {
@@ -2195,7 +2185,7 @@ export class KnowledgeBase {
         // 由于 LanceDB 不支持直接遍历，我们使用一个技巧：
         // 搜索一个零向量，获取所有文档
         const zeroVector = new Array(2048).fill(0); // 使用当前的向量维度
-        const allDocs = await this.vectorDatabase.search(collection, zeroVector, {
+        const allDocs = await this.vectorDatabase.searchByVector(collection, zeroVector, {
           topK: 10000, // 获取尽可能多的文档
           minScore: 0, // 不过滤
           includeVector: false,
@@ -2231,7 +2221,7 @@ export class KnowledgeBase {
           for (let i = 0; i < toDelete.length; i += batchSize) {
             const batch = toDelete.slice(i, i + batchSize);
             try {
-              await this.vectorDatabase.delete(collection, batch);
+              await this.vectorDatabase.bulkDelete(collection, batch);
               deleted += batch.length;
             } catch (error) {
               logger.error(`Failed to delete batch from ${collection}`, { error });
@@ -2610,11 +2600,11 @@ export class KnowledgeBase {
 `;
 
     if (snapshot.metadata) {
-      if (snapshot.metadata.routerVersion) {
-        content += `路由器版本: ${snapshot.metadata.routerVersion}\n`;
+      if (snapshot.metadata.deviceVersion) {
+        content += `设备版本: ${snapshot.metadata.deviceVersion}\n`;
       }
-      if (snapshot.metadata.routerModel) {
-        content += `路由器型号: ${snapshot.metadata.routerModel}\n`;
+      if (snapshot.metadata.deviceModel) {
+        content += `设备型号: ${snapshot.metadata.deviceModel}\n`;
       }
     }
 

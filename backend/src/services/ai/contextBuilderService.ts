@@ -1,25 +1,21 @@
 /**
  * Context Builder Service
- * 构建 RouterOS 上下文信息，注入到 AI 对话中
+ * 构建设备上下文信息，注入到 AI 对话中
  * 
  * 功能：
  * - 生成系统提示词
- * - 获取 RouterOS 连接状态和系统信息
+ * - 获取设备连接状态和系统信息
  * - 获取指定配置段
  * - 脱敏处理敏感信息
  */
 
-import { routerosClient, RouterOSClient } from '../routerosClient';
 import {
   IContextBuilder,
-  RouterOSContext,
-  RouterOSConnectionContext,
-  RouterOSSystemInfo,
   DeviceContext,
   DeviceConnectionContext,
   DeviceSystemInfo,
   SelectedConfig,
-  ROUTEROS_SYSTEM_PROMPT
+  AIOPS_SYSTEM_PROMPT
 } from '../../types/ai';
 import { logger } from '../../utils/logger';
 import type { DeviceManager } from '../device/deviceManager';
@@ -78,7 +74,8 @@ const SENSITIVE_PATTERNS = [
 const SANITIZED_PLACEHOLDER = '***REDACTED***';
 
 /**
- * RouterOS 配置路径映射
+ * 设备配置路径映射（默认值，适用于 RouterOS API 协议设备）
+ * 实际路径应由 CapabilityManifest 动态提供
  */
 const CONFIG_PATHS: Record<string, string> = {
   'interface': '/interface',
@@ -159,7 +156,7 @@ export interface DeviceContextInfo {
   name: string;
   /** 设备 IP 地址 */
   host: string;
-  /** 设备型号（可选，从 RouterOS 获取） */
+  /** 设备型号（可选，从设备获取） */
   model?: string;
   /** 设备 ID */
   deviceId?: string;
@@ -205,35 +202,35 @@ export class ContextBuilderService implements IContextBuilder {
 
   /**
    * 构建系统提示词
-   * 将 RouterOS 连接上下文注入到系统提示词模板中
+   * 使用泛化的 AIOps 系统提示词模板
    */
   buildSystemPrompt(): string {
-    return ROUTEROS_SYSTEM_PROMPT;
+    return AIOPS_SYSTEM_PROMPT;
   }
 
   /**
    * 构建带有上下文的系统提示词
-   * @param context RouterOS 上下文信息
+   * @param context 设备上下文信息
    */
-  buildSystemPromptWithContext(context: RouterOSContext): string {
+  buildSystemPromptWithContext(context: DeviceContext): string {
     const contextStr = this.formatContextForPrompt(context);
-    return ROUTEROS_SYSTEM_PROMPT.replace('{connectionContext}', contextStr);
+    return AIOPS_SYSTEM_PROMPT.replace('{connectionContext}', contextStr);
   }
 
   /**
    * 格式化上下文信息为提示词字符串
    */
-  private formatContextForPrompt(context: RouterOSContext): string {
+  private formatContextForPrompt(context: DeviceContext): string {
     const lines: string[] = [];
 
     // 连接状态
     if (context.connectionStatus.connected) {
       lines.push(`- 已连接到: ${context.connectionStatus.host}`);
       if (context.connectionStatus.version) {
-        lines.push(`- RouterOS 版本: ${context.connectionStatus.version}`);
+        lines.push(`- 系统版本: ${context.connectionStatus.version}`);
       }
     } else {
-      lines.push('- 未连接到 RouterOS 设备');
+      lines.push('- 未连接到设备');
     }
 
     // 系统信息
@@ -258,10 +255,10 @@ export class ContextBuilderService implements IContextBuilder {
   }
 
   /**
-   * 获取 RouterOS 连接上下文
-   * 包括连接状态、系统信息等
+   * 获取默认设备连接上下文
+   * 包括连接状态、系统信息等（向后兼容，使用全局客户端）
    */
-  async getConnectionContext(): Promise<RouterOSContext> {
+  async getConnectionContext(): Promise<DeviceContext> {
     const connectionStatus = this.getConnectionStatus();
     
     // 如果未连接，直接返回基本状态
@@ -272,7 +269,7 @@ export class ContextBuilderService implements IContextBuilder {
     }
 
     // 获取系统信息
-    let systemInfo: RouterOSSystemInfo | undefined;
+    let systemInfo: DeviceSystemInfo | undefined;
     try {
       systemInfo = await this.getSystemInfo();
     } catch (error) {
@@ -291,54 +288,31 @@ export class ContextBuilderService implements IContextBuilder {
   /**
    * 获取连接状态
    */
-  private getConnectionStatus(): RouterOSConnectionContext {
-    const connected = routerosClient.isConnected();
-    const config = routerosClient.getConfig();
-
+  private getConnectionStatus(): DeviceConnectionContext {
+    // 连接状态由 DeviceManager/DevicePool 管理，不再依赖全局客户端
     return {
-      connected,
-      host: config?.host || ''
-    };
+      connected: false,
+      host: ''
+    } as DeviceConnectionContext;
   }
 
   /**
    * 获取系统信息
    */
-  private async getSystemInfo(): Promise<RouterOSSystemInfo | undefined> {
-    try {
-      // 获取系统资源
-      const resources = await routerosClient.print<SystemResource>('/system/resource');
-      const resource = resources?.[0];
-
-      // 获取系统身份
-      const identities = await routerosClient.print<SystemIdentity>('/system/identity');
-      const identity = identities?.[0];
-
-      if (!resource) {
-        return undefined;
-      }
-
-      return {
-        identity: identity?.name || 'Unknown',
-        boardName: resource['board-name'] || 'Unknown',
-        version: resource['version'] || 'Unknown',
-        uptime: resource['uptime'] || 'Unknown'
-      };
-    } catch (error) {
-      logger.error('Failed to get system info:', error);
-      return undefined;
-    }
+  private async getSystemInfo(): Promise<DeviceSystemInfo | undefined> {
+    // 系统信息需通过 DeviceManager/DevicePool 获取，不再依赖全局客户端
+    return undefined;
   }
 
   /**
-   * 获取指定 RouterOS 客户端的连接上下文（多设备支持）
-   * Requirements: 8.1, 8.2 - 使用指定设备的连接获取上下文
-   * @param client 指定的 RouterOS 客户端实例
+   * @deprecated 使用 getConnectionContextForDevice(deviceId) 替代
+   * 获取指定客户端的连接上下文（多设备支持）
+   * @param client 指定的设备客户端实例
    */
-  async getConnectionContextForClient(client: RouterOSClient): Promise<RouterOSContext> {
+  async getConnectionContextForClient(client: any): Promise<DeviceContext> {
     const connected = client.isConnected();
     const config = client.getConfig();
-    const connectionStatus: RouterOSConnectionContext = {
+    const connectionStatus: DeviceConnectionContext = {
       connected,
       host: config?.host || ''
     };
@@ -349,7 +323,7 @@ export class ContextBuilderService implements IContextBuilder {
     }
 
     // 获取系统信息
-    let systemInfo: RouterOSSystemInfo | undefined;
+    let systemInfo: DeviceSystemInfo | undefined;
     try {
       systemInfo = await this.getSystemInfoForClient(client);
     } catch (error) {
@@ -366,15 +340,16 @@ export class ContextBuilderService implements IContextBuilder {
   }
 
   /**
-   * 获取指定 RouterOS 客户端的系统信息（多设备支持）
-   * @param client 指定的 RouterOS 客户端实例
+   * @deprecated 使用 getConnectionContextForDevice(deviceId) 替代
+   * 获取指定客户端的系统信息
+   * @param client 指定的设备客户端实例
    */
-  private async getSystemInfoForClient(client: RouterOSClient): Promise<RouterOSSystemInfo | undefined> {
+  private async getSystemInfoForClient(client: any): Promise<DeviceSystemInfo | undefined> {
     try {
-      const resources = await client.print<SystemResource>('/system/resource');
+      const resources = await client.print('/system/resource');
       const resource = resources?.[0];
 
-      const identities = await client.print<SystemIdentity>('/system/identity');
+      const identities = await client.print('/system/identity');
       const identity = identities?.[0];
 
       if (!resource) {
@@ -396,10 +371,10 @@ export class ContextBuilderService implements IContextBuilder {
   /**
    * 构建带有设备信息的系统提示词（多设备支持）
    * Requirements: 8.2 - 在对话上下文中包含当前设备的基本信息
-   * @param context RouterOS 上下文信息
+   * @param context 设备上下文信息
    * @param deviceInfo 设备基本信息（名称、IP、型号等）
    */
-  buildSystemPromptWithDeviceContext(context: RouterOSContext, deviceInfo?: DeviceContextInfo): string {
+  buildSystemPromptWithDeviceContext(context: DeviceContext, deviceInfo?: DeviceContextInfo): string {
     let contextStr = this.formatContextForPrompt(context);
     
     // 注入设备基本信息
@@ -418,7 +393,7 @@ export class ContextBuilderService implements IContextBuilder {
       contextStr += '\n' + deviceLines.join('\n');
     }
     
-    return ROUTEROS_SYSTEM_PROMPT.replace('{connectionContext}', contextStr);
+    return AIOPS_SYSTEM_PROMPT.replace('{connectionContext}', contextStr);
   }
 
   /**
@@ -564,18 +539,8 @@ export class ContextBuilderService implements IContextBuilder {
       throw new Error(`Unknown config section: ${section}`);
     }
 
-    if (!routerosClient.isConnected()) {
-      throw new Error('Not connected to RouterOS');
-    }
-
-    try {
-      const data = await routerosClient.print(path);
-      // 对获取的配置进行脱敏处理
-      return this.sanitizeConfig(data);
-    } catch (error) {
-      logger.error(`Failed to get config section ${section}:`, error);
-      throw error;
-    }
+    // 设备操作需通过 DeviceManager/DevicePool，不再依赖全局客户端
+    throw new Error('Not connected to device. Use device-specific context methods instead.');
   }
 
   /**

@@ -18,8 +18,7 @@ import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { AuditLog, AuditLogQueryOptions, IAuditLogger, AuditAction } from '../../types/ai-ops';
 import { logger } from '../../utils/logger';
-import type { DataStore } from '../core/dataStore';
-import type { DataStore as PgDataStoreInterface } from '../dataStore';
+import type { DataStore } from '../dataStore';
 
 const AUDIT_DIR = path.join(process.cwd(), 'data', 'ai-ops', 'audit');
 const DEFAULT_RETENTION_DAYS = 180; // 保留 180 天
@@ -80,25 +79,22 @@ export class AuditLogger implements IAuditLogger {
   private initialized = false;
 
   // ==================== DataStore 集成 ====================
-  // Requirements: 2.1, 2.2 - 使用 SQLite 替代 JSON 文件存储，注入 tenant_id
   private dataStore: DataStore | null = null;
-  private pgDataStore: PgDataStoreInterface | null = null;
 
   /**
-   * 设置 DataStore 实例（旧版 SQLite）
-   * Requirements: 2.1, 2.2
+   * 设置 DataStore 实例（PostgreSQL）
    */
   setDataStore(dataStore: DataStore): void {
     this.dataStore = dataStore;
-    logger.info('AuditLogger: DataStore backend configured, using SQLite for audit log storage');
+    logger.info('AuditLogger: DataStore backend configured, using PostgreSQL for audit log storage');
   }
 
   /**
-   * 设置 PgDataStore 实例，启用 PostgreSQL 持久化
+   * 设置 PgDataStore 实例（兼容旧调用，内部统一为 dataStore）
    */
-  setPgDataStore(dataStore: PgDataStoreInterface): void {
-    this.pgDataStore = dataStore;
-    logger.info('AuditLogger: PgDataStore backend configured, using PostgreSQL for audit log storage');
+  setPgDataStore(dataStore: DataStore): void {
+    this.dataStore = dataStore;
+    logger.info('AuditLogger: PgDataStore backend configured (mapped to dataStore)');
   }
 
   /**
@@ -253,8 +249,8 @@ export class AuditLogger implements IAuditLogger {
       ...entry,
     };
 
-    // 当 PgDataStore 可用时，写入 PostgreSQL
-    if (this.pgDataStore) {
+    // 当 DataStore 可用时，写入 PostgreSQL
+    if (this.dataStore) {
       try {
         const tenantId = auditLog.tenantId || 'system';
         const deviceId = auditLog.deviceId || null;
@@ -262,7 +258,7 @@ export class AuditLogger implements IAuditLogger {
         const createdAt = new Date(timestamp).toISOString();
         const details = JSON.stringify(entry.details || {});
 
-        await this.pgDataStore.execute(
+        await this.dataStore.execute(
           `INSERT INTO audit_logs (id, tenant_id, device_id, action, actor, details, created_at)
            VALUES ($1, $2, $3, $4, $5, $6, $7)`,
           [auditLog.id, tenantId, deviceId, auditLog.action, actor, details, createdAt]
@@ -271,30 +267,7 @@ export class AuditLogger implements IAuditLogger {
         logger.debug(`Audit log recorded to PostgreSQL: ${auditLog.action} by ${auditLog.actor}`);
         return auditLog;
       } catch (error) {
-        logger.error('Failed to write audit log to PostgreSQL, falling back:', error);
-      }
-    }
-
-    // 当 DataStore 可用时，写入 SQLite
-    if (this.dataStore) {
-      try {
-        const tenantId = auditLog.tenantId || 'system';
-        const deviceId = auditLog.deviceId || null;
-        const actor = entry.actor || 'system';
-        const createdAt = new Date(timestamp).toISOString();
-        // Store details without _actor since actor now has its own column
-        const details = JSON.stringify(entry.details || {});
-
-        this.dataStore.run(
-          `INSERT INTO audit_logs (id, tenant_id, device_id, action, actor, details, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          [auditLog.id, tenantId, deviceId, auditLog.action, actor, details, createdAt]
-        );
-
-        logger.debug(`Audit log recorded to DataStore: ${auditLog.action} by ${auditLog.actor}`);
-        return auditLog;
-      } catch (error) {
-        logger.error('Failed to write audit log to DataStore, falling back to JSON:', error);
+        logger.error('Failed to write audit log to PostgreSQL, falling back to JSON:', error);
       }
     }
 
@@ -318,8 +291,8 @@ export class AuditLogger implements IAuditLogger {
   async query(options: AuditLogQueryOptions & { tenant_id?: string } = {}): Promise<AuditLog[]> {
     const { from, to, action, actor, limit, tenant_id } = options;
 
-    // 当 PgDataStore 可用时，从 PostgreSQL 查询
-    if (this.pgDataStore) {
+    // 当 DataStore 可用时，从 PostgreSQL 查询
+    if (this.dataStore) {
       try {
         const conditions: string[] = [];
         const params: unknown[] = [];
@@ -330,11 +303,11 @@ export class AuditLogger implements IAuditLogger {
           params.push(tenant_id);
         }
         if (from !== undefined) {
-          conditions.push(`created_at >= $${idx++}`);
+          conditions.push(`created_at >= \backend/src/services/ai-ops/faultHealer.ts{idx++}$${idx++}`);
           params.push(new Date(from).toISOString());
         }
         if (to !== undefined) {
-          conditions.push(`created_at <= $${idx++}`);
+          conditions.push(`created_at <= \backend/src/services/ai-ops/faultHealer.ts{idx++}$${idx++}`);
           params.push(new Date(to).toISOString());
         }
         if (action !== undefined) {
@@ -353,11 +326,11 @@ export class AuditLogger implements IAuditLogger {
         sql += ' ORDER BY created_at DESC';
 
         if (limit !== undefined && limit > 0) {
-          sql += ` LIMIT $${idx++}`;
+          sql += ` LIMIT \backend/src/services/ai-ops/faultHealer.ts{idx++}$${idx++}`;
           params.push(limit);
         }
 
-        const rows = await this.pgDataStore.query<{
+        const rows = await this.dataStore.query<{
           id: string; tenant_id: string; device_id: string | null;
           action: string; actor: string; details: string | Record<string, unknown>;
           created_at: string;
@@ -375,75 +348,6 @@ export class AuditLogger implements IAuditLogger {
         });
       } catch (error) {
         logger.error('Failed to query audit logs from PostgreSQL, falling back:', error);
-      }
-    }
-
-    // 当 DataStore 可用时，从 SQLite 查询
-    if (this.dataStore) {
-      try {
-        const conditions: string[] = [];
-        const params: unknown[] = [];
-
-        if (tenant_id) {
-          conditions.push('tenant_id = ?');
-          params.push(tenant_id);
-        }
-
-        if (from !== undefined) {
-          conditions.push('created_at >= ?');
-          params.push(new Date(from).toISOString());
-        }
-
-        if (to !== undefined) {
-          conditions.push('created_at <= ?');
-          params.push(new Date(to).toISOString());
-        }
-
-        if (action !== undefined) {
-          conditions.push('action = ?');
-          params.push(action);
-        }
-
-        if (actor !== undefined) {
-          conditions.push('actor = ?');
-          params.push(actor);
-        }
-
-        let sql = 'SELECT * FROM audit_logs';
-        if (conditions.length > 0) {
-          sql += ' WHERE ' + conditions.join(' AND ');
-        }
-        sql += ' ORDER BY created_at DESC';
-
-        if (limit !== undefined && limit > 0) {
-          sql += ' LIMIT ?';
-          params.push(limit);
-        }
-
-        const rows = this.dataStore.query<{
-          id: string;
-          tenant_id: string;
-          device_id: string | null;
-          action: string;
-          actor: string;
-          details: string;
-          created_at: string;
-        }>(sql, params);
-
-        const results = rows.map((row) => {
-          const detailsObj = JSON.parse(row.details || '{}');
-          return {
-            id: row.id,
-            timestamp: new Date(row.created_at).getTime(),
-            action: row.action as AuditAction,
-            actor: (row.actor || 'system') as 'system' | 'user',
-            details: detailsObj,
-          } as AuditLog;
-        });
-
-        return results;
-      } catch (error) {
-        logger.error('Failed to query audit logs from DataStore, falling back to JSON:', error);
       }
     }
 
@@ -516,14 +420,14 @@ export class AuditLogger implements IAuditLogger {
    * @returns 删除的记录数
    */
   async cleanup(retentionDays: number = DEFAULT_RETENTION_DAYS): Promise<number> {
-    // 当 PgDataStore 可用时，从 PostgreSQL 清理
-    if (this.pgDataStore) {
+    // 当 DataStore 可用时，从 PostgreSQL 清理
+    if (this.dataStore) {
       try {
         const cutoffDate = new Date();
         cutoffDate.setDate(cutoffDate.getDate() - retentionDays);
         const cutoffDateStr = cutoffDate.toISOString();
 
-        const result = await this.pgDataStore.execute(
+        const result = await this.dataStore.execute(
           'DELETE FROM audit_logs WHERE created_at < $1',
           [cutoffDateStr]
         );
@@ -533,28 +437,7 @@ export class AuditLogger implements IAuditLogger {
         }
         return result.rowCount;
       } catch (error) {
-        logger.error('Failed to cleanup audit logs from PostgreSQL, falling back:', error);
-      }
-    }
-
-    // 当 DataStore 可用时，从 SQLite 清理
-    if (this.dataStore) {
-      try {
-        const cutoffDate = new Date();
-        cutoffDate.setDate(cutoffDate.getDate() - retentionDays);
-        const cutoffDateStr = cutoffDate.toISOString();
-
-        const result = this.dataStore.run(
-          'DELETE FROM audit_logs WHERE created_at < ?',
-          [cutoffDateStr]
-        );
-
-        if (result.changes > 0) {
-          logger.info(`Audit log cleanup from DataStore: ${result.changes} records deleted`);
-        }
-        return result.changes;
-      } catch (error) {
-        logger.error('Failed to cleanup audit logs from DataStore, falling back to JSON:', error);
+        logger.error('Failed to cleanup audit logs from PostgreSQL, falling back to JSON:', error);
       }
     }
 

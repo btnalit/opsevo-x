@@ -128,10 +128,10 @@ const selectedNotification = ref<Notification | null>(null)
 const stats = reactive({ total: 0, sent: 0, failed: 0, pending: 0 })
 
 const TYPE_LABELS: Record<string, string> = { alert: '告警', recovery: '恢复', report: '报告', remediation: '修复' }
-const TYPE_TAG_TYPES: Record<string, string> = { alert: 'danger', recovery: 'success', report: 'info', remediation: 'warning' }
+const TYPE_TAG_TYPES: Record<string, 'success' | 'warning' | 'info' | 'danger'> = { alert: 'danger', recovery: 'success', report: 'info', remediation: 'warning' }
 
 function getTypeLabel(type: string) { return TYPE_LABELS[type] || type }
-function getTypeTagType(type: string) { return TYPE_TAG_TYPES[type] || '' }
+function getTypeTagType(type: string): 'success' | 'warning' | 'info' | 'danger' { return TYPE_TAG_TYPES[type] || 'info' }
 function getChannelName(channelId: string) {
   return channels.value.find(c => c.id === channelId)?.name || channelId
 }

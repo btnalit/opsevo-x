@@ -21,9 +21,14 @@ export class TracingIntegration {
   private requestIndex: Map<string, string[]> = new Map();
   /** executionId → startTime (recorded when startExecution is called) */
   private startTimes: Map<string, number> = new Map();
+  /** Insertion-order tracking for LRU eviction */
+  private insertionOrder: string[] = [];
+  /** Maximum number of summaries to retain (prevents unbounded memory growth) */
+  private readonly maxEntries: number;
 
-  constructor(tracingService: TracingService) {
+  constructor(tracingService: TracingService, maxEntries: number = 1000) {
     this.tracingService = tracingService;
+    this.maxEntries = maxEntries;
   }
 
   /**
@@ -97,6 +102,7 @@ export class TracingIntegration {
 
     // Store by executionId
     this.summariesById.set(result.executionId, summary);
+    this.insertionOrder.push(result.executionId);
 
     // Index by requestId
     const existing = this.requestIndex.get(result.requestId);
@@ -104,6 +110,34 @@ export class TracingIntegration {
       existing.push(result.executionId);
     } else {
       this.requestIndex.set(result.requestId, [result.executionId]);
+    }
+
+    // LRU eviction: remove oldest entries when exceeding maxEntries
+    this._evictIfNeeded();
+  }
+
+  /**
+   * Evict oldest summaries when the map exceeds maxEntries.
+   * Removes from both summariesById and requestIndex to prevent memory leaks.
+   */
+  private _evictIfNeeded(): void {
+    while (this.summariesById.size > this.maxEntries && this.insertionOrder.length > 0) {
+      const oldestId = this.insertionOrder.shift()!;
+      const summary = this.summariesById.get(oldestId);
+      this.summariesById.delete(oldestId);
+
+      // Clean up requestIndex
+      if (summary) {
+        const ids = this.requestIndex.get(summary.requestId);
+        if (ids) {
+          const filtered = ids.filter(id => id !== oldestId);
+          if (filtered.length === 0) {
+            this.requestIndex.delete(summary.requestId);
+          } else {
+            this.requestIndex.set(summary.requestId, filtered);
+          }
+        }
+      }
     }
   }
 

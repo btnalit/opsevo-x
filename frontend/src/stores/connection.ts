@@ -26,9 +26,6 @@ export interface DeviceConnectionConfig {
   snmpConfig?: SnmpAuthConfig
 }
 
-/** @deprecated Use DeviceConnectionConfig instead */
-export type RouterOSConfig = DeviceConnectionConfig
-
 export const useConnectionStore = defineStore('connection', () => {
   const isConnected = ref(false)
   const config = ref<DeviceConnectionConfig | null>(null)

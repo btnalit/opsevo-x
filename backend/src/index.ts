@@ -12,7 +12,7 @@ import { createAuthMiddleware } from './middleware/auth';
 import { createDeviceMiddleware } from './middleware/deviceProxy';
 import { DeviceManager } from './services/device/deviceManager';
 import { DevicePool } from './services/device/devicePool';
-import { DataStore } from './services/core/dataStore';
+import type { DataStore } from './services/dataStore';
 import { chatSessionService } from './services/ai/chatSessionService';
 import { apiConfigService } from './services/ai/apiConfigService';
 import { promptTemplateService } from './services/ai/promptTemplateService';
@@ -66,6 +66,9 @@ import { initializeSkillSystem } from './services/ai-ops/skill/bootstrapSkillSys
 import { unifiedAgentService } from './services/ai/unifiedAgentService';
 import { contextBuilderService } from './services/ai/contextBuilderService';
 import { initializeStateMachineOrchestrator } from './stateMachineBootstrap';
+
+// DeviceDriverManager 单例
+import { deviceDriverManager } from './services/device/deviceDriverManager';
 
 // MCP 双向集成
 import { ApiKeyManager } from './services/mcp/apiKeyManager';
@@ -323,6 +326,23 @@ async function registerAuthRoutes(): Promise<void> {
     const devicePool = await serviceRegistry.getAsync<DevicePool>(SERVICE_NAMES.DEVICE_POOL);
     const authService = await serviceRegistry.getAsync<AuthService>(SERVICE_NAMES.AUTH_SERVICE);
 
+    // 注册设备驱动工厂（BUG-3 修复：工厂未注册导致 DeviceDriverManager 无法创建驱动实例）
+    // 使用 require() 避免 TypeScript rootDir 限制（plugins 目录在 backend/src 之外）
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { ApiDriverFactory } = require('../../plugins/api-driver') as { ApiDriverFactory: new () => import('./types/device-driver').DeviceDriverFactory };
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { SshDriverFactory } = require('../../plugins/ssh-driver') as { SshDriverFactory: new () => import('./types/device-driver').DeviceDriverFactory };
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { SnmpDriverFactory } = require('../../plugins/snmp-driver') as { SnmpDriverFactory: new () => import('./types/device-driver').DeviceDriverFactory };
+      deviceDriverManager.registerDriverFactory(new ApiDriverFactory());
+      deviceDriverManager.registerDriverFactory(new SshDriverFactory());
+      deviceDriverManager.registerDriverFactory(new SnmpDriverFactory());
+      logger.info(`DeviceDriverManager: ${deviceDriverManager.getRegisteredDriverTypes().length} driver factories registered`);
+    } catch (err) {
+      logger.warn('Failed to register device driver factories (plugins may not be available):', err);
+    }
+
     // Initialize Middleware
     const authMiddleware = createAuthMiddleware(authService);
     const deviceMiddleware = createDeviceMiddleware(deviceManager, devicePool);
@@ -348,7 +368,6 @@ async function registerAuthRoutes(): Promise<void> {
     // IMPORTANT: Inject dependencies (DataStore, DevicePool) BEFORE triggering initialization via registry
 
     // AlertEngine
-    alertEngine.setDataStore(dataStore);
     alertEngine.setDeviceManager(deviceManager);
     await serviceRegistry.getAsync<any>('alertEngine'); // Triggers factory -> initialize()
 
@@ -362,12 +381,11 @@ async function registerAuthRoutes(): Promise<void> {
       notificationService.setPgDataStore(pgDs);
       logger.info('[NotificationService] PgDataStore injected for PostgreSQL storage');
     } catch {
-      logger.warn('PgDataStore not available for NotificationService, using SQLite/JSON fallback');
+      logger.warn('PgDataStore not available for NotificationService, using JSON file fallback');
     }
 
     // ConfigSnapshotService
     configSnapshotService.setDataStore(dataStore);
-    // configSnapshotService.setDevicePool(devicePool); // DevicePool is likely not needed if using RouterOSClient, check implementation
     configSnapshotService.setDevicePool(devicePool);
     await serviceRegistry.getAsync<any>('configSnapshotService');
 
@@ -464,7 +482,7 @@ async function registerAuthRoutes(): Promise<void> {
       alertEngine.setPgDataStore(pgDs);
       logger.info('[AlertEngine] PgDataStore injected for PostgreSQL storage');
     } catch {
-      logger.warn('PgDataStore not available for AlertEngine, using SQLite/JSON fallback');
+      logger.warn('PgDataStore not available for AlertEngine, using JSON file fallback');
     }
 
     // DecisionEngine: wire PgDataStore for PostgreSQL migration (C3.12)
@@ -514,7 +532,7 @@ async function registerAuthRoutes(): Promise<void> {
 
     // 6. TopologyDiscoveryService
     topologyDiscoveryService.setDeviceProvider(async () => {
-      const tenants = dataStore.query<{ id: string }>('SELECT id FROM users');
+      const tenants = await dataStore.query<{ id: string }>('SELECT id FROM users');
 
       const deviceGroups = await Promise.all(tenants.map(async ({ id: tenantId }) => {
         try {
@@ -888,13 +906,18 @@ const gracefulShutdown = async (signal: string) => {
       if (snmpReceiver) { await snmpReceiver.stop(); }
     } catch { /* not initialized */ }
 
+    // 关闭设备驱动管理器（断开所有 DeviceDriver 连接）
+    try {
+      await deviceDriverManager.shutdown();
+    } catch { /* not initialized */ }
+
     // 关闭设备连接池
     try {
       const devicePool = serviceRegistry.tryGet<DevicePool>(SERVICE_NAMES.DEVICE_POOL);
       if (devicePool) { await devicePool.destroy(); }
     } catch { /* not initialized */ }
 
-    // 关闭 SQLite 连接
+    // 关闭数据库连接
     try {
       const dataStore = serviceRegistry.tryGet<DataStore>(SERVICE_NAMES.DATA_STORE);
       if (dataStore) { await dataStore.close(); }

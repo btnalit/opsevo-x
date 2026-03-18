@@ -94,8 +94,6 @@ export interface SkillAwareReActOptions {
   preRetrievedKnowledge?: FormattedKnowledge[];
   /** 是否跳过知识检索（当有预检索结果时） */
   skipKnowledgeRetrieval?: boolean;
-  /** 多设备支持：请求级设备客户端（Requirements: 8.1, 8.2） */
-  routerosClient?: import('../../routerosClient').RouterOSClient;
   /** 多设备支持：设备 ID，用于通过 deviceDriverManager 获取设备客户端 */
   deviceId?: string;
 }
@@ -299,7 +297,6 @@ export class SkillAwareReActController {
         opts.model,
         skillTemperature,
         skillContextForExecution,  // Requirements: 4.2, 11.2 - 传递 SkillContext 到执行上下文
-        opts.routerosClient  // Requirements: 8.1, 8.2 - 传递请求级设备客户端
       );
 
       // 并发安全：将配置覆盖设置到执行上下文（不再修改单例 config）

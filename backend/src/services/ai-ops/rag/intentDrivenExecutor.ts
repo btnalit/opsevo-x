@@ -15,7 +15,6 @@ import { isCapabilityEnabled, getCapabilityConfig } from '../evolutionConfig';
 import type { AgentTool } from './mastraAgent';
 import type { ReActStep, ReActStepType } from '../../../types/ai-ops';
 import type { ReActExecutionContext, ToolInterceptor } from './reactLoopController';
-import type { RouterOSClient } from '../../routerosClient';
 import type { IAIProviderAdapter, AIProvider } from '../../../types/ai';
 import type { ConversationMemory } from './mastraAgent';
 
@@ -104,13 +103,13 @@ export const INTENT_TO_TOOL_MAP: Record<string, string> = {
     'monitoring/logs': 'device_query',
 
     // 配置类
-    'configuration/interface': 'routeros_exec',
-    'configuration/firewall': 'routeros_exec',
-    'configuration/routing': 'routeros_exec',
-    'configuration/system': 'routeros_exec',
+    'configuration/interface': 'device_exec',
+    'configuration/firewall': 'device_exec',
+    'configuration/routing': 'device_exec',
+    'configuration/system': 'device_exec',
 
     // 诊断类
-    'diagnosis/connectivity': 'routeros_exec',
+    'diagnosis/connectivity': 'device_exec',
     'diagnosis/performance': 'monitor_metrics',
     'diagnosis/logs': 'device_query',
 
@@ -129,7 +128,7 @@ export class IntentDrivenExecutor {
         toolName: string,
         toolInput: ToolInputParams,
         interceptors: Map<string, ToolInterceptor>,
-        routerosClient?: RouterOSClient
+        tickDeviceId?: string
     ) => Promise<ToolObservation>;
     private formatObservationFn: (output: unknown, success: boolean) => string;
     private generateFinalAnswerFn: (
@@ -148,7 +147,7 @@ export class IntentDrivenExecutor {
             toolName: string,
             toolInput: ToolInputParams,
             interceptors: Map<string, ToolInterceptor>,
-            routerosClient?: RouterOSClient
+            tickDeviceId?: string
         ) => Promise<ToolObservation>,
         formatObservation: (output: unknown, success: boolean) => string,
         generateFinalAnswer: (
@@ -343,7 +342,7 @@ export class IntentDrivenExecutor {
                         intentToolName,
                         intentToolInput,
                         effectiveInterceptors,
-                        executionContext.routerosClient
+                        executionContext.tickDeviceId
                     ),
                     new Promise<never>((_, reject) =>
                         setTimeout(
@@ -509,7 +508,7 @@ export function createIntentDrivenExecutor(
         toolName: string,
         toolInput: ToolInputParams,
         interceptors: Map<string, ToolInterceptor>,
-        routerosClient?: RouterOSClient
+        tickDeviceId?: string
     ) => Promise<ToolObservation>,
     formatObservation: (output: unknown, success: boolean) => string,
     generateFinalAnswer: (

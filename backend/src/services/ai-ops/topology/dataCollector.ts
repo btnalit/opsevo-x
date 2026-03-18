@@ -1,14 +1,23 @@
 /**
  * 数据采集器
  *
- * 通过 DevicePool 和 RouterOS API Client 采集多协议数据
+ * 通过 DevicePool 和标准化数据客户端采集多协议数据
  * Property 15: 数据源故障隔离
  * Requirements: 1.1-1.9
  */
 
 import { logger } from '../../../utils/logger';
-import { RouterOSClient } from '../../routerosClient';
 import type { DeviceDriver } from '../../../types/device-driver';
+
+/**
+ * 拓扑数据采集客户端接口
+ *
+ * 解耦设备客户端硬依赖：上层模块通过此接口与设备通信，
+ * 设备驱动隐式满足此接口（duck typing），无需显式 implements。
+ */
+export interface TopologyDataClient {
+  print<T>(path: string, query?: Record<string, string>, options?: { proplist?: string[] }): Promise<T[]>;
+}
 import {
   DiscoverySource, RawDiscoveryData, RawNeighborEntry, RawArpEntry,
   RawInterfaceEntry, RawRouteEntry, RawDhcpLeaseEntry, ManagedTopologyDevice,
@@ -21,7 +30,7 @@ import { Semaphore } from './semaphore';
  * 单个协议查询失败不影响其他协议
  */
 export async function collectDeviceData(
-  client: RouterOSClient,
+  client: TopologyDataClient,
   deviceId: string,
   tenantId: string,
   sources: DiscoverySource[],
@@ -150,7 +159,7 @@ export async function collectDeviceData(
  */
 export async function collectAllDevicesData(
   devices: ManagedTopologyDevice[],
-  getConnection: (tenantId: string, deviceId: string) => Promise<RouterOSClient>,
+  getConnection: (tenantId: string, deviceId: string) => Promise<TopologyDataClient>,
   sources: DiscoverySource[],
   includeEndpoints: boolean,
   maxConcurrent: number,

@@ -10,15 +10,17 @@
  * - updateStatus()：更新设备连接状态
  *
  * 设备密码使用 crypto-js AES 加密存储，密钥从环境变量 DEVICE_ENCRYPTION_KEY 获取。
- * Tags 以 JSON 数组字符串存储在 SQLite 中，use_tls 以 INTEGER (0/1) 存储但对外暴露为 boolean。
+ * Tags 以 JSON 数组字符串存储，use_tls 以 INTEGER (0/1) 存储但对外暴露为 boolean。
  *
  * Requirements: 5.1, 5.2, 5.3, 5.6
  */
 
 import CryptoJS from 'crypto-js';
 import { v4 as uuidv4 } from 'uuid';
-import { DataStore, DataStoreError } from '../core/dataStore';
+import type { DataStore } from '../dataStore';
 import { logger } from '../../utils/logger';
+import { deviceDriverManager } from './deviceDriverManager';
+import type { DeviceExecutionResult } from '../../types/device-driver';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -44,7 +46,7 @@ export interface Device {
 }
 
 /**
- * 数据库中的设备行（SQLite 原始格式）
+ * 数据库中的设备行（PostgreSQL 格式）
  */
 interface DeviceRow {
   id: string;
@@ -54,7 +56,7 @@ interface DeviceRow {
   port: number;
   username: string;
   password_encrypted: string;
-  use_tls: number;        // SQLite INTEGER: 0 or 1
+  use_tls: number;        // INTEGER: 0 or 1
   group_name: string | null;
   tags: string;           // JSON 数组字符串
   status: string;
@@ -128,7 +130,7 @@ export class DeviceManagerError extends Error {
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const DEFAULT_PORT = 8728;
-const DEFAULT_ENCRYPTION_KEY = 'routeros-device-encryption-key-2024';
+const DEFAULT_ENCRYPTION_KEY = 'device-pool-encryption-key-2024';
 const VALID_STATUSES: Device['status'][] = ['online', 'offline', 'connecting', 'error'];
 
 // ─── DeviceManager Class ─────────────────────────────────────────────────────
@@ -167,9 +169,9 @@ export class DeviceManager {
     const port = config.port ?? DEFAULT_PORT;
 
     try {
-      this.dataStore.run(
+      await this.dataStore.execute(
         `INSERT INTO devices (id, tenant_id, name, host, port, username, password_encrypted, use_tls, group_name, tags, status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'offline')`,
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'offline')`,
         [id, tenantId, config.name, config.host, port, config.username, passwordEncrypted, useTls, config.group_name ?? null, tags],
       );
 
@@ -212,23 +214,23 @@ export class DeviceManager {
         // 允许跨租户查询，不添加 tenant_id 过滤条件
         logger.warn('[DeviceManager] Cross-tenant query authorized (allowCrossTenant=true)');
       } else {
-        conditions.push('tenant_id = ?');
+        conditions.push(`tenant_id = $${params.length + 1}`);
         params.push(tenantId);
       }
 
       if (filter?.group_name) {
-        conditions.push('group_name = ?');
+        conditions.push(`group_name = $${params.length + 1}`);
         params.push(filter.group_name);
       }
 
       if (filter?.status) {
-        conditions.push('status = ?');
+        conditions.push(`status = $${params.length + 1}`);
         params.push(filter.status);
       }
 
       const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
       const sql = `SELECT * FROM devices ${whereClause} ORDER BY created_at DESC`;
-      const rows = this.dataStore.query<DeviceRow>(sql, params);
+      const rows = await this.dataStore.query<DeviceRow>(sql, params);
 
       let devices = rows.map((row) => this.rowToDevice(row));
 
@@ -257,8 +259,8 @@ export class DeviceManager {
    */
   async getDevice(tenantId: string, deviceId: string): Promise<Device | null> {
     try {
-      const rows = this.dataStore.query<DeviceRow>(
-        'SELECT * FROM devices WHERE id = ? AND tenant_id = ?',
+      const rows = await this.dataStore.query<DeviceRow>(
+        'SELECT * FROM devices WHERE id = $1 AND tenant_id = $2',
         [deviceId, tenantId],
       );
 
@@ -280,8 +282,8 @@ export class DeviceManager {
    */
   async findDeviceByIdAcrossTenants(deviceId: string): Promise<Device | null> {
     try {
-      const rows = this.dataStore.query<DeviceRow>(
-        'SELECT * FROM devices WHERE id = ? LIMIT 1',
+      const rows = await this.dataStore.query<DeviceRow>(
+        'SELECT * FROM devices WHERE id = $1 LIMIT 1',
         [deviceId],
       );
       if (rows.length === 0) return null;
@@ -301,7 +303,7 @@ export class DeviceManager {
    */
   async hasAvailableDevices(): Promise<boolean> {
     try {
-      const result = this.dataStore.query<{ found: number }>(
+      const result = await this.dataStore.query<{ found: number }>(
         "SELECT 1 as found FROM devices LIMIT 1",
       );
       return result.length > 0;
@@ -317,8 +319,8 @@ export class DeviceManager {
    */
   async getDeviceByHost(host: string): Promise<Device | null> {
     try {
-      const rows = this.dataStore.query<DeviceRow>(
-        'SELECT * FROM devices WHERE host = ?',
+      const rows = await this.dataStore.query<DeviceRow>(
+        'SELECT * FROM devices WHERE host = $1',
         [host],
       );
 
@@ -358,47 +360,47 @@ export class DeviceManager {
       const params: unknown[] = [];
 
       if (updates.name !== undefined) {
-        setClauses.push('name = ?');
         params.push(updates.name);
+        setClauses.push(`name = $${params.length}`);
       }
       if (updates.host !== undefined) {
-        setClauses.push('host = ?');
         params.push(updates.host);
+        setClauses.push(`host = $${params.length}`);
       }
       if (updates.port !== undefined) {
-        setClauses.push('port = ?');
         params.push(updates.port);
+        setClauses.push(`port = $${params.length}`);
       }
       if (updates.username !== undefined) {
-        setClauses.push('username = ?');
         params.push(updates.username);
+        setClauses.push(`username = $${params.length}`);
       }
       if (updates.password !== undefined) {
-        setClauses.push('password_encrypted = ?');
         params.push(this.encryptPassword(updates.password));
+        setClauses.push(`password_encrypted = $${params.length}`);
       }
       if (updates.use_tls !== undefined) {
-        setClauses.push('use_tls = ?');
         params.push(updates.use_tls ? 1 : 0);
+        setClauses.push(`use_tls = $${params.length}`);
       }
       if (updates.group_name !== undefined) {
-        setClauses.push('group_name = ?');
         params.push(updates.group_name);
+        setClauses.push(`group_name = $${params.length}`);
       }
       if (updates.tags !== undefined) {
-        setClauses.push('tags = ?');
         params.push(JSON.stringify(updates.tags));
+        setClauses.push(`tags = $${params.length}`);
       }
 
       if (setClauses.length === 0) {
         return existing;
       }
 
-      setClauses.push("updated_at = datetime('now')");
+      setClauses.push("updated_at = NOW()");
       params.push(deviceId, tenantId);
 
-      const sql = `UPDATE devices SET ${setClauses.join(', ')} WHERE id = ? AND tenant_id = ?`;
-      this.dataStore.run(sql, params);
+      const sql = `UPDATE devices SET ${setClauses.join(', ')} WHERE id = $${params.length - 1} AND tenant_id = $${params.length}`;
+      await this.dataStore.execute(sql, params);
 
       logger.info(`设备已更新: ${deviceId} for tenant ${tenantId}`);
 
@@ -427,24 +429,24 @@ export class DeviceManager {
       let changes = 0;
       // 在事务中级联清理所有引用该设备的子表数据，然后删除设备本身
       // 避免 FOREIGN KEY constraint failed
-      this.dataStore.transaction(() => {
+      await this.dataStore.transaction(async (tx) => {
         // 1. 清理有 FK 约束的子表（device_id REFERENCES devices(id)）
-        this.dataStore.run('DELETE FROM alert_rules WHERE device_id = ?', [deviceId]);
-        this.dataStore.run('DELETE FROM alert_events WHERE device_id = ?', [deviceId]);
-        this.dataStore.run('DELETE FROM config_snapshots WHERE device_id = ?', [deviceId]);
-        this.dataStore.run('DELETE FROM chat_sessions WHERE device_id = ?', [deviceId]);
-        this.dataStore.run('DELETE FROM scheduled_tasks WHERE device_id = ?', [deviceId]);
+        await tx.execute('DELETE FROM alert_rules WHERE device_id = $1', [deviceId]);
+        await tx.execute('DELETE FROM alert_events WHERE device_id = $1', [deviceId]);
+        await tx.execute('DELETE FROM config_snapshots WHERE device_id = $1', [deviceId]);
+        await tx.execute('DELETE FROM chat_sessions WHERE device_id = $1', [deviceId]);
+        await tx.execute('DELETE FROM scheduled_tasks WHERE device_id = $1', [deviceId]);
 
         // 2. 清理无 FK 约束但有 device_id 引用的表（保持数据一致性）
-        this.dataStore.run('DELETE FROM health_metrics WHERE device_id = ?', [deviceId]);
-        this.dataStore.run('DELETE FROM audit_logs WHERE device_id = ?', [deviceId]);
+        await tx.execute('DELETE FROM health_metrics WHERE device_id = $1', [deviceId]);
+        await tx.execute('DELETE FROM audit_logs WHERE device_id = $1', [deviceId]);
 
         // 3. 最后删除设备本身
-        const result = this.dataStore.run(
-          'DELETE FROM devices WHERE id = ? AND tenant_id = ?',
+        const result = await tx.execute(
+          'DELETE FROM devices WHERE id = $1 AND tenant_id = $2',
           [deviceId, tenantId],
         );
-        changes = result.changes;
+        changes = result.rowCount;
       });
 
       // 事务外检查结果 — 消除 check-then-act 竞态条件
@@ -476,18 +478,18 @@ export class DeviceManager {
     }
 
     try {
-      const setClauses: string[] = ['status = ?', "updated_at = datetime('now')"];
+      const setClauses: string[] = ['status = $1', "updated_at = NOW()"];
       const params: unknown[] = [status];
 
       // 更新 last_seen（当设备在线时）
       if (status === 'online') {
-        setClauses.push("last_seen = datetime('now')");
+        setClauses.push("last_seen = NOW()");
       }
 
       // 更新错误信息
       if (status === 'error' && errorMessage) {
-        setClauses.push('error_message = ?');
         params.push(errorMessage);
+        setClauses.push(`error_message = $${params.length}`);
       } else if (status !== 'error') {
         // 非错误状态时清除错误信息
         setClauses.push('error_message = NULL');
@@ -495,10 +497,10 @@ export class DeviceManager {
 
       params.push(deviceId);
 
-      const sql = `UPDATE devices SET ${setClauses.join(', ')} WHERE id = ?`;
-      const result = this.dataStore.run(sql, params);
+      const sql = `UPDATE devices SET ${setClauses.join(', ')} WHERE id = $${params.length}`;
+      const result = await this.dataStore.execute(sql, params);
 
-      if (result.changes === 0) {
+      if (result.rowCount === 0) {
         throw new DeviceManagerError(`设备不存在: ${deviceId}`, 'NOT_FOUND');
       }
 
@@ -600,6 +602,18 @@ export class DeviceManager {
   /**
    * 验证更新设备输入
    */
+  /**
+   * 统一执行入口 — 委托给 DeviceDriverManager
+   * Requirements: P2-17 / A1.3
+   */
+  async execute(
+    deviceId: string,
+    actionType: string,
+    payload?: Record<string, unknown>,
+  ): Promise<DeviceExecutionResult> {
+    return deviceDriverManager.execute(deviceId, actionType, payload);
+  }
+
   private validateUpdateInput(updates: UpdateDeviceInput): void {
     if (updates.name !== undefined && updates.name.trim().length === 0) {
       throw new DeviceManagerError('设备名称不能为空', 'INVALID_INPUT');

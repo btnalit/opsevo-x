@@ -57,7 +57,7 @@ const initializeService = async (): Promise<void> => {
  * - sessionId?: string - 会话 ID（可选，不提供则创建新会话）
  * - message: string - 用户消息
  * - mode: 'standard' | 'knowledge-enhanced' - 对话模式
- * - includeContext?: boolean - 是否包含 RouterOS 上下文（默认 true）
+ * - includeContext?: boolean - 是否包含设备上下文（默认 true）
  * - ragOptions?: { topK?: number; minScore?: number; includeTools?: boolean }
  *
  * Requirements: 1.1, 1.4, 1.5, 7.1, 7.2, 7.3, 7.4
@@ -137,7 +137,6 @@ router.post('/chat', async (req: Request, res: Response): Promise<void> => {
       // Requirements: 8.1, 8.2, 8.4
       deviceId: req.deviceId,
       tenantId: req.tenantId,
-      routerosClient: req.routerosClient,
     };
 
     try {
@@ -292,7 +291,6 @@ router.post('/chat/stream', async (req: Request, res: Response): Promise<void> =
       // Requirements: 8.1, 8.2, 8.4
       deviceId: req.deviceId,
       tenantId: req.tenantId,
-      routerosClient: req.routerosClient,
     };
 
     // 流式响应处理
@@ -590,7 +588,7 @@ router.post('/scripts/execute', async (req: Request, res: Response): Promise<voi
       }
 
       const response = await unifiedAgentService.executeScriptWithAnalysis(
-        { script, sessionId, dryRun, routerosClient: (req as any).routerosClient },
+        { script, sessionId, dryRun },
         config.id
       );
 
@@ -604,7 +602,6 @@ router.post('/scripts/execute', async (req: Request, res: Response): Promise<voi
         script,
         sessionId,
         dryRun,
-        routerosClient: (req as any).routerosClient,
       });
 
       res.json({
@@ -670,7 +667,6 @@ router.post('/scripts/execute/stream', async (req: Request, res: Response): Prom
         script,
         sessionId,
         dryRun,
-        routerosClient: (req as any).routerosClient,
       });
 
       send({ type: 'result', result });
@@ -685,7 +681,7 @@ router.post('/scripts/execute/stream', async (req: Request, res: Response): Prom
           send({ type: 'error', error: '需要 AI 配置才能进行分析' });
         } else {
           try {
-            const analysisMessage = `请分析以下 RouterOS 命令执行结果：\n\n命令：\n\`\`\`routeros\n${script}\n\`\`\`\n\n执行结果：\n\`\`\`\n${result.output}\n\`\`\`\n\n请简要说明执行结果的含义，以及是否有需要注意的问题。`;
+            const analysisMessage = `请分析以下设备命令执行结果：\n\n命令：\n\`\`\`\n${script}\n\`\`\`\n\n执行结果：\n\`\`\`\n${result.output}\n\`\`\`\n\n请简要说明执行结果的含义，以及是否有需要注意的问题。`;
             
             // 调用公共接口进行单次对话（这里会阻塞，但前端已经收到了 result 事件并显示了加载动画）
             const analysisResponse = await unifiedAgentService.chat({
@@ -696,7 +692,6 @@ router.post('/scripts/execute/stream', async (req: Request, res: Response): Prom
               includeContext: true,
               deviceId: req.deviceId,
               tenantId: req.tenantId,
-              routerosClient: (req as any).routerosClient,
             });
 
             send({ type: 'analysis', analysis: analysisResponse.content });

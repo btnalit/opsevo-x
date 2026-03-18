@@ -20,10 +20,3 @@ export {
   LRUCacheConfig,
   CacheStats,
 } from './lruCache';
-
-export {
-  DataStore,
-  DataStoreError,
-  type MigrationDefinition,
-  type DataStoreOptions,
-} from './dataStore';

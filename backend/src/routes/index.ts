@@ -11,5 +11,5 @@ export { default as fileUploadRoutes } from './fileUploadRoutes';
 export { default as promptTemplateRoutes } from './promptTemplateRoutes';
 export { default as skillRoutes } from './skillRoutes';
 export { default as topologyRoutes } from './topologyRoutes';
-export { createAuthRoutes, createDefaultAuthRoutes } from './authRoutes';
+export { createAuthRoutes } from './authRoutes';
 export { default as bffApiRoutes } from './bffApiRoutes';

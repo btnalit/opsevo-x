@@ -76,7 +76,7 @@ export interface PerceptionSource {
 export interface PerceptionStats {
   totalEvents: number
   eventsByType: Record<string, number>
-  queueDepth: number
+  totalPublishedCount: number
 }
 
 // ==================== API 调用 ====================

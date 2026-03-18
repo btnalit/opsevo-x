@@ -30,7 +30,7 @@ import {
   type KnowledgeQuery,
   type KnowledgeEntryType,
 } from '../services/ai-ops/rag';
-import { SQLiteVectorStore } from '../services/ai-ops/rag/sqliteVectorStore';
+import { VectorStoreClient } from '../services/ai-ops/rag/vectorStoreClient';
 import { getService, SERVICE_NAMES } from '../services/bootstrap';
 import { logger } from '../utils/logger';
 import { AlertEvent, SystemMetrics, RootCauseAnalysis, SnapshotDiff, UnifiedEvent } from '../types/ai-ops';
@@ -769,8 +769,8 @@ router.post('/knowledge/from-feedback', async (req: Request, res: Response) => {
 /**
  * 获取向量数据库服务实例
  */
-function getVectorDatabase(): SQLiteVectorStore {
-  return getService<SQLiteVectorStore>(SERVICE_NAMES.VECTOR_DATABASE);
+function getVectorDatabase(): VectorStoreClient {
+  return getService<VectorStoreClient>(SERVICE_NAMES.VECTOR_DATABASE);
 }
 
 /**
@@ -833,7 +833,7 @@ router.post('/vector/search', async (req: Request, res: Response) => {
     const embedding = await embeddingService.embed(query);
 
     // 执行向量搜索
-    const results = await getVectorDatabase().search(collection, embedding.vector, {
+    const results = await getVectorDatabase().searchByVector(collection, embedding.vector, {
       topK: topK || 10,
       minScore: minScore || 0.3,
     });

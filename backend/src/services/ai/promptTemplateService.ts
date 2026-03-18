@@ -25,7 +25,7 @@ import {
   RenderContext,
   KnowledgeBaseInfo,
   SelectedDocumentInfo,
-  ROUTEROS_SYSTEM_PROMPT,
+  AIOPS_SYSTEM_PROMPT,
 } from '../../types/ai';
 import { createPromptComposerAdapter } from '../ai-ops/prompt';
 import { basePersona } from '../ai-ops/prompt/modules/basePersona';
@@ -34,7 +34,7 @@ import { reActFormat } from '../ai-ops/prompt/modules/reActFormat';
 import { batchProtocol } from '../ai-ops/prompt/modules/batchProtocol';
 import { knowledgeGuide } from '../ai-ops/prompt/modules/knowledgeGuide';
 import { chainOfThought } from '../ai-ops/prompt/modules/chainOfThought';
-import type { DataStore } from '../core/dataStore';
+import type { DataStore } from '../dataStore';
 
 /**
  * 数据文件路径配置
@@ -71,9 +71,9 @@ interface TemplateData {
 const DEFAULT_SYSTEM_TEMPLATES: Array<Omit<PromptTemplate, 'id' | 'createdAt' | 'updatedAt'>> = [
   // ==================== 基础系统提示词 ====================
   {
-    name: 'RouterOS 系统提示词',
-    content: ROUTEROS_SYSTEM_PROMPT,
-    description: '默认的 RouterOS 网络配置专家系统提示词，用于 AI 对话',
+    name: 'AIOps 系统提示词',
+    content: AIOPS_SYSTEM_PROMPT,
+    description: '默认的 AIOps 智能运维系统提示词，用于 AI 对话',
     category: 'system',
     placeholders: ['connectionContext'],
     isDefault: true,
@@ -133,7 +133,7 @@ const DEFAULT_SYSTEM_TEMPLATES: Array<Omit<PromptTemplate, 'id' | 'createdAt' | 
 4. 说明修复后的验证方法
 
 【注意事项】
-- 所有 RouterOS 命令使用代码块格式
+- 所有设备命令使用代码块格式
 - 危险操作前提醒备份
 - 优先使用安全的配置方式`,
     description: '用于生成修复方案的提示词模板',
@@ -145,29 +145,13 @@ const DEFAULT_SYSTEM_TEMPLATES: Array<Omit<PromptTemplate, 'id' | 'createdAt' | 
   // ==================== ReAct 循环提示词 ====================
   {
     name: 'ReAct 循环基础提示词',
-    content: `你是一个 MikroTik RouterOS 网络设备运维助手，使用 ReAct 方法解决问题。
+    content: `你是一个 AIOps 智能运维助手，使用 ReAct 方法解决问题。
 
 ## 设备信息
-- 设备类型: MikroTik RouterOS
-- 系统版本: RouterOS 7.x（具体版本可通过 monitor_metrics 获取）
-- API 协议: RouterOS API（不是 SSH/CLI）
+{{device_info}}
 
-## RouterOS API 命令格式说明
-RouterOS API 必须使用严格的【路径 + 具名参数】格式，不支持 CLI 中的无名/位置参数：
-- 错误参数格式: /ping 8.8.8.8 count=4（必须写全参数名: /ping address=8.8.8.8 count=4）
-- 错误查询格式: show ip route, /interface print（查询必须用 device_query 工具）
-- 错误布尔格式: /ip/address/disable ether1 disabled（必须写全键值: disabled=yes）
-- 严禁脚本语法: 绝对禁止使用内部脚本控制流（如 :foreach, :if, $var），复杂操作需通过多次 API 调用自行处理。
-- 严查目标对象: 涉及到更新或删除操作（set/remove）时，需要先使用查询工具获取目标的固有 ID（如 *1, *2），或者带上精准过滤条件对应。
-
-常用 RouterOS 7.x API 路径：
-- 接口: /interface
-- IP 地址: /ip/address
-- 路由表: /ip/route
-- OSPF 实例: /routing/ospf/instance
-- 网络连通性: /ping (必须携带 address 参数)
-- 系统资源: /system/resource
-- 系统包: /system/package
+## 设备 API 命令格式说明
+{{api_format_guide}}
 
 ## ⚠️ 【分批处理协议】- 防止数据截断
 
@@ -201,12 +185,12 @@ RouterOS API 必须使用严格的【路径 + 具名参数】格式，不支持 
   Final Answer: 最终回答`,
     description: 'ReAct 循环的基础提示词，用于指导 LLM 进行 Thought → Action → Observation 循环',
     category: 'react',
-    placeholders: ['message', 'tools', 'steps'],
+    placeholders: ['message', 'tools', 'steps', 'device_info', 'api_format_guide'],
     isDefault: true,
   },
   {
     name: '知识优先 ReAct 提示词',
-    content: `你是一个 MikroTik RouterOS 网络设备运维助手，使用 ReAct 方法解决问题。
+    content: `你是一个 AIOps 智能运维助手，使用 ReAct 方法解决问题。
 
 ## 重要：知识优先原则
 在处理任何问题之前，你必须首先查询知识库获取历史经验和案例。
@@ -223,7 +207,7 @@ RouterOS API 必须使用严格的【路径 + 具名参数】格式，不支持 
 知识库中的内容包括：
 1. **历史告警案例** - 之前发生过的问题及处理方法
 2. **配置方案** - 经过验证的配置模板和步骤
-3. **最佳实践** - RouterOS 运维经验总结
+3. **最佳实践** - 设备运维经验总结
 4. **故障排查** - 常见问题的诊断和解决方法
 5. **操作指南** - 包含具体步骤的操作流程
 
@@ -252,7 +236,7 @@ RouterOS API 必须使用严格的【路径 + 具名参数】格式，不支持 
   },
   {
     name: '并行执行 ReAct 提示词',
-    content: `你是一个 MikroTik RouterOS 网络设备运维助手，使用 ReAct 方法解决问题。
+    content: `你是一个 AIOps 智能运维助手，使用 ReAct 方法解决问题。
 
 ## 🚀 并行执行模式
 
@@ -262,13 +246,13 @@ RouterOS API 必须使用严格的【路径 + 具名参数】格式，不支持 
 
 当你需要同时执行多个独立的工具调用时，**必须严格使用以下编号格式**：
 
-Thought: 我需要同时获取接口状态和系统资源信息，这两个查询相互独立，可以并行执行。
+Thought: 我需要同时获取多项设备信息，这些查询相互独立，可以并行执行。
 
 Action 1: device_query
-Action Input 1: {"command": "/interface"}
+Action Input 1: {"command": "{{example_query_1}}"}
 
 Action 2: device_query
-Action Input 2: {"command": "/system/resource"}
+Action Input 2: {"command": "{{example_query_2}}"}
 
 **格式规则**：
 - 使用 "Action 1:", "Action 2:", "Action 3:" 等带编号的格式
@@ -352,7 +336,7 @@ Action Input 2: {"command": "/system/resource"}
   },
   {
     name: '意图分析提示词',
-    content: `你是一个 RouterOS 网络设备运维助手。分析用户的请求，确定需要使用哪些工具来完成任务。
+    content: `你是一个 AIOps 智能运维助手。分析用户的请求，确定需要使用哪些工具来完成任务。
 
 可用工具：
 {{tools}}
@@ -538,7 +522,7 @@ const BUILTIN_PLACEHOLDERS: PlaceholderDefinition[] = [
   {
     name: 'connectionContext',
     label: '连接上下文',
-    description: 'RouterOS 设备连接状态信息',
+    description: '设备连接状态信息',
     defaultValue: '未连接',
   },
   {
@@ -694,22 +678,15 @@ export class PromptTemplateService {
   private overridesLock: Promise<void> = Promise.resolve();
 
   // ==================== DataStore 集成 ====================
-  // Requirements: 2.1, 2.2 - 使用 SQLite 替代 JSON 文件存储，注入 tenant_id
   protected dataStore: DataStore | null = null;
 
   /**
    * 设置 DataStore 实例
-   * 当 DataStore 可用时，Prompt 模板将使用 SQLite 存储
-   * Requirements: 2.1, 2.2
    */
   setDataStore(dataStore: DataStore): void {
     this.dataStore = dataStore;
-    // 重置 initialized 标志，确保默认模板能正确迁移到 DataStore
-    // 修复：当 preloadModuleContent 在 setDataStore 之前触发 loadData 时，
-    // initialized 已被设为 true（从 JSON 加载），导致后续 DataStore 读取时
-    // 跳过 initializeDefaultTemplates，返回空数据
     this.initialized = false;
-    logger.info('PromptTemplateService: DataStore backend configured, using SQLite for prompt templates storage');
+    logger.info('PromptTemplateService: DataStore backend configured for prompt templates storage');
   }
 
   /**
@@ -769,17 +746,17 @@ export class PromptTemplateService {
     try {
       await this.ensureDataDir();
 
-      // 当 DataStore 可用时，从 SQLite 读取
+      // 当 DataStore 可用时，从 PostgreSQL 读取
       if (this.dataStore) {
         try {
-          const rows = this.dataStore.query<{
+          const rows = await this.dataStore.query<{
             id: string;
             tenant_id: string;
             name: string;
             content: string;
             description: string | null;
             category: string | null;
-            is_system: number;
+            is_system: boolean;
             created_at: string;
             updated_at: string;
           }>('SELECT * FROM prompt_templates');
@@ -790,7 +767,7 @@ export class PromptTemplateService {
             content: row.content,
             description: row.description || undefined,
             category: row.category || undefined,
-            isDefault: row.is_system === 1,
+            isDefault: row.is_system,
             placeholders: this.extractPlaceholders(row.content),
             createdAt: new Date(row.created_at),
             updatedAt: new Date(row.updated_at),
@@ -848,20 +825,27 @@ export class PromptTemplateService {
    * Requirements: 2.1 - 当 DataStore 可用时写入 prompt_templates 表
    */
   private async saveData(data: TemplateData): Promise<void> {
-    // 当 DataStore 可用时，写入 SQLite
+    // 当 DataStore 可用时，写入 PostgreSQL
     if (this.dataStore) {
       try {
-        this.dataStore.transaction(() => {
+        await this.dataStore.transaction(async (tx) => {
           for (const template of data.templates) {
-            const tenantId = 'system'; // Default tenant for templates
+            const tenantId = 'system';
             const createdAt = template.createdAt instanceof Date ? template.createdAt.toISOString() : new Date(template.createdAt).toISOString();
             const updatedAt = template.updatedAt instanceof Date ? template.updatedAt.toISOString() : new Date(template.updatedAt).toISOString();
 
             const isSystemTemplate = DEFAULT_SYSTEM_TEMPLATES.some(st => st.name === template.name);
-            this.dataStore!.run(
-              `INSERT OR REPLACE INTO prompt_templates (id, tenant_id, name, content, description, category, is_system, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-              [template.id, tenantId, template.name, template.content, template.description || null, template.category || null, isSystemTemplate ? 1 : 0, createdAt, updatedAt]
+            await tx.execute(
+              `INSERT INTO prompt_templates (id, tenant_id, name, content, description, category, is_system, created_at, updated_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+               ON CONFLICT (id) DO UPDATE SET
+                 name = EXCLUDED.name,
+                 content = EXCLUDED.content,
+                 description = EXCLUDED.description,
+                 category = EXCLUDED.category,
+                 is_system = EXCLUDED.is_system,
+                 updated_at = EXCLUDED.updated_at`,
+              [template.id, tenantId, template.name, template.content, template.description || null, template.category || null, isSystemTemplate, createdAt, updatedAt]
             );
           }
         });
@@ -1036,10 +1020,10 @@ export class PromptTemplateService {
 
     data.templates.splice(index, 1);
 
-    // 当 DataStore 可用时，直接从 SQLite 删除
+    // 当 DataStore 可用时，从 PostgreSQL 删除
     if (this.dataStore) {
       try {
-        this.dataStore.run('DELETE FROM prompt_templates WHERE id = ?', [id]);
+        await this.dataStore.execute('DELETE FROM prompt_templates WHERE id = $1', [id]);
         logger.info(`Deleted prompt template from DataStore: ${id}`);
         return;
       } catch (error) {

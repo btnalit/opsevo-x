@@ -1,4 +1,4 @@
-import { MigrationDefinition } from '../services/core/dataStore';
+import { MigrationDefinition } from '../types/migration';
 
 /**
  * Migration: Add association columns to alert_events table

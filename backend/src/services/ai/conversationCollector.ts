@@ -26,9 +26,9 @@ import type { VectorStoreClient } from '../ai-ops/rag/vectorStoreClient';
 import { logger } from '../../utils/logger';
 
 /**
- * RouterOS 命令关键词
+ * 设备命令关键词
  */
-const ROUTEROS_KEYWORDS = [
+const DEVICE_COMMAND_KEYWORDS = [
   'interface', 'ip', 'firewall', 'nat', 'route', 'routing', 'bridge',
   'vlan', 'dhcp', 'dns', 'vpn', 'ipsec', 'l2tp', 'pptp', 'pppoe',
   'queue', 'bandwidth', 'traffic', 'mangle', 'filter', 'address-list',
@@ -421,10 +421,10 @@ export class ConversationCollector implements IConversationCollector {
     const tags: Set<string> = new Set();
     const lowerContent = content.toLowerCase();
 
-    // 检测 RouterOS 命令关键词
-    for (const keyword of ROUTEROS_KEYWORDS) {
+    // 检测设备命令关键词
+    for (const keyword of DEVICE_COMMAND_KEYWORDS) {
       if (lowerContent.includes(keyword)) {
-        tags.add(`routeros-${keyword}`);
+        tags.add(`device-${keyword}`);
       }
     }
 
@@ -435,13 +435,13 @@ export class ConversationCollector implements IConversationCollector {
       }
     }
 
-    // 检测代码块中的 RouterOS 命令
+    // 检测代码块中的设备命令
     const codeBlockRegex = /```(?:routeros|rsc)?\s*([\s\S]*?)```/g;
     let match;
     while ((match = codeBlockRegex.exec(content)) !== null) {
       const codeContent = match[1].toLowerCase();
       
-      // 检测常见的 RouterOS 命令前缀
+      // 检测常见的设备命令前缀
       const commandPrefixes = ['/ip', '/interface', '/system', '/routing', '/tool', '/queue', '/firewall'];
       for (const prefix of commandPrefixes) {
         if (codeContent.includes(prefix)) {

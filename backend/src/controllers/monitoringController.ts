@@ -15,7 +15,7 @@
 import { Request, Response } from 'express';
 import { DeviceManager, Device } from '../services/device/deviceManager';
 import { DevicePool, PooledConnection } from '../services/device/devicePool';
-import { DataStore } from '../services/core/dataStore';
+import type { DataStore } from '../services/dataStore';
 import { logger } from '../utils/logger';
 
 /**
@@ -107,9 +107,9 @@ export function createMonitoringController(
           // 获取该设备的活跃告警数量
           let activeAlertCount = 0;
           try {
-            const rows = dataStore.query<{ count: number }>(
+            const rows = await dataStore.query<{ count: number }>(
               `SELECT COUNT(*) as count FROM alert_events 
-               WHERE tenant_id = ? AND device_id = ? AND status = 'active'`,
+               WHERE tenant_id = $1 AND device_id = $2 AND status = 'active'`,
               [tenantId, device.id],
             );
             activeAlertCount = rows[0]?.count ?? 0;
@@ -122,13 +122,13 @@ export function createMonitoringController(
           // 获取最近的健康指标（CPU、内存、磁盘）
           let latestMetrics: DeviceHealthOverview['latestMetrics'] | undefined;
           try {
-            const metricRows = dataStore.query<{
+            const metricRows = await dataStore.query<{
               metric_name: string;
               metric_value: number;
               collected_at: string;
             }>(
               `SELECT metric_name, metric_value, collected_at FROM health_metrics 
-               WHERE tenant_id = ? AND device_id = ? 
+               WHERE tenant_id = $1 AND device_id = $2 
                  AND metric_name IN ('cpu_usage', 'memory_usage', 'disk_usage')
                ORDER BY collected_at DESC 
                LIMIT 3`,

@@ -4,7 +4,6 @@ import { knowledgeBase } from '../rag/knowledgeBase';
 import { notificationService } from '../notificationService';
 import { v4 as uuidv4 } from 'uuid';
 import { logger } from '../../../utils/logger';
-import { RouterOSClient } from '../../routerosClient';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { AnalysisEntry, AnalysisReportSummary, SystemHealthSummary, StateDiff } from '../../../types/autonomous-brain';
@@ -136,7 +135,7 @@ async function resolveDeviceLabel(label: string): Promise<{ id: string } | { err
 
 export const executeIntentTool: AgentTool = {
     name: 'execute_intent',
-    description: `通过结构化意图（Intent）对 RouterOS 设备执行操作。你不允许生成原始命令，只能从白名单中选择合法意图。\n合法意图列表已在 System Prompt 中提供。未注册意图一律被拒绝。\n⚠️ 注意：如果设备连接状态为 error/disconnected，请勿调用此工具，改用 send_notification 通知管理员。`,
+    description: `通过结构化意图（Intent）对设备执行操作。你不允许生成原始命令，只能从白名单中选择合法意图。\n合法意图列表已在 System Prompt 中提供。未注册意图一律被拒绝。\n⚠️ 注意：如果设备连接状态为 error/disconnected，请勿调用此工具，改用 send_notification 通知管理员。`,
     parameters: {
         action: {
             type: 'string',
@@ -262,20 +261,19 @@ export const executeIntentTool: AgentTool = {
             // intentRegistry 的路由逻辑：
             //   - 有 _client → 跳过 DevicePool 路由，直接使用 _client 执行
             //   - 有 deviceId + 无 _client → 强制走 DevicePool（Route A）
-            //   - 无 deviceId + 无 _client + 无受管设备 → 单设备模式，使用全局 routerosClient
-            // 🔴 FIX: 当只有 1 台受管设备时，也注入 _client 走单机模式
-            // 原因：单台设备可能通过全局 routerosClient 连接（非 DevicePool），Route A 会失败
-            // 注入条件：Brain tick 提供了 routerosClient，且 deviceId 是系统自动补全的（等于 tickDeviceId）
-            if (params.routerosClient && !intentParams.deviceId) {
+            //   - 无 deviceId + 无 _client + 无受管设备 → 需先注册设备
+            // 当只有 1 台受管设备时，也注入 _client 走单机模式
+            // 注入条件：Brain tick 提供了 deviceClient，且 deviceId 是系统自动补全的（等于 tickDeviceId）
+            if (params.deviceClient && !intentParams.deviceId) {
                 // 无受管设备的纯单机模式
-                intentParams._client = params.routerosClient as RouterOSClient;
-                logger.debug(`[Brain Intent] Single-device mode (no managed devices): injecting tick-level routerosClient.`);
-            } else if (params.routerosClient && intentParams.deviceId && params.tickDeviceId
+                intentParams._client = params.deviceClient;
+                logger.debug(`[Brain Intent] Single-device mode (no managed devices): injecting tick-level deviceClient.`);
+            } else if (params.deviceClient && intentParams.deviceId && params.tickDeviceId
                        && intentParams.deviceId === params.tickDeviceId) {
                 // 单台受管设备：deviceId 是系统自动补全的（等于 tickDeviceId），注入 _client 作为单机模式后备
                 // intentRegistry 会优先使用 _client，跳过 DevicePool Route A
-                intentParams._client = params.routerosClient as RouterOSClient;
-                logger.debug(`[Brain Intent] Single managed device mode: injecting routerosClient as standalone fallback (deviceId === tickDeviceId).`);
+                intentParams._client = params.deviceClient;
+                logger.debug(`[Brain Intent] Single managed device mode: injecting deviceClient as standalone fallback (deviceId === tickDeviceId).`);
             }
 
             logger.info(`[Brain Intent] action="${action}", justification="${justification}"`, {
@@ -437,18 +435,18 @@ export const invokeSkillTool: AgentTool = {
                         }
                     }
 
-                    // 🔴 FIX 1.9: 通过 deviceManager 获取 routerosClient
-                    let routerosClient: any = params.routerosClient;
-                    if (!routerosClient && resolvedDeviceId) {
+                    // 通过 deviceManager 获取设备客户端
+                    let deviceClient: any = params.deviceClient;
+                    if (!deviceClient && resolvedDeviceId) {
                         try {
                             const { serviceRegistry } = await import('../../serviceRegistry');
                             const { SERVICE_NAMES } = await import('../../bootstrap');
                             const deviceManager = await serviceRegistry.getAsync<any>(SERVICE_NAMES.DEVICE_MANAGER);
                             if (deviceManager && typeof deviceManager.getClient === 'function') {
-                                routerosClient = await deviceManager.getClient(resolvedDeviceId);
+                                deviceClient = await deviceManager.getClient(resolvedDeviceId);
                             }
                         } catch (clientErr) {
-                            logger.debug(`[Brain Skill] Could not get routerosClient for device ${resolvedDeviceId}: ${clientErr instanceof Error ? clientErr.message : String(clientErr)}`);
+                            logger.debug(`[Brain Skill] Could not get deviceClient for device ${resolvedDeviceId}: ${clientErr instanceof Error ? clientErr.message : String(clientErr)}`);
                         }
                     }
 
@@ -457,7 +455,7 @@ export const invokeSkillTool: AgentTool = {
                         deviceName,
                         ip,
                         originalLabel: deviceLabel,
-                        routerosClient,
+                        deviceClient,
                     });
 
                     return {

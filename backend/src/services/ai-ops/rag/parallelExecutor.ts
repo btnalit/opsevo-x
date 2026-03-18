@@ -529,7 +529,7 @@ export class ParallelExecutor {
 
         // 设置单个工具超时
         const result = await Promise.race([
-          tool.execute(context?.routerosClient ? { ...call.params, routerosClient: context.routerosClient } : call.params),
+          tool.execute(context?.tickDeviceId ? { ...call.params, tickDeviceId: context.tickDeviceId } : call.params),
           timeout.promise,
         ]);
 

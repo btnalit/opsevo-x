@@ -570,7 +570,7 @@ export class ChatSessionService implements IChatSessionService {
       sql += ' ORDER BY updated_at DESC';
 
       const rows = await this.dataStore.query<PgChatSessionRow>(sql, params);
-      // 加载每个会话的消息以保持与旧 SQLite 行为一致
+      // 加载每个会话的消息以保持与旧版行为一致
       const sessions: ChatSession[] = [];
       for (const row of rows) {
         const messages = await this.loadPgMessages(row.id);

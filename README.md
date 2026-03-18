@@ -119,15 +119,78 @@ cd opsevo-x
 # Configure environment variables
 cp .env.example .env
 # Edit .env — at minimum set PG_PASSWORD and your AI provider key
+```
 
-# Start all services (PostgreSQL + Python Core + BFF)
+Edit `.env` with your settings:
+
+```bash
+# Required
+PG_PASSWORD=your-secure-password
+
+# AI provider (choose one)
+AI_PROVIDER=gemini
+GEMINI_API_KEY=your-gemini-key
+
+# Optional: change internal API key for security
+INTERNAL_API_KEY=your-random-secret
+```
+
+Start all services:
+
+```bash
+# Start PostgreSQL + Python Core + BFF (3 services)
 docker-compose up -d
 
-# View logs
+# Check service status
+docker-compose ps
+
+# View BFF logs
 docker-compose logs -f opsevo-bff
 
-# With Nginx reverse proxy
-docker-compose --profile with-nginx up -d
+# View all logs
+docker-compose logs -f
+```
+
+Access the platform at `http://your-server:8080`.
+
+#### Port Mapping
+
+| Port | Protocol | Service | Description |
+| ---- | -------- | ------- | ----------- |
+| 8080 | TCP | BFF | Web UI + API (configurable via `PORT`) |
+| 514 | UDP | BFF | Syslog receiver (configurable via `SYSLOG_PORT`) |
+| 162 | UDP | BFF | SNMP Trap receiver (configurable via `SNMP_TRAP_PORT`) |
+| 5432 | TCP | PostgreSQL | Database (configurable via `PG_PORT`) |
+| 8001 | TCP | Python Core | Embedding service (configurable via `PYTHON_CORE_PORT`) |
+
+#### Data Persistence
+
+Docker volumes are used to persist data across container restarts:
+
+| Volume | Mount Point | Content |
+| ------ | ----------- | ------- |
+| `opsevo-data` | `/app/backend/data` | Configuration, rules, knowledge base |
+| `opsevo-logs` | `/app/backend/logs` | Application logs |
+| `opsevo-pgdata` | `/var/lib/postgresql/data` | PostgreSQL database files |
+
+#### Common Operations
+
+```bash
+# Stop all services
+docker-compose down
+
+# Stop and remove volumes (WARNING: deletes all data)
+docker-compose down -v
+
+# Rebuild after code changes
+docker-compose build --no-cache
+docker-compose up -d
+
+# Restart a single service
+docker-compose restart opsevo-bff
+
+# View resource usage
+docker stats
 ```
 
 ### Local Development
@@ -163,6 +226,7 @@ npm run dev
 | AI_MODEL_NAME | gemini-1.5-flash | LLM model name |
 | PORT | 8080 | External access port |
 | SYSLOG_PORT | 514 | Syslog UDP port |
+| SNMP_TRAP_PORT | 162 | SNMP Trap UDP port |
 
 See `.env.example` for the full configuration reference.
 

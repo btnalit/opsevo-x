@@ -88,7 +88,7 @@ const PRIORITY_ORDER: Record<Priority, number> = {
   info: 4,
 };
 
-/** 所有 EventBus 支持的事件类型 */
+/** 所有 EventBus 支持的事件类型（排除 brain_heartbeat 避免订阅自己发布的心跳事件） */
 const ALL_EVENT_TYPES: EventType[] = [
   'alert',
   'metric',
@@ -96,7 +96,6 @@ const ALL_EVENT_TYPES: EventType[] = [
   'snmp_trap',
   'webhook',
   'internal',
-  'brain_heartbeat',
 ];
 
 // ─── 内部优先级队列 ───

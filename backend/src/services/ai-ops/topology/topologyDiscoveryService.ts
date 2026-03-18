@@ -12,7 +12,6 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import { logger } from '../../../utils/logger';
 import { IManagedService, HealthCheckResult } from '../serviceLifecycle';
-import { RouterOSClient } from '../../routerosClient';
 import type { DeviceManager } from '../../device/deviceManager';
 import type { KnowledgeGraphBuilder } from '../knowledgeGraphBuilder';
 import type { EventBus } from '../../eventBus';
@@ -22,7 +21,7 @@ import {
   DEFAULT_TOPOLOGY_CONFIG, createEmptyGraph, createEmptyStats,
   DiscoverySource, SerializedTopologyGraph, ManagedTopologyDevice,
 } from './types';
-import { collectAllDevicesData, collectDeviceData } from './dataCollector';
+import { collectAllDevicesData, collectDeviceData, TopologyDataClient } from './dataCollector';
 import { buildCandidateGraph } from './candidateGraphBuilder';
 import { computeDiff, isDiffEmpty } from './diffEngine';
 import { onEntitySeen, onEntityMissed } from './stateMachine';
@@ -56,7 +55,7 @@ class TopologyDiscoveryService implements IManagedService {
 
   // 依赖注入
   private getDevices: (() => Promise<ManagedTopologyDevice[]>) | null = null;
-  private getConnection: ((tenantId: string, deviceId: string) => Promise<RouterOSClient>) | null = null;
+  private getConnection: ((tenantId: string, deviceId: string) => Promise<TopologyDataClient>) | null = null;
   private onTopologyChange: ((event: TopologyChangeEvent) => void) | null = null;
   private deviceManager: DeviceManager | null = null;
   private eventBus: EventBus | null = null;
@@ -79,7 +78,7 @@ class TopologyDiscoveryService implements IManagedService {
     this.getDevices = fn;
   }
 
-  setConnectionProvider(fn: (tenantId: string, deviceId: string) => Promise<RouterOSClient>): void {
+  setConnectionProvider(fn: (tenantId: string, deviceId: string) => Promise<TopologyDataClient>): void {
     this.getConnection = fn;
   }
 

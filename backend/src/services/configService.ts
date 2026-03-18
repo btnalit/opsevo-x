@@ -13,10 +13,20 @@
 
 import fs from 'fs/promises';
 import path from 'path';
-import { RouterOSConfig } from '../types';
 import { logger } from '../utils/logger';
-import type { DataStore } from './core/dataStore';
-import type { DataStore as PgDataStoreInterface } from './dataStore';
+import type { DataStore } from './dataStore';
+
+/**
+ * 设备连接配置（向后兼容）
+ * 新代码应使用 DeviceManager + DeviceConnectionConfig
+ */
+interface LegacyConnectionConfig {
+  host: string;
+  port: number;
+  username: string;
+  password: string;
+  useTLS: boolean;
+}
 
 const CONFIG_DIR = path.join(process.cwd(), 'data');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'connection.json');
@@ -33,9 +43,7 @@ interface DeviceRow {
 
 export class ConfigService {
   // ==================== DataStore 集成 ====================
-  // Requirements: 2.1 - 使用 SQLite 替代 JSON 文件存储
   private dataStore: DataStore | null = null;
-  private pgDataStore: PgDataStoreInterface | null = null;
 
   // ==================== 密码解密 ====================
   // Requirements: 3.1, 3.2 - 解密 devices 表中的加密密码
@@ -54,8 +62,8 @@ export class ConfigService {
   /**
    * 设置 PgDataStore 实例，启用 PostgreSQL 读取
    */
-  setPgDataStore(dataStore: PgDataStoreInterface): void {
-    this.pgDataStore = dataStore;
+  setPgDataStore(dataStore: DataStore): void {
+    this.dataStore = dataStore;
     logger.info('ConfigService: PgDataStore backend configured, using PostgreSQL devices table');
   }
 
@@ -87,15 +95,10 @@ export class ConfigService {
    * - JSON 回退模式：从 connection.json 读取
    * @returns 配置对象或 null
    */
-  async loadConfig(): Promise<RouterOSConfig | null> {
-    // PgDataStore 模式：从 PostgreSQL devices 表读取
-    if (this.pgDataStore) {
-      return this.loadConfigFromPgDataStore();
-    }
-
-    // DataStore 模式：从 SQLite devices 表读取
+  async loadConfig(): Promise<LegacyConnectionConfig | null> {
+    // DataStore 模式：从 PostgreSQL devices 表读取
     if (this.dataStore) {
-      return this.loadConfigFromDataStore();
+      return this.loadConfigFromPgDataStore();
     }
 
     // JSON 回退模式
@@ -108,7 +111,7 @@ export class ConfigService {
    * - JSON 回退模式：写入 connection.json
    * @param config 配置对象
    */
-  async saveConfig(config: RouterOSConfig): Promise<void> {
+  async saveConfig(config: LegacyConnectionConfig): Promise<void> {
     // DataStore 模式：设备配置由 DeviceManager 管理，此处仅记录日志
     if (this.dataStore) {
       logger.info('ConfigService: saveConfig called in DataStore mode - device configs are managed by DeviceManager');
@@ -140,9 +143,9 @@ export class ConfigService {
   /**
    * 从 PostgreSQL devices 表加载第一个设备配置
    */
-  private async loadConfigFromPgDataStore(): Promise<RouterOSConfig | null> {
+  private async loadConfigFromPgDataStore(): Promise<LegacyConnectionConfig | null> {
     try {
-      const row = await this.pgDataStore!.queryOne<DeviceRow>(
+      const row = await this.dataStore!.queryOne<DeviceRow>(
         `SELECT id, host, port, username, password_encrypted, use_tls
          FROM devices ORDER BY created_at ASC LIMIT 1`
       );
@@ -179,66 +182,17 @@ export class ConfigService {
     }
   }
 
-  /**
-   * 从 SQLite devices 表加载第一个设备配置作为默认连接
-   */
-  private loadConfigFromDataStore(): RouterOSConfig | null {
-    try {
-      const rows = this.dataStore!.query<DeviceRow>(
-        `SELECT id, host, port, username, password_encrypted, use_tls
-         FROM devices
-         ORDER BY created_at ASC
-         LIMIT 1`
-      );
-
-      if (rows.length === 0) {
-        logger.info('ConfigService: No devices found in DataStore');
-        return null;
-      }
-
-      const row = rows[0];
-
-      // 解密密码 - Requirements: 3.1, 3.2
-      let password: string;
-      if (this.decryptFn) {
-        try {
-          password = this.decryptFn(row.password_encrypted);
-        } catch (error) {
-          logger.error('ConfigService: Failed to decrypt device password:', error);
-          return null;
-        }
-      } else {
-        logger.warn('ConfigService: No decrypt function set, cannot load config from DataStore');
-        return null;
-      }
-
-      const config: RouterOSConfig = {
-        host: row.host,
-        port: row.port,
-        username: row.username,
-        password, // 解密后的明文密码
-        useTLS: row.use_tls === 1,
-      };
-
-      logger.info('ConfigService: Loaded connection config from devices table');
-      return config;
-    } catch (error) {
-      logger.error('ConfigService: Failed to load config from DataStore:', error);
-      return null;
-    }
-  }
-
   // ==================== JSON 文件操作（回退模式） ====================
 
   /**
    * 从 JSON 文件加载配置
    * 如果文件不存在，尝试从环境变量读取（Docker 首次启动支持）
    */
-  private async loadConfigFromFile(): Promise<RouterOSConfig | null> {
+  private async loadConfigFromFile(): Promise<LegacyConnectionConfig | null> {
     try {
       await this.ensureConfigDir();
       const data = await fs.readFile(CONFIG_FILE, 'utf-8');
-      const config = JSON.parse(data) as RouterOSConfig;
+      const config = JSON.parse(data) as LegacyConnectionConfig;
       logger.info('Loaded connection config from file');
       return config;
     } catch (error) {
@@ -261,18 +215,18 @@ export class ConfigService {
    * 从环境变量加载配置
    * 支持 Docker 容器首次启动时的零配置部署
    */
-  private loadConfigFromEnv(): RouterOSConfig | null {
-    const host = process.env.ROUTEROS_HOST;
-    const user = process.env.ROUTEROS_USER;
-    const password = process.env.ROUTEROS_PASSWORD;
+  private loadConfigFromEnv(): LegacyConnectionConfig | null {
+    const host = process.env.DEVICE_HOST || process.env.ROUTEROS_HOST;
+    const user = process.env.DEVICE_USER || process.env.ROUTEROS_USER;
+    const password = process.env.DEVICE_PASSWORD || process.env.ROUTEROS_PASSWORD;
 
     if (host && user && password) {
       return {
         host,
-        port: parseInt(process.env.ROUTEROS_PORT || '8728', 10),
+        port: parseInt(process.env.DEVICE_PORT || process.env.ROUTEROS_PORT || '8728', 10),
         username: user,
         password: password,
-        useTLS: process.env.ROUTEROS_USE_TLS === 'true',
+        useTLS: (process.env.DEVICE_USE_TLS || process.env.ROUTEROS_USE_TLS) === 'true',
       };
     }
     return null;
@@ -281,7 +235,7 @@ export class ConfigService {
   /**
    * 保存配置到 JSON 文件
    */
-  private async saveConfigToFile(config: RouterOSConfig): Promise<void> {
+  private async saveConfigToFile(config: LegacyConnectionConfig): Promise<void> {
     try {
       await this.ensureConfigDir();
       const data = JSON.stringify(config, null, 2);

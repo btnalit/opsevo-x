@@ -18,12 +18,10 @@
 
 import { logger } from '../../../utils/logger';
 import { KeywordIndexManager } from './keywordIndexManager';
-import { SQLiteVectorStore } from './sqliteVectorStore';
-import type { SearchOptions } from './vectorDatabase';
 import { EmbeddingService } from './embeddingService';
 import { RRFRanker } from './rrfRanker';
 import { KnowledgeEntry } from './knowledgeBase';
-import type { VectorStoreClient, VectorSearchResult as VscSearchResult } from './vectorStoreClient';
+import { VectorStoreClient, type VectorSearchResult as VscSearchResult } from './vectorStoreClient';
 import {
   HybridSearchOptions,
   HybridSearchResult,
@@ -54,12 +52,11 @@ interface VectorSearchResultInternal {
 export class HybridSearchEngine {
   private config: HybridSearchEngineConfig;
   private keywordIndexManager: KeywordIndexManager;
-  private vectorDatabase: SQLiteVectorStore;
   private embeddingService: EmbeddingService;
   private rrfRanker: RRFRanker;
 
-  // Python Core 向量检索客户端（替代 SQLiteVectorStore，Requirements: J5.12, J5.13）
-  private vectorClient: VectorStoreClient | null = null;
+  // Python Core 向量检索客户端（Requirements: J5.12, J5.13）
+  private vectorClient: VectorStoreClient;
 
   // 条目缓存（用于快速查找）
   private entryCache: Map<string, KnowledgeEntry> = new Map();
@@ -71,13 +68,13 @@ export class HybridSearchEngine {
 
   constructor(
     keywordIndexManager: KeywordIndexManager,
-    vectorDatabase: SQLiteVectorStore,
+    vectorClient: VectorStoreClient,
     embeddingService: EmbeddingService,
     rrfRanker: RRFRanker,
     config?: Partial<HybridSearchEngineConfig>
   ) {
     this.keywordIndexManager = keywordIndexManager;
-    this.vectorDatabase = vectorDatabase;
+    this.vectorClient = vectorClient;
     this.embeddingService = embeddingService;
     this.rrfRanker = rrfRanker;
     this.config = { ...DEFAULT_HYBRID_SEARCH_ENGINE_CONFIG, ...config };
@@ -93,12 +90,12 @@ export class HybridSearchEngine {
   }
 
   /**
-   * 设置 VectorStoreClient（通过 Python Core 执行向量检索）
+   * 设置 VectorStoreClient（兼容方法，构造函数已注入）
    * Requirements: J5.12, J5.13, J5.14
    */
   setVectorClient(client: VectorStoreClient): void {
     this.vectorClient = client;
-    logger.info('HybridSearchEngine: VectorStoreClient set, vector search will use Python Core');
+    logger.info('HybridSearchEngine: VectorStoreClient updated');
   }
 
   /**
@@ -336,20 +333,14 @@ export class HybridSearchEngine {
 
   /**
    * 执行向量检索
-   * 优先使用 VectorStoreClient（Python Core），回退到 SQLiteVectorStore
+   * 通过 VectorStoreClient → Python Core（J5.12, J5.13）
    */
   private async executeVectorSearch(
     query: string,
     collections: string[],
     limit: number
   ): Promise<VectorSearchResultInternal[]> {
-    // 路径 1：通过 VectorStoreClient → Python Core（J5.12, J5.13）
-    if (this.vectorClient) {
-      return this.executeVectorSearchViaPythonCore(query, collections, limit);
-    }
-
-    // 路径 2：回退到 SQLiteVectorStore（向后兼容）
-    return this.executeVectorSearchViaSQLite(query, collections, limit);
+    return this.executeVectorSearchViaPythonCore(query, collections, limit);
   }
 
   /**
@@ -393,56 +384,6 @@ export class HybridSearchEngine {
     }
 
     allResults.sort((a, b) => b.score - a.score);
-    return allResults.slice(0, limit);
-  }
-
-  /**
-   * 通过 SQLiteVectorStore 执行向量检索（回退路径）
-   */
-  private async executeVectorSearchViaSQLite(
-    query: string,
-    collections: string[],
-    limit: number
-  ): Promise<VectorSearchResultInternal[]> {
-    // 生成查询向量
-    const embedding = await this.embeddingService.embed(query);
-
-    const allResults: VectorSearchResultInternal[] = [];
-    const seenIds = new Set<string>();
-
-    // 搜索所有集合
-    for (const collection of collections) {
-      try {
-        const searchOptions: SearchOptions = {
-          topK: limit,
-          minScore: 0.3,
-          includeVector: false,
-        };
-
-        const results = await this.vectorDatabase.search(collection, embedding.vector, searchOptions);
-
-        for (const result of results) {
-          const entryId = result.document.metadata.entryId as string;
-          if (!entryId || seenIds.has(entryId)) continue;
-
-          seenIds.add(entryId);
-          allResults.push({
-            entryId,
-            score: result.score,
-            content: result.document.content,
-          });
-        }
-      } catch (error) {
-        logger.warn('Vector search failed for collection', {
-          collection,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-
-    // 按分数排序
-    allResults.sort((a, b) => b.score - a.score);
-
     return allResults.slice(0, limit);
   }
 

@@ -5,7 +5,7 @@
  * Requirements: 7.1-7.6, 8.1-8.5, 9.1-9.6, 10.1-10.6, 11.1-11.7, 12.1-12.7
  * - 7.x: Markdown 文件解析
  * - 8.x: 纯文本文件解析
- * - 9.x: RouterOS 配置文件解析
+ * - 9.x: 设备配置文件解析（通过插件扩展）
  * - 10.x: JSON 文件解析
  * - 11.x: 文件处理流程
  * - 12.x: 文件上传界面支持
@@ -119,9 +119,15 @@ export const SUPPORTED_FILE_TYPES: FileTypeInfo[] = [
     maxSize: 5 * 1024 * 1024, // 5MB
   },
   {
-    extension: '.rsc',
-    mimeTypes: ['text/plain', 'application/octet-stream'],
-    description: 'RouterOS 配置文件',
+    extension: '.yaml',
+    mimeTypes: ['text/yaml', 'text/x-yaml', 'application/x-yaml'],
+    description: '设备配置文件 (YAML)',
+    maxSize: 5 * 1024 * 1024, // 5MB
+  },
+  {
+    extension: '.yml',
+    mimeTypes: ['text/yaml', 'text/x-yaml', 'application/x-yaml'],
+    description: '设备配置文件 (YAML)',
     maxSize: 5 * 1024 * 1024, // 5MB
   },
   {
@@ -182,19 +188,17 @@ const DEFAULT_TAG_CONFIG: TagGenerationConfig = {
 };
 
 /**
- * RouterOS 关键词映射
+ * 设备配置关键词映射（通用网络设备）
  */
-const ROUTEROS_KEYWORDS: Record<string, string[]> = {
-  firewall: ['firewall', 'filter', 'nat', 'mangle', 'raw', 'address-list', 'chain', 'action', 'drop', 'accept', 'reject'],
-  routing: ['route', 'routing', 'bgp', 'ospf', 'rip', 'gateway', 'dst-address', 'distance'],
-  interface: ['interface', 'bridge', 'vlan', 'bonding', 'ethernet', 'wireless', 'ether', 'wlan'],
-  ip: ['ip address', 'ip pool', 'ip dhcp', 'ip dns', 'ip arp', 'subnet', 'netmask'],
-  system: ['system', 'user', 'scheduler', 'script', 'log', 'identity', 'clock', 'ntp'],
-  queue: ['queue', 'simple', 'tree', 'bandwidth', 'priority', 'burst'],
-  vpn: ['ppp', 'pptp', 'l2tp', 'ipsec', 'ovpn', 'wireguard', 'tunnel', 'peer'],
-  dhcp: ['dhcp', 'dhcp-server', 'dhcp-client', 'lease', 'pool'],
-  dns: ['dns', 'dns-server', 'static', 'cache'],
-  security: ['certificate', 'ssl', 'tls', 'encryption', 'password', 'secret'],
+const DEVICE_CONFIG_KEYWORDS: Record<string, string[]> = {
+  firewall: ['firewall', 'filter', 'nat', 'acl', 'access-list', 'chain', 'action', 'drop', 'accept', 'reject', 'deny', 'permit'],
+  routing: ['route', 'routing', 'bgp', 'ospf', 'rip', 'gateway', 'static-route', 'distance', 'metric'],
+  interface: ['interface', 'bridge', 'vlan', 'bonding', 'ethernet', 'port-channel', 'loopback'],
+  addressing: ['ip address', 'subnet', 'netmask', 'cidr', 'dhcp', 'pool'],
+  system: ['hostname', 'ntp', 'syslog', 'snmp', 'aaa', 'user', 'logging', 'clock'],
+  qos: ['qos', 'queue', 'bandwidth', 'priority', 'rate-limit', 'traffic-shaping'],
+  vpn: ['vpn', 'ipsec', 'tunnel', 'peer', 'gre', 'wireguard', 'l2tp'],
+  security: ['certificate', 'ssl', 'tls', 'encryption', 'password', 'secret', 'radius'],
 };
 
 /**
@@ -237,8 +241,8 @@ export class TagGenerator {
       tags.add(fileType);
     }
 
-    // 2. 检测 RouterOS 相关标签
-    this.detectRouterOSTags(lowerContent, tags);
+    // 2. 检测设备配置相关标签
+    this.detectDeviceConfigTags(lowerContent, tags);
 
     // 3. 检测网络术语标签
     this.detectNetworkTags(lowerContent, tags);
@@ -254,30 +258,23 @@ export class TagGenerator {
   }
 
   /**
-   * 检测 RouterOS 相关标签
+   * 检测设备配置相关标签（通用网络设备）
    */
-  private detectRouterOSTags(content: string, tags: Set<string>): void {
-    let hasRouterOS = false;
+  private detectDeviceConfigTags(content: string, tags: Set<string>): void {
+    let hasDeviceConfig = false;
 
-    for (const [category, keywords] of Object.entries(ROUTEROS_KEYWORDS)) {
+    for (const [category, keywords] of Object.entries(DEVICE_CONFIG_KEYWORDS)) {
       for (const keyword of keywords) {
         if (content.includes(keyword)) {
           tags.add(category);
-          hasRouterOS = true;
+          hasDeviceConfig = true;
           break;
         }
       }
     }
 
-    // 如果检测到任何 RouterOS 关键词，添加 routeros 标签
-    if (hasRouterOS) {
-      tags.add('routeros');
-    }
-
-    // 检测 MikroTik 品牌
-    if (content.includes('mikrotik') || content.includes('routeros')) {
-      tags.add('mikrotik');
-      tags.add('routeros');
+    if (hasDeviceConfig) {
+      tags.add('device-config');
     }
   }
 
@@ -396,15 +393,14 @@ export class TagGenerator {
   }
 
   /**
-   * 为 RouterOS 配置生成专用标签
-   * Requirements: 9.5
+   * 为设备配置生成专用标签（通用网络设备）
    */
-  generateRouterOSTags(content: string, metadata?: Record<string, unknown>): string[] {
-    const tags = new Set<string>(['routeros', 'configuration']);
+  generateDeviceConfigTags(content: string, metadata?: Record<string, unknown>): string[] {
+    const tags = new Set<string>(['device-config', 'configuration']);
     const lowerContent = content.toLowerCase();
 
     // 检测子系统
-    for (const [subsystem, keywords] of Object.entries(ROUTEROS_KEYWORDS)) {
+    for (const [subsystem, keywords] of Object.entries(DEVICE_CONFIG_KEYWORDS)) {
       for (const keyword of keywords) {
         if (lowerContent.includes(keyword)) {
           tags.add(subsystem);
@@ -450,9 +446,9 @@ export class TagGenerator {
       tags.add(match[1].toLowerCase());
     }
 
-    // 检测 RouterOS 和网络相关内容
+    // 检测设备配置和网络相关内容
     const lowerContent = content.toLowerCase();
-    this.detectRouterOSTags(lowerContent, tags);
+    this.detectDeviceConfigTags(lowerContent, tags);
     this.detectNetworkTags(lowerContent, tags);
 
     return this.normalizeTags(Array.from(tags)).slice(0, this.config.maxTags);
@@ -603,15 +599,15 @@ export class MarkdownParser implements FileParser {
       tags.add(match[1].toLowerCase());
     }
 
-    // 检测 RouterOS 相关关键词
-    const routerosKeywords = [
-      'mikrotik', 'routeros', 'firewall', 'nat', 'mangle',
-      'interface', 'bridge', 'vlan', 'ip address', 'route',
+    // 检测设备配置相关关键词
+    const configKeywords = [
+      'firewall', 'nat', 'acl', 'interface', 'bridge',
+      'vlan', 'ip address', 'route', 'hostname',
     ];
     const lowerContent = content.toLowerCase();
-    for (const keyword of routerosKeywords) {
+    for (const keyword of configKeywords) {
       if (lowerContent.includes(keyword)) {
-        tags.add('routeros');
+        tags.add('device-config');
         break;
       }
     }
@@ -763,14 +759,13 @@ export class TextParser implements FileParser {
 
     const lowerContent = content.toLowerCase();
 
-    // 检测 RouterOS 相关关键词
-    const routerosKeywords = [
-      'mikrotik', 'routeros', 'firewall', 'nat', 'mangle',
-      'interface', 'bridge', 'vlan',
+    // 检测设备配置相关关键词
+    const configKeywords = [
+      'firewall', 'nat', 'acl', 'interface', 'bridge', 'vlan',
     ];
-    for (const keyword of routerosKeywords) {
+    for (const keyword of configKeywords) {
       if (lowerContent.includes(keyword)) {
-        tags.add('routeros');
+        tags.add('device-config');
         break;
       }
     }
@@ -843,324 +838,6 @@ export class TextParser implements FileParser {
       const end = Math.min(start + DEFAULT_CHUNK_SIZE, text.length);
       chunks.push(text.slice(start, end).trim());
       start += step;
-    }
-
-    return chunks;
-  }
-
-  private getExtension(filename: string): string {
-    const lastDot = filename.lastIndexOf('.');
-    return lastDot >= 0 ? filename.slice(lastDot).toLowerCase() : '';
-  }
-}
-
-
-// ==================== RouterOS 配置解析器 ====================
-
-/**
- * RouterOS 配置文件解析器
- * Requirements: 9.1, 9.2, 9.3, 9.4, 9.5, 9.6
- */
-export class RouterOSParser implements FileParser {
-  // RouterOS 子系统分类
-  private static readonly SUBSYSTEMS: Record<string, string[]> = {
-    firewall: ['filter', 'nat', 'mangle', 'raw', 'address-list'],
-    routing: ['route', 'routing', 'bgp', 'ospf', 'rip'],
-    interface: ['interface', 'bridge', 'vlan', 'bonding', 'ethernet', 'wireless'],
-    ip: ['ip address', 'ip pool', 'ip dhcp', 'ip dns', 'ip arp'],
-    system: ['system', 'user', 'scheduler', 'script', 'log'],
-    queue: ['queue', 'simple', 'tree'],
-    vpn: ['ppp', 'pptp', 'l2tp', 'ipsec', 'ovpn', 'wireguard'],
-  };
-
-  canParse(file: UploadedFile): boolean {
-    const ext = this.getExtension(file.filename);
-    return ext === '.rsc';
-  }
-
-  async parse(file: UploadedFile): Promise<ParsedContent> {
-    const content = file.buffer.toString('utf-8');
-    const warnings: string[] = [];
-
-    // 解析配置
-    const { sections, parseWarnings, metadata } = this.parseConfig(content);
-    warnings.push(...parseWarnings);
-
-    // 生成标题
-    const title = this.generateTitle(file.filename, metadata);
-
-    // 生成标签
-    const tags = this.generateTags(sections, metadata);
-
-    // 构建内容
-    const formattedContent = this.formatContent(sections, metadata);
-
-    // 分块处理
-    const chunks = this.chunkContent(sections);
-
-    return {
-      title,
-      content: formattedContent,
-      metadata: {
-        category: 'configuration',
-        tags,
-        originalFilename: file.filename,
-        fileType: 'routeros',
-        ...metadata,
-      },
-      chunks,
-      warnings: warnings.length > 0 ? warnings : undefined,
-    };
-  }
-
-  /**
-   * 解析配置内容
-   * Requirements: 9.2, 9.6
-   */
-  private parseConfig(content: string): {
-    sections: Map<string, string[]>;
-    parseWarnings: string[];
-    metadata: Record<string, unknown>;
-  } {
-    const sections = new Map<string, string[]>();
-    const warnings: string[] = [];
-    const metadata: Record<string, unknown> = {
-      interfaces: [] as string[],
-      ipAddresses: [] as string[],
-      subsystems: [] as string[],
-    };
-
-    const lines = content.split('\n');
-    let currentSection = 'general';
-    let currentCommands: string[] = [];
-
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i].trim();
-
-      // 跳过空行和注释
-      if (!line || line.startsWith('#')) {
-        continue;
-      }
-
-      try {
-        // 检测新的配置节
-        const sectionMatch = line.match(/^\/([a-z0-9\-\s]+)/i);
-        if (sectionMatch) {
-          // 保存当前节
-          if (currentCommands.length > 0) {
-            const existing = sections.get(currentSection) || [];
-            sections.set(currentSection, [...existing, ...currentCommands]);
-          }
-
-          currentSection = sectionMatch[1].trim();
-          currentCommands = [];
-
-          // 分类子系统
-          const subsystem = this.categorizeSubsystem(currentSection);
-          if (subsystem && !(metadata.subsystems as string[]).includes(subsystem)) {
-            (metadata.subsystems as string[]).push(subsystem);
-          }
-        } else {
-          currentCommands.push(line);
-
-          // 提取元数据
-          this.extractMetadata(line, metadata);
-        }
-      } catch (error) {
-        warnings.push(`第 ${i + 1} 行解析警告: ${(error as Error).message}`);
-      }
-    }
-
-    // 保存最后一节
-    if (currentCommands.length > 0) {
-      const existing = sections.get(currentSection) || [];
-      sections.set(currentSection, [...existing, ...currentCommands]);
-    }
-
-    return { sections, parseWarnings: warnings, metadata };
-  }
-
-  /**
-   * 分类子系统
-   * Requirements: 9.3
-   */
-  private categorizeSubsystem(section: string): string | null {
-    const lowerSection = section.toLowerCase();
-
-    for (const [subsystem, keywords] of Object.entries(RouterOSParser.SUBSYSTEMS)) {
-      for (const keyword of keywords) {
-        if (lowerSection.includes(keyword)) {
-          return subsystem;
-        }
-      }
-    }
-
-    return null;
-  }
-
-  /**
-   * 提取元数据
-   * Requirements: 9.4
-   */
-  private extractMetadata(line: string, metadata: Record<string, unknown>): void {
-    // 提取接口名称
-    const interfaceMatch = line.match(/interface=([^\s]+)/i);
-    if (interfaceMatch) {
-      const iface = interfaceMatch[1].replace(/"/g, '');
-      if (!(metadata.interfaces as string[]).includes(iface)) {
-        (metadata.interfaces as string[]).push(iface);
-      }
-    }
-
-    // 提取 IP 地址
-    const ipMatch = line.match(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?:\/\d{1,2})?)/g);
-    if (ipMatch) {
-      for (const ip of ipMatch) {
-        if (!(metadata.ipAddresses as string[]).includes(ip)) {
-          (metadata.ipAddresses as string[]).push(ip);
-        }
-      }
-    }
-
-    // 提取规则描述/注释
-    const commentMatch = line.match(/comment="([^"]+)"/i);
-    if (commentMatch) {
-      if (!metadata.comments) {
-        metadata.comments = [];
-      }
-      (metadata.comments as string[]).push(commentMatch[1]);
-    }
-  }
-
-  /**
-   * 生成标题
-   */
-  private generateTitle(filename: string, metadata: Record<string, unknown>): string {
-    const subsystems = metadata.subsystems as string[];
-    if (subsystems && subsystems.length > 0) {
-      const subsystemStr = subsystems.slice(0, 3).join(', ');
-      return `RouterOS 配置: ${subsystemStr}`;
-    }
-    return `RouterOS 配置: ${filename.replace(/\.rsc$/i, '')}`;
-  }
-
-  /**
-   * 生成标签
-   * Requirements: 9.5
-   */
-  private generateTags(sections: Map<string, string[]>, metadata: Record<string, unknown>): string[] {
-    const tags: Set<string> = new Set(['routeros', 'configuration']);
-
-    // 添加子系统标签
-    const subsystems = metadata.subsystems as string[];
-    if (subsystems) {
-      for (const subsystem of subsystems) {
-        tags.add(subsystem);
-      }
-    }
-
-    // 检测特定功能
-    const allCommands = Array.from(sections.values()).flat().join(' ').toLowerCase();
-
-    if (allCommands.includes('nat')) tags.add('nat');
-    if (allCommands.includes('firewall')) tags.add('firewall');
-    if (allCommands.includes('dhcp')) tags.add('dhcp');
-    if (allCommands.includes('dns')) tags.add('dns');
-    if (allCommands.includes('vpn') || allCommands.includes('ipsec') || allCommands.includes('wireguard')) {
-      tags.add('vpn');
-    }
-    if (allCommands.includes('vlan')) tags.add('vlan');
-    if (allCommands.includes('bridge')) tags.add('bridge');
-
-    return Array.from(tags);
-  }
-
-  /**
-   * 格式化内容
-   */
-  private formatContent(sections: Map<string, string[]>, metadata: Record<string, unknown>): string {
-    let content = '# RouterOS 配置\n\n';
-
-    // 添加元数据摘要
-    const subsystems = metadata.subsystems as string[];
-    if (subsystems && subsystems.length > 0) {
-      content += `## 子系统\n${subsystems.join(', ')}\n\n`;
-    }
-
-    const interfaces = metadata.interfaces as string[];
-    if (interfaces && interfaces.length > 0) {
-      content += `## 接口\n${interfaces.join(', ')}\n\n`;
-    }
-
-    const ipAddresses = metadata.ipAddresses as string[];
-    if (ipAddresses && ipAddresses.length > 0) {
-      content += `## IP 地址\n${ipAddresses.slice(0, 20).join(', ')}${ipAddresses.length > 20 ? '...' : ''}\n\n`;
-    }
-
-    // 添加配置内容
-    content += '## 配置详情\n\n';
-    for (const [section, commands] of sections) {
-      content += `### /${section}\n\`\`\`routeros\n`;
-      content += commands.join('\n');
-      content += '\n```\n\n';
-    }
-
-    return content;
-  }
-
-  /**
-   * 内容分块
-   */
-  private chunkContent(sections: Map<string, string[]>): ContentChunk[] {
-    const chunks: ContentChunk[] = [];
-    let chunkIndex = 0;
-
-    for (const [section, commands] of sections) {
-      const sectionContent = `/${section}\n${commands.join('\n')}`;
-
-      if (sectionContent.length <= DEFAULT_CHUNK_SIZE) {
-        chunks.push({
-          content: sectionContent,
-          metadata: { chunkIndex, section },
-        });
-        chunkIndex++;
-      } else {
-        // 分割大的配置节
-        const subChunks = this.forceChunk(sectionContent);
-        for (const subChunk of subChunks) {
-          chunks.push({
-            content: subChunk,
-            metadata: { chunkIndex, section },
-          });
-          chunkIndex++;
-        }
-      }
-    }
-
-    return chunks;
-  }
-
-  /**
-   * 强制分块
-   */
-  private forceChunk(text: string): string[] {
-    const chunks: string[] = [];
-    const lines = text.split('\n');
-    let currentChunk = '';
-
-    for (const line of lines) {
-      if (currentChunk.length + line.length + 1 > DEFAULT_CHUNK_SIZE) {
-        if (currentChunk.length > 0) {
-          chunks.push(currentChunk.trim());
-        }
-        currentChunk = line;
-      } else {
-        currentChunk += (currentChunk ? '\n' : '') + line;
-      }
-    }
-
-    if (currentChunk.trim().length > 0) {
-      chunks.push(currentChunk.trim());
     }
 
     return chunks;
@@ -1358,7 +1035,6 @@ export class FileProcessor {
     this.parsers = [
       new MarkdownParser(),
       new TextParser(),
-      new RouterOSParser(),
       new JSONParser(),
     ];
 

@@ -14,8 +14,6 @@
 import { Router } from 'express';
 import { createAuthController } from '../controllers/authController';
 import { AuthService } from '../services/auth/authService';
-import { DataStore } from '../services/core/dataStore';
-import path from 'path';
 
 /**
  * 创建认证路由
@@ -40,24 +38,6 @@ export function createAuthRoutes(authService: AuthService): Router {
   router.post('/refresh', controller.refresh);
 
   return router;
-}
-
-/**
- * 创建默认的认证路由（使用默认 DataStore 和 AuthService）
- *
- * 用于在 index.ts 中快速注册路由，无需手动创建 DataStore 和 AuthService。
- * 注意：这会创建独立的 DataStore 实例，适用于简单场景。
- * 在生产环境中，建议使用 createAuthRoutes() 并传入共享的 AuthService 实例。
- */
-export async function createDefaultAuthRoutes(): Promise<Router> {
-  const dataStore = new DataStore({
-    dbPath: path.join(process.cwd(), 'data', 'routeros-ai-ops.db'),
-    migrationsPath: path.join(__dirname, '..', 'migrations'),
-  });
-  await dataStore.initialize();
-
-  const authService = new AuthService(dataStore);
-  return createAuthRoutes(authService);
 }
 
 export default createAuthRoutes;

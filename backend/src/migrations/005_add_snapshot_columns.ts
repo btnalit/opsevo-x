@@ -2,7 +2,7 @@
  * Add checksum and metadata columns to config_snapshots table
  * Requirements: 5.3, 5.7 - Persist snapshot details
  */
-import { MigrationDefinition } from '../services/core/dataStore';
+import { MigrationDefinition } from '../types/migration';
 
 const migration: MigrationDefinition = {
     version: 5,

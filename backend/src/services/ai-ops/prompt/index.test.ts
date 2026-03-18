@@ -21,7 +21,7 @@ describe('createPromptComposerAdapter', () => {
     const result = adapter.buildReActPrompt('查看接口', 'tools', 'steps');
 
     expect(result).toBeTruthy();
-    expect(result).toContain('RouterOS 智能运维助手');
+    expect(result).toContain('AIOps 智能运维助手');
     expect(result).toContain('查看接口');
   });
 
@@ -32,7 +32,7 @@ describe('createPromptComposerAdapter', () => {
     });
 
     expect(result).toBeTruthy();
-    expect(result).toContain('RouterOS 智能运维助手');
+    expect(result).toContain('AIOps 智能运维助手');
     expect(result).toContain('分析推理步骤');
   });
 

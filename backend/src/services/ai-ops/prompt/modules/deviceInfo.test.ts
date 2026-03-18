@@ -39,25 +39,21 @@ describe('DeviceInfo module', () => {
     expect(content).toContain('设备信息');
   });
 
-  it('should specify the device type as MikroTik RouterOS', () => {
+  it('should specify the default device type as 通用设备', () => {
     const content = deviceInfo.render();
+    expect(content).toContain('通用设备');
+  });
+
+  it('should specify the API protocol as 设备 API', () => {
+    const content = deviceInfo.render();
+    expect(content).toContain('设备 API');
+  });
+
+  it('should use context-provided device type when available', () => {
+    const content = deviceInfo.render({ deviceType: 'MikroTik RouterOS', deviceVersion: 'RouterOS 7.x', apiProtocol: 'RouterOS API（路径格式）' });
     expect(content).toContain('MikroTik RouterOS');
-  });
-
-  it('should specify the system version as RouterOS 7.x', () => {
-    const content = deviceInfo.render();
     expect(content).toContain('RouterOS 7.x');
-  });
-
-  it('should specify the API protocol as RouterOS API with path format', () => {
-    const content = deviceInfo.render();
     expect(content).toContain('RouterOS API');
-    expect(content).toContain('路径格式');
-  });
-
-  it('should clarify that CLI commands are not used', () => {
-    const content = deviceInfo.render();
-    expect(content).toContain('非 CLI 命令');
   });
 
   it('should render content within the 50 token budget', () => {

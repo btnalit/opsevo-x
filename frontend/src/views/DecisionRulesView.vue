@@ -773,7 +773,9 @@ const getActionType = (action: DecisionType): 'success' | 'warning' | 'danger' |
     auto_execute: 'success',
     notify_and_wait: 'warning',
     escalate: 'danger',
-    silence: 'info'
+    silence: 'info',
+    auto_remediate: 'success',
+    observe: 'info'
   }
   return types[action] || 'info'
 }
@@ -783,7 +785,9 @@ const getActionText = (action: DecisionType): string => {
     auto_execute: '自动执行',
     notify_and_wait: '通知等待',
     escalate: '升级处理',
-    silence: '静默'
+    silence: '静默',
+    auto_remediate: '自动修复',
+    observe: '观察'
   }
   return texts[action] || action
 }

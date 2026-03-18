@@ -66,7 +66,7 @@ const PROMPT_TEMPLATES = {
    * 告警分析提示词模板（结构化 JSON 输出）
    * 注意：系统状态部分由代码动态构建，以支持指标不可用的场景
    */
-  alertAnalysis: `你是一个专业的网络运维专家，正在分析 RouterOS 设备的告警事件。
+  alertAnalysis: `你是一个专业的网络运维专家，正在分析目标设备的告警事件。
 
 ## 告警信息
 - 设备: {{deviceName}} ({{deviceId}})
@@ -97,7 +97,7 @@ const PROMPT_TEMPLATES = {
   /**
    * 健康报告分析提示词模板（结构化 JSON 输出）
    */
-  healthReportAnalysis: `你是一个专业的网络运维专家，正在分析 RouterOS 设备的健康报告数据。
+  healthReportAnalysis: `你是一个专业的网络运维专家，正在分析目标设备的健康报告数据。
 
 ## 资源使用统计
 ### CPU
@@ -139,7 +139,7 @@ const PROMPT_TEMPLATES = {
   /**
    * 配置变更分析提示词模板（结构化 JSON 输出）
    */
-  configDiffAnalysis: `你是一个专业的网络运维专家，正在分析 RouterOS 设备的配置变更。
+  configDiffAnalysis: `你是一个专业的网络运维专家，正在分析目标设备的配置变更。
 
 ## 变更摘要
 - 新增配置: {{additionsCount}} 项
@@ -205,7 +205,7 @@ const PROMPT_TEMPLATES = {
    * 批量告警分析提示词模板（结构化 JSON 输出）
    * Requirement 3.1, 3.2, 3.3: 批量分析告警
    */
-  batchAlertAnalysis: `你是一个专业的网络运维专家，正在批量分析 RouterOS 设备的告警事件。
+  batchAlertAnalysis: `你是一个专业的网络运维专家，正在批量分析目标设备的告警事件。
 
 ## 告警列表
 {{alertsList}}
@@ -693,7 +693,7 @@ export class AIAnalyzer implements IAIAnalyzer {
 
       // 调用 AI 分析
       const response = await this.chat(
-        '你是一个专业的网络运维专家，擅长分析 RouterOS 设备的告警和故障。',
+        '你是一个专业的网络运维专家，擅长分析设备的告警和故障。',
         prompt
       );
 
@@ -1076,7 +1076,7 @@ export class AIAnalyzer implements IAIAnalyzer {
 
       // 调用 AI 分析
       const response = await this.chat(
-        '你是一个专业的网络运维专家，擅长分析 RouterOS 配置变更和评估风险。',
+        '你是一个专业的网络运维专家，擅长分析设备配置变更和评估风险。',
         prompt
       );
 
@@ -1369,7 +1369,7 @@ export class AIAnalyzer implements IAIAnalyzer {
 
       // 调用 AI 分析
       const response = await this.chat(
-        '你是一个专业的网络运维专家，擅长批量分析 RouterOS 设备的告警。请严格按照 JSON 格式返回结果。',
+        '你是一个专业的网络运维专家，擅长批量分析设备的告警。请严格按照 JSON 格式返回结果。',
         prompt
       );
 

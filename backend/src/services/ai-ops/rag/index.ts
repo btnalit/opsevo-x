@@ -2,14 +2,14 @@
  * Agentic RAG 智能检索增强服务导出
  */
 
-// 向量数据库服务（SQLiteVectorStore 替代 LanceDB VectorDatabase）
+// 向量数据库服务（VectorStoreClient 通过 Python Core 执行向量操作）
 export {
-  SQLiteVectorStore,
-  vectorToBuffer,
-  bufferToVector,
-  cosineSimilarity,
-  type SQLiteVectorStoreConfig,
-} from './sqliteVectorStore';
+  VectorStoreClient,
+  type VectorDocument as VscVectorDocument,
+  type VectorSearchQuery,
+  type VectorSearchResult as VscVectorSearchResult,
+  type EmbeddingResponse,
+} from './vectorStoreClient';
 
 // 向量数据库类型定义（保留从 vectorDatabase.ts 导出的类型，向后兼容）
 export {
@@ -81,15 +81,6 @@ export {
   HybridSearchEngine,
 } from './hybridSearchEngine';
 
-// Python Core 向量检索客户端 (J5.12)
-export {
-  VectorStoreClient,
-  type VectorDocument as VscVectorDocument,
-  type VectorSearchQuery,
-  type VectorSearchResult as VscVectorSearchResult,
-  type EmbeddingResponse,
-} from './vectorStoreClient';
-
 
 // RAG 引擎服务
 export {
@@ -141,7 +132,6 @@ export {
   fileProcessor,
   MarkdownParser,
   TextParser,
-  RouterOSParser,
   JSONParser,
   SUPPORTED_FILE_TYPES,
   type FileParser,

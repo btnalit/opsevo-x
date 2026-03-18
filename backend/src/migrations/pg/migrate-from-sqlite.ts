@@ -847,7 +847,7 @@ export class SqliteToPgMigrator {
 async function main(): Promise<void> {
   // Resolve SQLite path
   const sqlitePath = process.env.SQLITE_DB_PATH
-    ?? path.join(process.cwd(), 'data', 'routeros.db');
+    ?? path.join(process.cwd(), 'data', 'ai-ops.db');
 
   // Resolve PostgreSQL connection
   const pgHost = process.env.PG_HOST ?? 'localhost';

@@ -14,7 +14,7 @@ import { Router, RequestHandler } from 'express';
 import { createMonitoringController } from '../controllers/monitoringController';
 import { DeviceManager } from '../services/device/deviceManager';
 import { DevicePool } from '../services/device/devicePool';
-import { DataStore } from '../services/core/dataStore';
+import type { DataStore } from '../services/dataStore';
 
 /**
  * 创建监控路由

@@ -22,10 +22,7 @@ jest.mock('../notificationService', () => ({
   notificationService: { send: jest.fn() },
 }));
 jest.mock('../../serviceRegistry', () => ({
-  serviceRegistry: { get: jest.fn() },
-}));
-jest.mock('../../routerosClient', () => ({
-  routerosClient: { isConnected: jest.fn().mockReturnValue(false) },
+  serviceRegistry: { get: jest.fn(), tryGet: jest.fn().mockReturnValue(null) },
 }));
 jest.mock('../metricsCollector', () => ({
   metricsCollector: { collect: jest.fn() },

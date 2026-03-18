@@ -3,7 +3,7 @@
  * 负责配置备份、恢复和差异对比
  *
  * Requirements: 5.2-5.9, 6.1-6.9
- * - 5.2: 导出 RouterOS 完整配置
+ * - 5.2: 导出设备完整配置
  * - 5.3: 记录快照时间戳和触发方式
  * - 5.4: 支持手动触发立即备份
  * - 5.5: 保留最近 30 个快照
@@ -34,11 +34,10 @@ import {
   RiskLevel,
 } from '../../types/ai-ops';
 import { logger } from '../../utils/logger';
-import type { DevicePool } from '../device/devicePool';
-import type { RouterOSClient } from '../routerosClient';
+import type { DevicePool, DeviceClient } from '../device/devicePool';
 import { auditLogger } from './auditLogger';
 import { knowledgeBase } from './rag';
-import type { DataStore } from '../core/dataStore';
+import type { DataStore } from '../dataStore';
 
 const DATA_DIR = path.join(process.cwd(), 'data', 'ai-ops');
 const SNAPSHOTS_DIR = path.join(DATA_DIR, 'snapshots');
@@ -154,18 +153,18 @@ export class ConfigSnapshotService implements IConfigSnapshotService {
   private initialized = false;
 
   // ==================== DataStore 集成 ====================
-  // Requirements: 2.1, 2.2 - 使用 SQLite 替代 JSON 文件存储，注入 tenant_id
+  // Requirements: 2.1, 2.2 - 使用 DataStore (PostgreSQL) 替代 JSON 文件存储，注入 tenant_id
   private dataStore: DataStore | null = null;
   private devicePool: DevicePool | null = null;
 
   /**
    * 设置 DataStore 实例
-   * 当 DataStore 可用时，配置快照将使用 SQLite 存储
+   * 当 DataStore 可用时，配置快照将使用 PostgreSQL 存储
    * Requirements: 2.1, 2.2
    */
   setDataStore(dataStore: DataStore): void {
     this.dataStore = dataStore;
-    logger.info('ConfigSnapshotService: DataStore backend configured, using SQLite for config snapshots storage');
+    logger.info('ConfigSnapshotService: DataStore backend configured for config snapshots storage');
   }
 
   /**
@@ -205,10 +204,10 @@ export class ConfigSnapshotService implements IConfigSnapshotService {
    * Requirements: 2.1 - 当 DataStore 可用时从 config_snapshots 表读取
    */
   private async loadIndex(): Promise<void> {
-    // 当 DataStore 可用时，从 SQLite 读取
+    // 当 DataStore 可用时，从 PostgreSQL 读取
     if (this.dataStore) {
       try {
-        const rows = this.dataStore.query<{
+        const rows = await this.dataStore.query<{
           id: string;
           tenant_id: string;
           device_id: string;
@@ -218,7 +217,7 @@ export class ConfigSnapshotService implements IConfigSnapshotService {
           size: number;
           checksum: string | null;
           metadata: string | null;
-        }>('SELECT id, tenant_id, device_id, description, created_at, length(cast(snapshot_data as blob)) as size, checksum, metadata FROM config_snapshots ORDER BY created_at DESC');
+        }>('SELECT id, tenant_id, device_id, description, created_at, length(cast(snapshot_data as text)) as size, checksum, metadata FROM config_snapshots ORDER BY created_at DESC');
 
         this.snapshots = rows.map((row) => ({
           id: row.id,
@@ -254,10 +253,10 @@ export class ConfigSnapshotService implements IConfigSnapshotService {
 
   /**
    * 保存快照索引
-   * Requirements: 2.1 - 当 DataStore 可用时，索引信息已在 createSnapshot 中写入 SQLite
+   * Requirements: 2.1 - 当 DataStore 可用时，索引信息已在 createSnapshot 中写入 PostgreSQL
    */
   private async saveIndex(): Promise<void> {
-    // 当 DataStore 可用时，快照数据已在 createSnapshot/deleteSnapshot 中直接操作 SQLite
+    // 当 DataStore 可用时，快照数据已在 createSnapshot/deleteSnapshot 中直接操作 PostgreSQL
     if (this.dataStore) {
       return;
     }
@@ -283,11 +282,11 @@ export class ConfigSnapshotService implements IConfigSnapshotService {
 
 
   /**
-   * 获取 RouterOS 客户端
+   * 获取设备客户端
    * 如果指定了 deviceId，则从 DevicePool 获取
    * 如果未指定且有 DataStore，则获取第一个可用设备（回退模式）
    */
-  private async getClient(tenantId?: string, deviceId?: string): Promise<RouterOSClient> {
+  private async getClient(tenantId?: string, deviceId?: string): Promise<DeviceClient> {
     if (this.devicePool && deviceId && tenantId) {
       return this.devicePool.getConnection(tenantId, deviceId);
     }
@@ -296,7 +295,7 @@ export class ConfigSnapshotService implements IConfigSnapshotService {
     // 仅用于遗留代码或单设备场景
     if (this.dataStore && this.devicePool) {
       try {
-        const rows = this.dataStore.query<{ id: string, tenant_id: string }>(
+        const rows = await this.dataStore.query<{ id: string, tenant_id: string }>(
           'SELECT id, tenant_id FROM devices ORDER BY created_at ASC LIMIT 1'
         );
         if (rows.length > 0) {
@@ -313,7 +312,7 @@ export class ConfigSnapshotService implements IConfigSnapshotService {
   }
 
   /**
-   * 从 RouterOS 导出配置
+   * 从设备导出配置
    */
   private async exportConfig(tenantId?: string, deviceId?: string): Promise<string> {
     const client = await this.getClient(tenantId, deviceId);
@@ -324,7 +323,7 @@ export class ConfigSnapshotService implements IConfigSnapshotService {
       try {
         await client.print('/system/resource');
       } catch (e) {
-        throw new Error('RouterOS not connected');
+      throw new Error('Device not connected');
       }
     }
 
@@ -340,9 +339,13 @@ export class ConfigSnapshotService implements IConfigSnapshotService {
 
   /**
    * 分部分导出配置（备用方法）
+   * TODO: P2 架构优化 — configPaths 应从 DeviceDriver.getCapabilityManifest() 动态获取，
+   * 当前硬编码路径仅适用于 RouterOS API 协议设备，其他设备类型需要各自的配置路径列表。
    */
-  private async exportConfigByParts(client: RouterOSClient): Promise<string> {
+  private async exportConfigByParts(client: DeviceClient): Promise<string> {
     const parts: string[] = [];
+    // 默认配置路径列表（适用于 RouterOS API 协议设备）
+    // TODO: 应从设备驱动的 CapabilityManifest 动态获取
     const configPaths = [
       '/system/identity',
       '/interface',
@@ -388,20 +391,21 @@ export class ConfigSnapshotService implements IConfigSnapshotService {
   }
 
   /**
-   * 获取路由器元数据
+   * 获取设备元数据
+   * TODO: P2 架构优化 — 应通过 DeviceDriver.getMetadata() 获取，当前实现仅适用于 RouterOS API 协议设备
    */
-  private async getRouterMetadata(client: RouterOSClient): Promise<{ routerVersion?: string; routerModel?: string }> {
+  private async getDeviceMetadata(client: DeviceClient): Promise<{ deviceVersion?: string; deviceModel?: string }> {
     try {
       const resources = await client.print<Record<string, string>>('/system/resource');
       if (resources && resources.length > 0) {
         const resource = resources[0];
         return {
-          routerVersion: resource.version,
-          routerModel: resource['board-name'] || resource['platform'],
+          deviceVersion: resource.version,
+          deviceModel: resource['board-name'] || resource['platform'],
         };
       }
     } catch (error) {
-      logger.warn('Failed to get router metadata:', error);
+      logger.warn('Failed to get device metadata:', error);
     }
     return {};
   }
@@ -444,7 +448,7 @@ export class ConfigSnapshotService implements IConfigSnapshotService {
 
     // 导出配置
     const content = await this.exportConfig(tenantId, deviceId);
-    const metadata = await this.getRouterMetadata(client);
+    const metadata = await this.getDeviceMetadata(client);
 
     // 创建快照记录
     const snapshot: ConfigSnapshot & { tenant_id?: string; device_id?: string } = {
@@ -458,7 +462,7 @@ export class ConfigSnapshotService implements IConfigSnapshotService {
       device_id: deviceId,
     };
 
-    // 当 DataStore 可用时，写入 SQLite
+    // 当 DataStore 可用时，写入 PostgreSQL
     if (this.dataStore) {
       try {
         const tId = tenantId || 'default';
@@ -468,9 +472,9 @@ export class ConfigSnapshotService implements IConfigSnapshotService {
 
         const metadataStr = JSON.stringify(metadata);
 
-        this.dataStore.run(
+        await this.dataStore.execute(
           `INSERT INTO config_snapshots (id, tenant_id, device_id, snapshot_data, description, created_at, checksum, metadata)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
           [snapshot.id, tId, dId, content, description, createdAt, snapshot.checksum, metadataStr]
         );
       } catch (error) {
@@ -575,10 +579,10 @@ export class ConfigSnapshotService implements IConfigSnapshotService {
 
     const snapshot = this.snapshots[index];
 
-    // 当 DataStore 可用时，从 SQLite 删除
+    // 当 DataStore 可用时，从 PostgreSQL 删除
     if (this.dataStore) {
       try {
-        this.dataStore.run('DELETE FROM config_snapshots WHERE id = ?', [id]);
+        await this.dataStore.execute('DELETE FROM config_snapshots WHERE id = $1', [id]);
       } catch (error) {
         logger.warn(`Failed to delete snapshot from DataStore ${id}:`, error);
       }
@@ -625,12 +629,12 @@ export class ConfigSnapshotService implements IConfigSnapshotService {
       throw new Error(`Snapshot not found: ${id}`);
     }
 
-    // 当 DataStore 可用时，从 SQLite 读取
+    // 当 DataStore 可用时，从 PostgreSQL 读取
     if (this.dataStore) {
       try {
-        const rows = this.dataStore.query<{
+        const rows = await this.dataStore.query<{
           snapshot_data: string;
-        }>('SELECT snapshot_data FROM config_snapshots WHERE id = ?', [id]);
+        }>('SELECT snapshot_data FROM config_snapshots WHERE id = $1', [id]);
 
         if (rows.length > 0) {
           return rows[0].snapshot_data;
@@ -665,7 +669,7 @@ export class ConfigSnapshotService implements IConfigSnapshotService {
     }
 
     // 获取对应的设备连接
-    let client: RouterOSClient;
+    let client: DeviceClient;
     try {
       // 尝试使用快照中记录的 tenant_id 和 device_id
       const tenantId = (snapshot as any).tenant_id;
@@ -676,7 +680,7 @@ export class ConfigSnapshotService implements IConfigSnapshotService {
     }
 
     if (!client.isConnected()) {
-      return { success: false, message: 'RouterOS not connected' };
+      return { success: false, message: 'Device not connected' };
     }
 
     try {
@@ -705,7 +709,7 @@ export class ConfigSnapshotService implements IConfigSnapshotService {
       });
 
       // 执行恢复
-      // RouterOS 的 /import 命令需要文件，我们需要逐行执行配置
+      // 设备的 /import 命令需要文件，我们需要逐行执行配置
       const lines = content
         .split('\n')
         .map((line) => line.trim())
@@ -723,9 +727,9 @@ export class ConfigSnapshotService implements IConfigSnapshotService {
           }
 
           // 转换为 API 格式并执行
-          const { apiCommand, params } = this.convertToApiFormat(line);
+          const { apiCommand, params } = this.convertToIntentCommand(line);
           if (apiCommand) {
-            await client.executeRaw(apiCommand, params);
+            await (client as any).executeRaw(apiCommand, params);
             successCount++;
           }
         } catch (error) {
@@ -784,47 +788,65 @@ export class ConfigSnapshotService implements IConfigSnapshotService {
   /**
    * 将配置行转换为 API 格式
    */
-  private convertToApiFormat(line: string): { apiCommand: string; params: string[] } {
+  private convertToIntentCommand(line: string): { apiCommand: string; params: string[] } {
     const trimmed = line.trim();
 
     // 跳过空行和注释
-    if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith(':')) {
+    if (!trimmed || trimmed.startsWith('#')) {
       return { apiCommand: '', params: [] };
     }
 
-    // 解析命令和参数
-    const parts = trimmed.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || [];
-    if (parts.length === 0) {
-      return { apiCommand: '', params: [] };
+    // 解析意图格式: "intent:category/operation param=value"
+    const colonIdx = trimmed.indexOf(':');
+    if (colonIdx > 0 && !trimmed.startsWith('/')) {
+      const afterColon = trimmed.substring(colonIdx + 1).trim();
+      const parts = afterColon.split(/\s+/);
+      const pathPart = parts[0];
+      const paramParts = parts.slice(1);
+
+      const apiCommand = '/' + pathPart.replace(/\./g, '/');
+      const params = paramParts
+        .filter(p => p.includes('='))
+        .map(p => `=${p.replace(/^["']|["']$/g, '')}`);
+
+      return { apiCommand, params };
     }
 
-    const pathParts: string[] = [];
-    const params: string[] = [];
-    let foundFirstParam = false;
-
-    for (const part of parts) {
-      if (part.includes('=')) {
-        foundFirstParam = true;
-        // 移除引号
-        const cleanPart = part.replace(/^["']|["']$/g, '');
-        params.push(`=${cleanPart}`);
-      } else if (!foundFirstParam) {
-        pathParts.push(part);
+    // 路径格式: "/category/operation param=value"
+    if (trimmed.startsWith('/')) {
+      const parts = trimmed.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || [];
+      if (parts.length === 0) {
+        return { apiCommand: '', params: [] };
       }
-    }
 
-    // 构建 API 命令路径
-    let apiCommand = '';
-    for (const part of pathParts) {
-      if (part.startsWith('/')) {
-        apiCommand += part;
-      } else {
-        apiCommand += '/' + part;
+      const pathParts: string[] = [];
+      const params: string[] = [];
+      let foundFirstParam = false;
+
+      for (const part of parts) {
+        if (part.includes('=')) {
+          foundFirstParam = true;
+          const cleanPart = part.replace(/^["']|["']$/g, '');
+          params.push(`=${cleanPart}`);
+        } else if (!foundFirstParam) {
+          pathParts.push(part);
+        }
       }
-    }
-    apiCommand = apiCommand.replace(/\/+/g, '/');
 
-    return { apiCommand, params };
+      let apiCommand = '';
+      for (const part of pathParts) {
+        if (part.startsWith('/')) {
+          apiCommand += part;
+        } else {
+          apiCommand += '/' + part;
+        }
+      }
+      apiCommand = apiCommand.replace(/\/+/g, '/');
+
+      return { apiCommand, params };
+    }
+
+    return { apiCommand: '', params: [] };
   }
 
   // ==================== 差异对比 ====================

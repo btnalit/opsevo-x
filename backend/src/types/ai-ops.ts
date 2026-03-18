@@ -110,7 +110,7 @@ export interface AlertRule {
   channels: string[];         // 通知渠道 ID 列表
   autoResponse?: {
     enabled: boolean;
-    script: string;           // RouterOS 脚本
+    script: string;           // 自动响应脚本
   };
   createdAt: number;
   updatedAt: number;
@@ -259,8 +259,8 @@ export interface ConfigSnapshot {
   size: number;
   checksum: string;
   metadata?: {
-    routerVersion?: string;
-    routerModel?: string;
+    deviceVersion?: string;
+    deviceModel?: string;
   };
   tenantId?: string;          // 租户 ID
   deviceId?: string;          // 设备 ID
@@ -359,7 +359,8 @@ export interface FaultPattern {
   autoHeal: boolean;         // 是否自动修复
   builtin: boolean;          // 是否内置模式
   conditions: FaultCondition[];
-  remediationScript: string;  // RouterOS 修复脚本
+  conditionLogic?: 'AND' | 'OR'; // 条件匹配逻辑，默认 'OR'（任一条件匹配即触发）
+  remediationScript: string;  // 设备修复脚本
   rollbackScript?: string;    // 回滚脚本 (Requirements: 4.1, 4.5)
   verificationScript?: string; // 验证脚本
   createdAt: number;
@@ -918,7 +919,7 @@ export interface SyslogMessage {
   severity: number;           // Syslog severity (0-7)
   timestamp: Date;
   hostname: string;
-  topic: string;              // RouterOS topic (e.g., 'system', 'firewall')
+  topic: string;              // Syslog topic (e.g., 'system', 'firewall')
   message: string;
   raw: string;
 }
@@ -946,7 +947,7 @@ export interface SyslogEvent {
   source: 'syslog';
   timestamp: number;
   severity: AlertSeverity;
-  category: string;           // 映射自 RouterOS topic
+  category: string;           // 映射自 Syslog topic
   message: string;
   rawData: SyslogMessage;
   metadata: {
@@ -1358,7 +1359,7 @@ export interface StepVerification {
 export interface RemediationStep {
   order: number;
   description: string;
-  command: string;            // RouterOS 命令
+  command: string;            // 设备命令
   verification: StepVerification;
   autoExecutable: boolean;    // 是否可自动执行
   riskLevel: RiskLevel;

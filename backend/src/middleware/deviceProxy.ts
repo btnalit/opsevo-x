@@ -2,15 +2,13 @@
  * 设备代理中间件
  *
  * 解析请求路径中的 deviceId 参数，验证设备归属（tenant 匹配），
- * 从 DevicePool 获取或创建 RouterOS 连接，并注入到请求上下文中。
+ * 通过 DeviceDriverManager 获取泛化设备驱动，并注入到请求上下文中。
  *
  * - 缺少 deviceId：返回 400
  * - 设备不属于当前租户：返回 403
  * - 设备未连接时自动尝试连接
- * - 连接成功：注入 req.routerosClient 和 req.deviceId，调用 next()
+ * - 连接成功：注入 req.deviceDriver 和 req.deviceId，调用 next()
  * - 连接失败：返回 502
- *
- * Requirements: 6.1, 6.2, 6.3, 6.4
  */
 
 import { Request, Response, NextFunction } from 'express';
@@ -63,17 +61,25 @@ export function createDeviceMiddleware(
         return;
       }
 
-      // 4. 从 DevicePool 获取或创建连接（设备未连接时自动尝试连接）
-      const client = await devicePool.getConnection(tenantId, deviceId);
-
-      // 5. 注入到请求上下文
-      req.routerosClient = client;
+      // 4. 注入设备 ID 到请求上下文
       req.deviceId = deviceId;
 
-      // 6. 注入泛化设备驱动（如果已通过 DeviceDriverManager 连接）
+      // 5. 通过 DeviceDriverManager 获取泛化设备驱动
       const driver = deviceDriverManager.getDriver(deviceId);
       if (driver) {
         req.deviceDriver = driver;
+      } else {
+        // 回退：尝试通过 DevicePool 建立连接（兼容旧设备）
+        try {
+          await devicePool.getConnection(tenantId, deviceId);
+          // 重新尝试获取驱动
+          const retryDriver = deviceDriverManager.getDriver(deviceId);
+          if (retryDriver) {
+            req.deviceDriver = retryDriver;
+          }
+        } catch (poolError) {
+          logger.debug(`DevicePool fallback connection failed for ${deviceId}: ${(poolError as Error).message}`);
+        }
       }
 
       next();

@@ -59,7 +59,7 @@ describe('PromptComposerAdapter', () => {
     it('should include BasePersona unified persona text', () => {
       const result = adapter.buildKnowledgeEnhancedPrompt('测试查询', []);
 
-      expect(result).toContain('RouterOS 智能运维助手');
+      expect(result).toContain('AIOps 智能运维助手');
     });
 
     it('should include knowledge context when knowledge is provided', () => {
@@ -118,7 +118,7 @@ describe('PromptComposerAdapter', () => {
     it('should include DeviceInfo module content', () => {
       const result = adapter.buildKnowledgeEnhancedPrompt('测试', []);
 
-      expect(result).toContain('MikroTik RouterOS');
+      expect(result).toContain('通用设备');
     });
   });
 
@@ -128,14 +128,13 @@ describe('PromptComposerAdapter', () => {
     it('should include BasePersona unified persona', () => {
       const result = adapter.buildReActPrompt('查看接口', 'tools', 'steps');
 
-      expect(result).toContain('RouterOS 智能运维助手');
+      expect(result).toContain('AIOps 智能运维助手');
     });
 
     it('should include DeviceInfo module content', () => {
       const result = adapter.buildReActPrompt('查看接口', 'tools', 'steps');
 
-      expect(result).toContain('MikroTik RouterOS');
-      expect(result).toContain('RouterOS 7.x');
+      expect(result).toContain('通用设备');
     });
 
     it('should include ReActFormat module content', () => {
@@ -201,7 +200,7 @@ describe('PromptComposerAdapter', () => {
         '查看接口', 'tools', 'steps', 'rag context'
       );
 
-      expect(result).toContain('RouterOS 智能运维助手');
+      expect(result).toContain('AIOps 智能运维助手');
     });
 
     it('should include KnowledgeGuide module content', () => {
@@ -218,7 +217,7 @@ describe('PromptComposerAdapter', () => {
         '查看接口', 'tools', 'steps', 'rag context'
       );
 
-      expect(result).toContain('MikroTik RouterOS');
+      expect(result).toContain('通用设备');
       expect(result).toContain('Thought:');
       expect(result).toContain('API 路径安全参考');
       expect(result).toContain('分批处理协议');
@@ -250,7 +249,7 @@ describe('PromptComposerAdapter', () => {
         '查看接口', 'tools', 'steps', 5
       );
 
-      expect(result).toContain('RouterOS 智能运维助手');
+      expect(result).toContain('AIOps 智能运维助手');
     });
 
     it('should include ParallelFormat module content', () => {
@@ -284,7 +283,7 @@ describe('PromptComposerAdapter', () => {
         '查看接口', 'tools', 'steps', 5
       );
 
-      expect(result).toContain('MikroTik RouterOS');
+      expect(result).toContain('通用设备');
     });
 
     it('should include parallel execution reminder in suffix', () => {
@@ -302,7 +301,7 @@ describe('PromptComposerAdapter', () => {
     it('should include BasePersona unified persona', () => {
       const result = adapter.buildAlertAnalysisPrompt({});
 
-      expect(result).toContain('RouterOS 智能运维助手');
+      expect(result).toContain('AIOps 智能运维助手');
     });
 
     it('should include ChainOfThought alert analysis steps', () => {
@@ -342,7 +341,7 @@ describe('PromptComposerAdapter', () => {
     it('should include BasePersona and batch analysis steps', () => {
       const result = adapter.buildBatchAlertAnalysisPrompt({});
 
-      expect(result).toContain('RouterOS 智能运维助手');
+      expect(result).toContain('AIOps 智能运维助手');
       expect(result).toContain('告警分类汇总');
       expect(result).toContain('识别关联告警');
       expect(result).toContain('确定优先级');
@@ -363,7 +362,7 @@ describe('PromptComposerAdapter', () => {
     it('should include BasePersona and health report steps', () => {
       const result = adapter.buildHealthReportAnalysisPrompt({});
 
-      expect(result).toContain('RouterOS 智能运维助手');
+      expect(result).toContain('AIOps 智能运维助手');
       expect(result).toContain('评估整体健康状态');
       expect(result).toContain('识别异常指标');
       expect(result).toContain('分析趋势变化');
@@ -383,7 +382,7 @@ describe('PromptComposerAdapter', () => {
     it('should include BasePersona and config change steps', () => {
       const result = adapter.buildConfigDiffAnalysisPrompt({});
 
-      expect(result).toContain('RouterOS 智能运维助手');
+      expect(result).toContain('AIOps 智能运维助手');
       expect(result).toContain('识别变更内容');
       expect(result).toContain('评估变更风险');
       expect(result).toContain('验证配置一致性');
@@ -404,7 +403,7 @@ describe('PromptComposerAdapter', () => {
     it('should include BasePersona and fault diagnosis steps', () => {
       const result = adapter.buildFaultDiagnosisPrompt({});
 
-      expect(result).toContain('RouterOS 智能运维助手');
+      expect(result).toContain('AIOps 智能运维助手');
       expect(result).toContain('收集故障现象');
       expect(result).toContain('分析可能原因');
       expect(result).toContain('制定排查步骤');
@@ -423,7 +422,7 @@ describe('PromptComposerAdapter', () => {
   // ==================== Property 4: 统一人设贯穿所有 Prompt ====================
 
   describe('unified persona across all prompts', () => {
-    it('should include "RouterOS 智能运维助手" in all prompt types', () => {
+    it('should include "AIOps 智能运维助手" in all prompt types', () => {
       const prompts = [
         adapter.buildKnowledgeEnhancedPrompt('test', []),
         adapter.buildReActPrompt('test', 'tools', 'steps'),
@@ -437,7 +436,7 @@ describe('PromptComposerAdapter', () => {
       ];
 
       for (const prompt of prompts) {
-        expect(prompt).toContain('RouterOS 智能运维助手');
+        expect(prompt).toContain('AIOps 智能运维助手');
       }
     });
   });
@@ -488,7 +487,7 @@ describe('PromptComposerAdapter', () => {
       const adapterNoService = new PromptComposerAdapter(composer);
       const result = adapterNoService.buildAlertAnalysisPrompt({});
 
-      expect(result).toContain('RouterOS 智能运维助手');
+      expect(result).toContain('AIOps 智能运维助手');
       expect(result).toContain('分析推理步骤');
     });
   });
@@ -499,7 +498,7 @@ describe('PromptComposerAdapter', () => {
     it('should handle empty tools and steps strings', () => {
       const result = adapter.buildReActPrompt('查看接口', '', '');
 
-      expect(result).toContain('RouterOS 智能运维助手');
+      expect(result).toContain('AIOps 智能运维助手');
       expect(result).toContain('用户请求：查看接口');
     });
 
@@ -559,8 +558,8 @@ describe('PromptComposerAdapter', () => {
       expect(result).toContain('查看接口');
       expect(result).toContain('tools');
       expect(result).toContain('steps');
-      // Legacy template contains RouterOS assistant text
-      expect(result).toContain('MikroTik RouterOS');
+      // Legacy template contains generalized assistant text
+      expect(result).toContain('AIOps 智能运维助手');
     });
 
     it('should fall back to legacy template when buildKnowledgeFirstReActPrompt fails', () => {
@@ -809,7 +808,7 @@ describe('PromptComposerAdapter', () => {
       // Should contain the custom persona instead of default
       expect(result).toContain(customPersona);
       // Should NOT contain the default persona text
-      expect(result).not.toContain('RouterOS 智能运维助手');
+      expect(result).not.toContain('AIOps 智能运维助手');
     });
 
     it('should use default module content in build methods when no custom content', () => {
@@ -819,7 +818,7 @@ describe('PromptComposerAdapter', () => {
       const result = adapterNoService.buildReActPrompt('查看接口', 'tools', 'steps');
 
       // Should contain the default persona
-      expect(result).toContain('RouterOS 智能运维助手');
+      expect(result).toContain('AIOps 智能运维助手');
     });
 
     it('should preload content for all modules with templateName', async () => {

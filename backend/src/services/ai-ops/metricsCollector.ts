@@ -1,6 +1,6 @@
 /**
  * MetricsCollector 指标采集服务
- * 负责周期性采集 RouterOS 设备的运行指标
+ * 负责周期性采集设备的运行指标
  *
  * Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 1.10
  * - 1.1: 按配置的采集间隔周期性采集指标
@@ -27,10 +27,9 @@ import {
   RateCalculationConfig,
   DataAvailabilityStatus,
 } from '../../types/ai-ops';
-import { routerosClient, RouterOSClient } from '../routerosClient';
 import { logger } from '../../utils/logger';
-import type { DevicePool } from '../device/devicePool';
-import type { DataStore } from '../core/dataStore';
+import type { DevicePool, DeviceClient } from '../device/devicePool';
+import type { DataStore } from '../dataStore';
 
 // 告警评估回调类型
 type AlertEvaluationCallback = (metrics: { system: SystemMetrics; interfaces: InterfaceMetrics[] }) => Promise<void>;
@@ -281,33 +280,32 @@ export class MetricsCollector implements IMetricsCollector {
   }
 
   /**
-   * 获取 RouterOS 客户端
+   * 获取设备客户端
    * 如果指定了 deviceId 且 DevicePool 可用，返回对应设备的客户端
-   * 否则返回全局 routerosClient (兼容单设备模式)
+   * 否则返回 null（需先通过 DevicePool 注册设备）
    */
-  private async getClient(deviceId?: string): Promise<RouterOSClient> {
+  private async getClient(deviceId?: string): Promise<DeviceClient | null> {
     if (this.devicePool && deviceId) {
       const connections = this.devicePool.getConnectionsMap();
       const conn = connections.get(deviceId);
       if (conn && conn.status === 'connected' && conn.client.isConnected()) {
         return conn.client;
       }
-      logger.warn(`Device ${deviceId} not found or not connected in DevicePool, falling back to default client`);
+      logger.warn(`Device ${deviceId} not found or not connected in DevicePool`);
     }
 
-    // 如果没有 DevicePool 或者没有找到指定设备，使用默认客户端
-    // 注意：在多设备模式下，如果请求了特定设备但没找到，这可能会导致返回错误的（默认）设备数据
-    // 但为了保持健壮性，暂时这样做，并在上面记录警告
-    return routerosClient;
+    // 无可用客户端
+    return null;
   }
 
 
   /**
-   * 从 RouterOS 采集系统指标
+   * 从设备采集系统指标
    * @param deviceId 可选的设备 ID
    */
   private async collectSystemMetrics(deviceId?: string): Promise<SystemMetrics> {
     const targetClient = await this.getClient(deviceId);
+    if (!targetClient) throw new Error(`No connected client for device ${deviceId || 'default'}`);
     // 获取系统资源信息
     const resources = await targetClient.print<{
       'cpu-load': string;
@@ -339,7 +337,7 @@ export class MetricsCollector implements IMetricsCollector {
     const usedDisk = totalDisk - freeDisk;
     const diskUsage = totalDisk > 0 ? Math.round((usedDisk / totalDisk) * 100) : 0;
 
-    // 解析运行时间 (RouterOS 格式: 1w2d3h4m5s)
+    // 解析运行时间 (设备格式: 1w2d3h4m5s)
     const uptimeStr = resource.uptime || '0s';
     const uptime = this.parseUptime(uptimeStr);
 
@@ -362,7 +360,7 @@ export class MetricsCollector implements IMetricsCollector {
   }
 
   /**
-   * 解析 RouterOS 运行时间格式
+   * 解析设备运行时间格式
    * 格式: 1w2d3h4m5s
    */
   private parseUptime(uptimeStr: string): number {
@@ -793,11 +791,12 @@ export class MetricsCollector implements IMetricsCollector {
   }
 
   /**
-   * 从 RouterOS 采集接口指标
+   * 从设备采集接口指标
    * @param deviceId 可选的设备 ID
    */
   private async collectInterfaceMetrics(deviceId?: string): Promise<InterfaceMetrics[]> {
     const targetClient = await this.getClient(deviceId);
+    if (!targetClient) throw new Error(`No connected client for device ${deviceId || 'default'}`);
     // 获取接口列表
     const interfaces = await targetClient.print<{
       name: string;
@@ -879,9 +878,10 @@ export class MetricsCollector implements IMetricsCollector {
       }
 
       // 单设备采集逻辑（向后兼容）
-      // 检查 RouterOS 连接
-      if (!routerosClient.isConnected()) {
-        logger.warn('RouterOS not connected, skipping metrics collection');
+      // 检查设备连接（需通过 DevicePool 注册设备）
+      const singleClient = await this.getClient();
+      if (!singleClient) {
+        logger.warn('No device client available, skipping metrics collection');
         this.consecutiveErrors++;
         return;
       }
@@ -1000,7 +1000,7 @@ export class MetricsCollector implements IMetricsCollector {
 
         // 写入 health_metrics 表
         if (this.dataStore) {
-          this.writeMetricsToDb(pooledConn.tenantId, deviceId, system, interfaces);
+          await this.writeMetricsToDb(pooledConn.tenantId, deviceId, system, interfaces);
         }
 
         // Store in multi-device map
@@ -1039,12 +1039,12 @@ export class MetricsCollector implements IMetricsCollector {
    * @param system 系统指标
    * @param interfaces 接口指标
    */
-  private writeMetricsToDb(
+  private async writeMetricsToDb(
     tenantId: string,
     deviceId: string,
     system: SystemMetrics,
     interfaces: InterfaceMetrics[]
-  ): void {
+  ): Promise<void> {
     if (!this.dataStore) {
       return;
     }
@@ -1057,7 +1057,6 @@ export class MetricsCollector implements IMetricsCollector {
         { name: 'uptime', value: typeof system.uptime === 'string' ? parseInt(system.uptime, 10) : system.uptime },
       ];
 
-      // 添加接口级别的指标
       for (const iface of interfaces) {
         metricEntries.push(
           { name: `interface_${iface.name}_rx_bytes`, value: iface.rxBytes },
@@ -1065,11 +1064,12 @@ export class MetricsCollector implements IMetricsCollector {
         );
       }
 
-      const insertStmt = `INSERT INTO health_metrics (tenant_id, device_id, metric_name, metric_value) VALUES (?, ?, ?, ?)`;
-
-      this.dataStore.transaction(() => {
+      await this.dataStore.transaction(async (tx) => {
         for (const entry of metricEntries) {
-          this.dataStore!.run(insertStmt, [tenantId, deviceId, entry.name, entry.value]);
+          await tx.execute(
+            'INSERT INTO health_metrics (tenant_id, device_id, metric_name, metric_value) VALUES ($1, $2, $3, $4)',
+            [tenantId, deviceId, entry.name, entry.value]
+          );
         }
       });
 
@@ -1410,12 +1410,12 @@ export class MetricsCollector implements IMetricsCollector {
         const sql = `
           SELECT metric_name, metric_value, collected_at 
           FROM health_metrics 
-          WHERE device_id = ? AND collected_at >= ? AND collected_at <= ?
+          WHERE device_id = $1 AND collected_at >= $2 AND collected_at <= $3
           AND metric_name IN ('cpu_usage', 'memory_usage', 'disk_usage', 'uptime')
           ORDER BY collected_at ASC
         `;
 
-        const rows = this.dataStore.query<{ metric_name: string; metric_value: number; collected_at: string }>(
+        const rows = await this.dataStore.query<{ metric_name: string; metric_value: number; collected_at: string }>(
           sql,
           [deviceId, isoFrom, isoTo]
         );
@@ -1493,12 +1493,12 @@ export class MetricsCollector implements IMetricsCollector {
         const sql = `
           SELECT metric_name, metric_value, collected_at 
           FROM health_metrics 
-          WHERE device_id = ? AND collected_at >= ? AND collected_at <= ?
+          WHERE device_id = $1 AND collected_at >= $2 AND collected_at <= $3
           AND metric_name LIKE 'interface_%'
           ORDER BY collected_at ASC
         `;
 
-        const rows = this.dataStore.query<{ metric_name: string; metric_value: number; collected_at: string }>(
+        const rows = await this.dataStore.query<{ metric_name: string; metric_value: number; collected_at: string }>(
           sql,
           [deviceId, isoFrom, isoTo]
         );
@@ -1618,7 +1618,7 @@ export class MetricsCollector implements IMetricsCollector {
         }
       } else {
         // 单设备模式兼容
-        isRouterConnected = routerosClient.isConnected();
+        isRouterConnected = false;
       }
 
       return {
@@ -1646,7 +1646,7 @@ export class MetricsCollector implements IMetricsCollector {
 
     return {
       isRunning: this.isRunning,
-      isRouterConnected: routerosClient.isConnected(),
+      isRouterConnected: false,
       interfaceCount: this.trafficHistory.size,
       hasData,
       lastCollectionTime,
@@ -1746,7 +1746,7 @@ export class MetricsCollector implements IMetricsCollector {
                     const parts = compositeKey.split(':');
                     if (parts.length >= 2) {
                       // Take the last part as interface name? 
-                      // What if interface name has colon (e.g. VLAN)? Unlikely in RouterOS generally but possible?
+                      // What if interface name has colon (e.g. VLAN)? Unlikely generally but possible?
                       // Let's safe-guard: everything after the first colon
                       const firstColon = compositeKey.indexOf(':');
                       history.name = compositeKey.substring(firstColon + 1);
@@ -1866,7 +1866,7 @@ export class MetricsCollector implements IMetricsCollector {
   private async collectTrafficRates(): Promise<void> {
     try {
       // Use map to store clients to collect from: deviceId -> client
-      const targets = new Map<string, RouterOSClient>();
+      const targets = new Map<string, DeviceClient>();
 
       // 1. Device Pool (Multi-device)
       if (this.devicePool) {
@@ -1878,10 +1878,7 @@ export class MetricsCollector implements IMetricsCollector {
         }
       }
 
-      // 2. Legacy / Single Device
-      if (targets.size === 0 && routerosClient.isConnected()) {
-        targets.set('local', routerosClient);
-      }
+      // 2. No legacy fallback — devices must be registered via DevicePool
 
       if (targets.size === 0) {
         return;

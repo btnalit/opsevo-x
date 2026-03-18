@@ -216,9 +216,9 @@
           <el-card shadow="hover" class="resource-card glass-panel">
             <div class="resource-header">
               <el-icon :size="24" color="var(--el-color-warning)"><i-ep-message-box /></el-icon>
-              <span class="resource-title">EventBus 队列深度</span>
+              <span class="resource-title">EventBus 事件发布总数</span>
             </div>
-            <div class="perception-stat-value">{{ perceptionStats.queueDepth }}</div>
+            <div class="perception-stat-value">{{ perceptionStats.totalPublishedCount }}</div>
           </el-card>
         </el-col>
         <el-col :xs="24" :sm="8">
@@ -522,7 +522,7 @@ const scheduledTasks = ref<ScheduledTask[]>([])
 const trafficData = ref<Record<string, TrafficRatePoint[]>>({})
 const trafficStatus = ref<TrafficCollectionStatus | null>(null)
 const systemInfo = ref<SystemResource | null>(null)
-const perceptionStats = ref({ activeSources: 0, queueDepth: 0, totalEvents: 0 })
+const perceptionStats = ref({ activeSources: 0, totalPublishedCount: 0, totalEvents: 0 })
 let refreshTimer: ReturnType<typeof setInterval> | null = null
 
 // Computed
@@ -731,7 +731,7 @@ const loadDashboardData = async () => {
         perceptionStats.value.activeSources = sourcesRes.data.data.filter(s => s.status === 'active').length
       }
       if (statsRes.data.success && statsRes.data.data) {
-        perceptionStats.value.queueDepth = statsRes.data.data.queueDepth
+        perceptionStats.value.totalPublishedCount = statsRes.data.data.totalPublishedCount
         perceptionStats.value.totalEvents = statsRes.data.data.totalEvents
       }
     } catch { /* perception stats are non-critical */ }

@@ -12,13 +12,13 @@
  *
  * 核心层（Core Layer）：启动时立即初始化
  *   - ConfigService：配置服务
- *   - RouterOSClient：RouterOS 客户端（依赖 ConfigService）
+ *   - DeviceClient：设备客户端（依赖 ConfigService）
  *   - EvolutionConfig：智能进化配置服务
  *   注：DataStore、AuthService、DeviceManager、DevicePool 在 index.ts 的 registerAuthRoutes() 中初始化
  *
  * 业务层（Business Layer）：延迟初始化，首次访问时按需加载
  *   - FingerprintCache、AdapterPool、AuditLogger、NotificationService
- *   - VectorDatabase (SQLiteVectorStore)、EmbeddingService
+ *   - VectorDatabase (VectorStoreClient)、EmbeddingService
  *   - MetricsCollector、AlertEngine、KnowledgeBase、Scheduler
  *   - AIAnalyzer、RAGEngine、DecisionEngine、RootCauseAnalyzer、RemediationAdvisor
  *   - AlertPipeline、UnifiedAgentService、HealthReportService
@@ -35,7 +35,6 @@ import { logger } from '../utils/logger';
 export const SERVICE_NAMES = {
   // ---- 核心层服务（启动时立即初始化） ----
   CONFIG_SERVICE: 'configService',
-  ROUTEROS_CLIENT: 'routerosClient',
   EVOLUTION_CONFIG: 'evolutionConfig',
 
   // ---- 核心基础设施（在 index.ts registerAuthRoutes 中初始化） ----
@@ -94,34 +93,6 @@ function registerCoreServices(): void {
     factory: async () => {
       const { configService } = await import('./configService');
       return configService;
-    },
-  });
-
-  // RouterOSClient - RouterOS 客户端
-  serviceRegistry.register({
-    name: SERVICE_NAMES.ROUTEROS_CLIENT,
-    dependencies: [SERVICE_NAMES.CONFIG_SERVICE],
-    factory: async () => {
-      const { routerosClient } = await import('./routerosClient');
-      const { configService } = await import('./configService');
-
-      // 尝试自动恢复连接
-      try {
-        const savedConfig = await configService.loadConfig();
-        if (savedConfig) {
-          logger.info('Found saved connection config, attempting auto-connect...');
-          const connected = await routerosClient.connect(savedConfig);
-          if (connected) {
-            logger.info('Auto-connect to RouterOS successful');
-          } else {
-            logger.warn('Auto-connect to RouterOS failed, manual connection required');
-          }
-        }
-      } catch (error) {
-        logger.warn('Auto-connect failed:', (error as Error).message);
-      }
-
-      return routerosClient;
     },
   });
 
@@ -326,21 +297,20 @@ function registerCoreServices(): void {
     },
   });
 
-  // DataStore - 数据存储服务（SQLite 旧版）
+  // DataStore - 数据存储服务（PostgreSQL）
+  // Requirements: C1.2 - 移除 SQLite 回退，PgDataStore 为唯一数据存储
   serviceRegistry.register({
     name: SERVICE_NAMES.DATA_STORE,
     dependencies: [],
     factory: async () => {
-      const path = await import('path');
-      const { DataStore } = await import('./core/dataStore');
-
-      const dataStore = new DataStore({
-        dbPath: path.join(process.cwd(), 'data', 'routeros-ai-ops.db'),
-        migrationsPath: path.join(__dirname, '..', 'migrations'),
-      });
-      await dataStore.initialize();
-      logger.info('DataStore initialized successfully');
-      return dataStore;
+      const { PgDataStore } = await import('./pgDataStore');
+      const pgDataStore = new PgDataStore();
+      const healthy = await pgDataStore.healthCheck();
+      if (!healthy) {
+        logger.error('PgDataStore health check failed — PostgreSQL is required');
+      }
+      logger.info('DATA_STORE using PgDataStore (PostgreSQL)');
+      return pgDataStore;
     },
   });
 
@@ -541,26 +511,29 @@ function registerBusinessServices(): void {
     },
   });
 
-  // VectorDatabase - 向量数据库服务（使用 SQLiteVectorStore 替代 LanceDB）
+  // VectorDatabase - 向量数据库服务（Python Core）
+  // Requirements: C1.2 - 移除 SQLiteVectorStore 回退，VectorStoreClient 为唯一向量存储
   serviceRegistry.register({
     name: SERVICE_NAMES.VECTOR_DATABASE,
     dependencies: [],
     lazy: true,
     factory: async () => {
-      const { DataStore } = await import('./core/dataStore');
-      const { SQLiteVectorStore } = await import('./ai-ops/rag/sqliteVectorStore');
-      const path = await import('path');
-
-      const dataStore = new DataStore({
-        dbPath: path.join(process.cwd(), 'data', 'ai-ops', 'rag', 'vector.db'),
-        // 使用向量存储专用的迁移目录，不运行主数据库迁移
-        migrationsPath: path.join(__dirname, '..', 'migrations', 'vector'),
-      });
-      await dataStore.initialize();
-
-      const vectorStore = new SQLiteVectorStore(dataStore);
-      await vectorStore.initialize();
-      return vectorStore;
+      try {
+        const { VectorStoreClient } = await import('./ai-ops/rag/vectorStoreClient');
+        const vectorClient = new VectorStoreClient();
+        const healthy = await vectorClient.healthCheck();
+        if (healthy) {
+          logger.info('VECTOR_DATABASE using VectorStoreClient (Python Core)');
+          return vectorClient;
+        }
+        logger.warn('VectorStoreClient health check failed, Python Core may be unavailable');
+        return vectorClient; // 返回实例，由降级管理器处理不可用状态
+      } catch (error) {
+        logger.error('VectorStoreClient initialization failed:', error);
+        // 返回一个空壳实例，避免服务注册失败
+        const { VectorStoreClient } = await import('./ai-ops/rag/vectorStoreClient');
+        return new VectorStoreClient();
+      }
     },
   });
 
@@ -586,7 +559,7 @@ function registerBusinessServices(): void {
   // MetricsCollector - 指标采集服务
   serviceRegistry.register({
     name: SERVICE_NAMES.METRICS_COLLECTOR,
-    dependencies: [SERVICE_NAMES.ROUTEROS_CLIENT],
+    dependencies: [],
     lazy: true,
     factory: async () => {
       const { metricsCollector } = await import('./ai-ops/metricsCollector');
@@ -664,7 +637,7 @@ function registerBusinessServices(): void {
   // ConfigSnapshotService - 配置快照服务
   serviceRegistry.register({
     name: SERVICE_NAMES.CONFIG_SNAPSHOT_SERVICE,
-    dependencies: [SERVICE_NAMES.ROUTEROS_CLIENT],
+    dependencies: [],
     lazy: true,
     factory: async () => {
       const { configSnapshotService } = await import('./ai-ops/configSnapshotService');
@@ -719,7 +692,7 @@ function registerBusinessServices(): void {
   // HealthMonitor - 健康监控服务
   serviceRegistry.register({
     name: SERVICE_NAMES.HEALTH_MONITOR,
-    dependencies: [SERVICE_NAMES.ROUTEROS_CLIENT],
+    dependencies: [],
     lazy: true,
     factory: async () => {
       const { healthMonitor } = await import('./ai-ops/healthMonitor');
@@ -796,7 +769,7 @@ function registerBusinessServices(): void {
   // FaultHealer - 故障自愈服务
   serviceRegistry.register({
     name: SERVICE_NAMES.FAULT_HEALER,
-    dependencies: [SERVICE_NAMES.ROUTEROS_CLIENT],
+    dependencies: [],
     lazy: true,
     factory: async () => {
       const { faultHealer } = await import('./ai-ops/faultHealer');
@@ -883,6 +856,31 @@ function registerBusinessServices(): void {
       const { healthReportService } = await import('./ai-ops/healthReportService');
       await healthReportService.initialize();
       return healthReportService;
+    },
+  });
+
+  // SyslogManager - Syslog 接收与解析管理服务
+  // FeatureFlag: use_syslog_manager 控制是否启动
+  serviceRegistry.register({
+    name: SERVICE_NAMES.SYSLOG_MANAGER,
+    dependencies: [SERVICE_NAMES.PG_DATA_STORE],
+    lazy: true,
+    factory: async () => {
+      const { SyslogManager } = await import('./syslog/syslogManager');
+      const { globalEventBus } = await import('./eventBus');
+      const pgDs = await serviceRegistry.getAsync<any>(SERVICE_NAMES.PG_DATA_STORE);
+      const manager = new SyslogManager(pgDs, globalEventBus);
+
+      const { FeatureFlagManager } = await import('./ai-ops/stateMachine/featureFlagManager');
+      const ffm = new FeatureFlagManager();
+      if (ffm.isControlPointEnabled('use_syslog_manager')) {
+        await manager.start();
+        logger.info('SyslogManager started (use_syslog_manager enabled)');
+      } else {
+        logger.info('SyslogManager created but not started (use_syslog_manager disabled)');
+      }
+
+      return manager;
     },
   });
 

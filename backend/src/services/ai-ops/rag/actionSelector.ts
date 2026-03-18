@@ -456,7 +456,10 @@ export class ActionSelector {
   }
 
   /**
-   * 语义路由：根据用户消息内容生成工具参数
+   * 语义路由：根据用户消息内容生成工具参数（回退默认值）
+   * 当 LLM 无法正确生成工具参数时，使用关键词匹配猜测路径。
+   * 这些路径是常见设备 API 的默认映射，实际路径应由 CapabilityManifest 动态提供。
+   * TODO: 优先从 CapabilityManifest 获取设备支持的路径映射
    */
   generateToolInput(toolName: string, message: string): Record<string, unknown> | null {
     switch (toolName) {
@@ -640,9 +643,9 @@ ${skillContext.toolPriority.map((t, i) => `${i + 1}. ${t}`).join('\n')}
 
 ## 正确的输出格式示例
 
-示例 1 - 查询设备接口：
+示例 1 - 查询设备数据：
 Action: device_query
-Action Input: {"command": "/interface"}
+Action Input: {"command": "<设备API路径>"}
 
 示例 2 - 搜索知识库：
 Action: knowledge_search
@@ -654,45 +657,31 @@ Action Input: {}
 
 示例 4 - 执行写入命令（推荐：将路径和参数写在 command 中）：
 Action: execute_command
-Action Input: {"command": "/ip/address/add address=192.168.1.1/24 interface=ether1"}
+Action Input: {"command": "<设备API路径> <参数名>=<值>"}
 
 示例 5 - 执行写入命令（路径 + args 分离写法）：
 Action: execute_command
-Action Input: {"command": "/ip/address/add", "args": {"address": "192.168.1.1/24", "interface": "ether1"}}
+Action Input: {"command": "<设备API路径>", "args": {"<参数名>": "<值>"}}
 
 示例 6 - 删除/禁用操作：
 Action: execute_command
-Action Input: {"command": "/interface/disable numbers=ether2"}`;
+Action Input: {"command": "<设备API路径> <参数>"}`;
 
     return `## 设备信息
 - 设备类型: 由 CapabilityManifest 动态提供
 - API 协议: 由设备驱动决定
 
-## 设备操作示例（具体格式由设备驱动决定）
-- IP 地址: /ip/address
-- 路由表: /ip/route
-- 接口列表: /interface
-- 系统资源: /system/resource
-- ARP 表: /ip/arp
-- DNS 配置: /ip/dns
-- DHCP 租约: /ip/dhcp-server/lease
-- 防火墙规则: /ip/firewall/filter
-- NAT 规则: /ip/firewall/nat
-- OSPF 实例: /routing/ospf/instance
-- OSPF 邻居: /routing/ospf/neighbor
+## 设备操作说明
+设备 API 路径格式由设备驱动决定，请根据知识库或设备能力清单选择正确的路径。
+常见操作类型包括：接口管理、IP 地址配置、路由管理、防火墙规则、系统资源查询等。
 
-⚠️ 重要：请仔细分析用户请求中的关键词，选择最匹配的 API 路径。
-例如：用户问"IP地址"→ /ip/address，问"接口状态"→ /interface，问"路由"→ /ip/route
+⚠️ 重要：请仔细分析用户请求中的关键词，选择最匹配的 API 路径。如果不确定路径，请先查询知识库。
 
 ## ⚠️ 分批处理提醒
-以下路径可能返回大量数据，**必须使用 limit 和 proplist 参数**：
-- /ip/firewall/connection - limit=10, proplist=src-address,dst-address,protocol,state
-- /ip/firewall/filter - limit=20, proplist=chain,action,src-address,dst-address,comment
-- /ip/firewall/nat - limit=20, proplist=chain,action,src-address,dst-address
-- /log - limit=20
-- /ip/arp - limit=50, proplist=address,mac-address,interface
-- /ip/dhcp-server/lease - limit=50, proplist=address,mac-address,host-name
-- /ip/dns/cache - limit=50
+对于可能返回大量数据的路径，**必须使用 limit 和 proplist 参数**：
+- 防火墙/连接跟踪类路径 - limit=10~20, 使用 proplist 限制字段
+- 日志类路径 - limit=20
+- ARP/DHCP/DNS 缓存类路径 - limit=50
 ${finalAnswerRestriction}
 ${skillPriorityInfo}
 
@@ -708,8 +697,8 @@ ${formatExamples}
 重要规则：
 1. device_query 用于只读查询，execute_command 用于写入/执行操作（如删除、添加、修改、脚本执行）
 2. device_query 和 execute_command 的 command 参数使用设备驱动支持的格式
-3. 正确示例: {"command": "/interface"}, {"command": "/routing/ospf/instance"}
-4. 错误示例: {"command": "/interface/print"}, {"command": "show ip route"}
+3. 正确示例: {"command": "<设备API路径>"} — 路径格式由设备驱动决定
+4. 错误示例: {"command": "<路径>/print"}, {"command": "show ip route"} — 不要附加 CLI 动词
 5. 如果工具返回 "no such command"，说明路径不对，尝试其他路径
 6. 只有在已经执行过工具并获得了实际数据后，才能输出 Final Answer
 7. **对于高危数据路径，必须使用 limit 和 proplist 参数！**

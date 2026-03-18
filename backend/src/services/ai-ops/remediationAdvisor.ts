@@ -1296,7 +1296,7 @@ export class RemediationAdvisor implements IRemediationAdvisor {
    *
    * NOTE: Commands use device-agnostic operation intent format (e.g., "query:system/resource").
    * The device driver translates these intents into device-specific commands.
-   * Legacy RouterOS CLI-style commands are still supported via DevicePool fallback
+   * Legacy CLI-style commands are still supported via DevicePool fallback
    * for backward compatibility during migration.
    */
   private async executeDeviceCommand(
@@ -1356,7 +1356,7 @@ export class RemediationAdvisor implements IRemediationAdvisor {
   }
 
   /**
-   * Legacy fallback: execute via DevicePool (RouterOS-compatible path)
+   * Legacy fallback: execute via DevicePool (backward-compatible path)
    * Maintained for backward compatibility during migration.
    */
   private async executeViaDevicePool(

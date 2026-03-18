@@ -57,7 +57,7 @@ describe('EventBus', () => {
 
     it('should increment published count', async () => {
       await bus.publish(makeEvent());
-      expect(bus.getQueueDepth()).toBe(1);
+      expect(bus.getTotalPublishedCount()).toBe(1);
     });
 
     it('should dispatch to matching subscribers', async () => {
@@ -255,21 +255,15 @@ describe('EventBus', () => {
   // ─── deprecated queue operations (PriorityQueue removed — was memory leak) ───
 
   describe('deprecated queue operations', () => {
-    it('dequeue should return undefined (PriorityQueue removed)', async () => {
-      await bus.publish(makeEvent({ priority: 'critical', source: 'a' }));
-      expect(bus.dequeue()).toBeUndefined();
-    });
-
     it('peek should return undefined (PriorityQueue removed)', async () => {
       await bus.publish(makeEvent({ priority: 'critical' }));
       expect(bus.peek()).toBeUndefined();
     });
 
-    it('getQueueDepth should return total published count', async () => {
+    it('getTotalPublishedCount should return total published count', async () => {
       await bus.publish(makeEvent({ priority: 'low', source: 'a' }));
       await bus.publish(makeEvent({ priority: 'critical', source: 'b' }));
-      await bus.publish(makeEvent({ priority: 'high', source: 'c' }));
-      expect(bus.getQueueDepth()).toBe(3);
+      expect(bus.getTotalPublishedCount()).toBe(2);
     });
   });
 
@@ -283,7 +277,7 @@ describe('EventBus', () => {
 
       bus.reset();
 
-      expect(bus.getQueueDepth()).toBe(0);
+      expect(bus.getTotalPublishedCount()).toBe(0);
       expect(bus.getSubscriberCount('alert')).toBe(0);
       expect(bus.getActiveSources().size).toBe(0);
     });

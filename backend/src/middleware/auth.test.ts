@@ -14,33 +14,12 @@
 import { Request, Response, NextFunction } from 'express';
 import { createAuthMiddleware } from './auth';
 import { AuthService, AuthServiceError } from '../services/auth/authService';
-import { DataStore } from '../services/core/dataStore';
-import * as path from 'path';
+import type { DataStore } from '../services/dataStore';
+import { createMockPgDataStore } from '../test/helpers/mockPgDataStore';
 
 // ─── Test Helpers ────────────────────────────────────────────────────────────
 
 const TEST_JWT_SECRET = 'test-middleware-secret';
-
-async function createTestDataStore(): Promise<DataStore> {
-  const store = new DataStore({
-    inMemory: true,
-    migrationsPath: path.join(__dirname, '__no_migrations__'),
-  });
-  await store.initialize();
-
-  store.run(`
-    CREATE TABLE IF NOT EXISTS users (
-      id TEXT PRIMARY KEY,
-      username TEXT UNIQUE NOT NULL,
-      email TEXT UNIQUE NOT NULL,
-      password_hash TEXT NOT NULL,
-      created_at TEXT DEFAULT (datetime('now')),
-      updated_at TEXT DEFAULT (datetime('now'))
-    )
-  `);
-
-  return store;
-}
 
 function createMockResponse(): Response {
   const res: Partial<Response> = {
@@ -66,7 +45,7 @@ describe('authMiddleware', () => {
   let middleware: (req: Request, res: Response, next: NextFunction) => Promise<void>;
 
   beforeEach(async () => {
-    dataStore = await createTestDataStore();
+    dataStore = createMockPgDataStore();
     authService = new AuthService(dataStore, {
       jwtSecret: TEST_JWT_SECRET,
       saltRounds: 4,
@@ -84,7 +63,6 @@ describe('authMiddleware', () => {
 
   describe('valid token', () => {
     it('should inject tenantId and username on valid token and call next()', async () => {
-      // Register and login to get a valid token
       const user = await authService.register('testuser', 'test@example.com', 'password123');
       const tokenPair = await authService.login('testuser', 'password123');
 
@@ -187,7 +165,6 @@ describe('authMiddleware', () => {
     });
 
     it('should return 401 for an expired access token', async () => {
-      // Create a service with very short token expiry
       const shortLivedService = new AuthService(dataStore, {
         jwtSecret: TEST_JWT_SECRET,
         saltRounds: 4,

@@ -80,11 +80,11 @@ export interface DependencyError {
 // ============================================================
 
 export const CONTROL_POINT_DEFINITIONS: readonly ControlPointDefinition[] = [
-  { key: 'use_pg_datastore', description: '切换 PostgreSQL / SQLite', dependencies: [] },
+  { key: 'use_pg_datastore', description: '使用 PostgreSQL 数据存储', dependencies: [] },
   { key: 'use_python_core', description: '切换 Python Core / 本地处理', dependencies: ['use_pg_datastore'] },
   { key: 'use_event_bus', description: '切换 EventBus / setInterval', dependencies: ['use_pg_datastore'] },
   { key: 'use_brain_loop_engine', description: '切换 BrainLoopEngine / AutonomousBrainService', dependencies: ['use_pg_datastore', 'use_event_bus'] },
-  { key: 'use_device_driver', description: '切换 DeviceDriver / routerosClient', dependencies: ['use_pg_datastore'] },
+  { key: 'use_device_driver', description: '切换 DeviceDriver / 旧设备客户端', dependencies: ['use_pg_datastore'] },
   { key: 'use_skill_capsule', description: '切换 SkillCapsule / 旧 SkillLoader', dependencies: ['use_pg_datastore'] },
   { key: 'use_alert_pipeline', description: '切换新 AlertPipeline / 旧流程', dependencies: ['use_pg_datastore', 'use_event_bus'] },
   { key: 'use_vector_search_tools', description: '切换向量检索 / 硬编码映射', dependencies: ['use_pg_datastore', 'use_python_core'] },

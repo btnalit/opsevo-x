@@ -1,7 +1,7 @@
 /**
- * @deprecated 此模块已弃用，请使用 `./sqliteVectorStore` 中的 `SQLiteVectorStore` 替代。
- * LanceDB 依赖已移除，此文件仅保留类型定义用于向后兼容。
- * 新代码应从 `./sqliteVectorStore` 导入 `SQLiteVectorStore`，
+ * @deprecated 此模块仅保留类型定义用于向后兼容。
+ * 向量操作已迁移到 VectorStoreClient（通过 Python Core 执行）。
+ * 新代码应从 `./vectorStoreClient` 导入 `VectorStoreClient`。
  * 类型定义（VectorDocument, SearchResult 等）仍可从此文件导入。
  */
 

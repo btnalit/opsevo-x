@@ -6,7 +6,7 @@
  * and backfills descriptions from the JSON data file if available.
  */
 
-import { MigrationDefinition } from '../services/core/dataStore';
+import { MigrationDefinition } from '../types/migration';
 
 const migration: MigrationDefinition = {
   version: 7,

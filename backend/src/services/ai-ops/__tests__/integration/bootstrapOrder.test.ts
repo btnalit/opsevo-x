@@ -16,7 +16,6 @@ describe('Task 33.2 — Bootstrap 引导顺序验证', () => {
   describe('SERVICE_NAMES 完整性', () => {
     it('应包含所有核心层服务名称', () => {
       expect(SERVICE_NAMES.CONFIG_SERVICE).toBe('configService');
-      expect(SERVICE_NAMES.ROUTEROS_CLIENT).toBe('routerosClient');
       expect(SERVICE_NAMES.EVOLUTION_CONFIG).toBe('evolutionConfig');
     });
 

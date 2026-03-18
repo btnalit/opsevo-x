@@ -14,9 +14,8 @@
 import { logger } from '../../utils/logger';
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import { routerosClient, RouterOSClient } from '../routerosClient';
 import type { DevicePool } from '../device/devicePool';
-import type { DataStore } from '../core/dataStore';
+import type { DataStore } from '../dataStore';
 import type { SystemHealthSummary } from '../../types/autonomous-brain';
 import { deviceDriverManager } from '../device/deviceDriverManager';
 
@@ -328,13 +327,17 @@ export class HealthMonitor {
   /**
    * 采集健康指标
    * Requirements: 5.1.1, 9.1
-   * 从 RouterOS 设备获取真实指标数据
-   * @param client 可选的 RouterOS 客户端（多设备模式下传入特定设备的客户端）
+   * 从设备获取真实指标数据
+   * @param deviceId 可选的设备 ID（多设备模式下传入特定设备 ID）
    */
-  async collectMetrics(client?: RouterOSClient): Promise<HealthMetrics> {
+  async collectMetrics(deviceId?: string): Promise<HealthMetrics> {
+    // 如果提供了 deviceId，优先走泛化路径
+    if (deviceId) {
+      return this.collectMetricsFromDriver(deviceId);
+    }
+
     const now = Date.now();
     const startTime = Date.now();
-    const targetClient = client || routerosClient;
 
     // 默认指标（当无法获取真实数据时使用）
     const metrics: HealthMetrics = {
@@ -348,10 +351,21 @@ export class HealthMonitor {
       timestamp: now,
     };
 
-    // 检查 RouterOS 连接状态
-    if (!targetClient.isConnected()) {
-      logger.debug('RouterOS not connected, returning default metrics');
-      // 🟡 FIX 1.4: 断开时返回 -1（与多设备模式不可达设备语义一致），而非 0
+    // 无全局客户端 — 单设备模式需通过 DevicePool 获取连接
+    // 尝试从 DevicePool 获取第一个可用连接
+    let targetClient: any = null;
+    if (this.devicePool) {
+      const connections = this.devicePool.getConnectionsMap();
+      for (const [, conn] of connections) {
+        if (conn.status === 'connected' && conn.client.isConnected()) {
+          targetClient = conn.client;
+          break;
+        }
+      }
+    }
+
+    if (!targetClient) {
+      logger.debug('No device client available, returning default metrics');
       metrics.cpuUsage = -1;
       metrics.memoryUsage = -1;
       metrics.diskUsage = -1;
@@ -393,7 +407,7 @@ export class HealthMonitor {
         .filter(r => r.status === 'rejected').length;
       metrics.errorRate = failedRequests / totalRequests;
 
-      logger.debug('Health metrics collected from RouterOS', {
+      logger.debug('Health metrics collected from device', {
         timestamp: now,
         cpuUsage: metrics.cpuUsage,
         memoryUsage: metrics.memoryUsage,
@@ -453,15 +467,17 @@ export class HealthMonitor {
   }
 
   /**
-   * 从 RouterOS 获取系统资源信息
+   * 从设备获取系统资源信息
+   * @deprecated 使用 collectMetricsFromDriver 替代
    */
-  private async fetchSystemResource(client?: RouterOSClient): Promise<{
+  private async fetchSystemResource(client?: any): Promise<{
     cpuUsage: number;
     memoryUsage: number;
     diskUsage: number;
   } | null> {
     try {
-      const targetClient = client || routerosClient;
+      const targetClient = client || null;
+      if (!targetClient) return null;
       const response = await targetClient.executeRaw(
         '/system/resource/print',
         ['=.proplist=cpu-load,total-memory,free-memory,total-hdd-space,free-hdd-space'],
@@ -502,15 +518,17 @@ export class HealthMonitor {
   }
 
   /**
-   * 从 RouterOS 获取接口状态
+   * 从设备获取接口状态
+   * @deprecated 使用 collectMetricsFromDriver 替代
    */
-  private async fetchInterfaceStatus(client?: RouterOSClient): Promise<{
+  private async fetchInterfaceStatus(client?: any): Promise<{
     total: number;
     up: number;
     down: number;
   } | null> {
     try {
-      const targetClient = client || routerosClient;
+      const targetClient = client || null;
+      if (!targetClient) return null;
       // 只获取 running 字段，大幅减少数据传输量
       const response = await targetClient.executeRaw('/interface/print', ['=.proplist=running']);
 
@@ -532,12 +550,14 @@ export class HealthMonitor {
   }
 
   /**
-   * 从 RouterOS 获取活跃连接数
+   * 从设备获取活跃连接数
+   * @deprecated 使用 collectMetricsFromDriver 替代
    */
-  private async fetchActiveConnections(client?: RouterOSClient): Promise<number> {
+  private async fetchActiveConnections(client?: any): Promise<number> {
     try {
-      const targetClient = client || routerosClient;
-      // 只使用 count-only 获取数量，绝不 fallback 拉全量连接表（可能数千条，压垮路由器）
+      const targetClient = client || null;
+      if (!targetClient) return 0;
+      // 只使用 count-only 获取数量
       const response = await targetClient.executeRaw('/ip/firewall/connection/print', ['=count-only=']);
 
       if (response && typeof response === 'object' && 'ret' in response) {
@@ -655,22 +675,12 @@ export class HealthMonitor {
    * Requirements: 5.1.3, 5.1.4
    */
   async createSnapshot(deviceId?: string): Promise<InternalHealthSnapshot> {
-    let targetClient: RouterOSClient | undefined;
-
     // 🔴 防御：多设备模式下必须指定 deviceId，否则会静默采集全局默认设备（幽灵越权）
     if (this.devicePool && !deviceId) {
       throw new Error('In multi-device mode, deviceId must be provided to createSnapshot. Refusing to fall back to global default client.');
     }
 
-    if (deviceId && this.devicePool) {
-      const connectionsMap = this.devicePool.getConnectionsMap();
-      const pooledConn = connectionsMap.get(deviceId);
-      if (pooledConn && pooledConn.status === 'connected') {
-        targetClient = pooledConn.client;
-      }
-    }
-
-    const metrics = await this.collectMetrics(targetClient);
+    const metrics = await this.collectMetrics(deviceId);
     const score = this.calculateScore(metrics);
     const now = Date.now();
 
@@ -693,7 +703,7 @@ export class HealthMonitor {
       const connectionsMap = this.devicePool.getConnectionsMap();
       const pooledConn = connectionsMap.get(deviceId);
       if (pooledConn) {
-        this.writeMetricsToDb(pooledConn.tenantId, deviceId, metrics);
+        await this.writeMetricsToDb(pooledConn.tenantId, deviceId, metrics);
       }
     }
 
@@ -825,13 +835,12 @@ export class HealthMonitor {
    * @param deviceId 设备 ID
    * @param metrics 健康指标
    */
-  private writeMetricsToDb(tenantId: string, deviceId: string, metrics: HealthMetrics): void {
+  private async writeMetricsToDb(tenantId: string, deviceId: string, metrics: HealthMetrics): Promise<void> {
     if (!this.dataStore) {
       return;
     }
 
     try {
-      // 转换为 ISO 字符串存储
       const collectedAt = new Date(metrics.timestamp).toISOString();
 
       const metricEntries: Array<{ name: string; value: number }> = [
@@ -846,11 +855,12 @@ export class HealthMonitor {
         { name: 'avg_response_time', value: metrics.avgResponseTime },
       ];
 
-      const insertStmt = `INSERT INTO health_metrics (tenant_id, device_id, metric_name, metric_value, collected_at) VALUES (?, ?, ?, ?, ?)`;
-
-      this.dataStore.transaction(() => {
+      await this.dataStore.transaction(async (tx) => {
         for (const entry of metricEntries) {
-          this.dataStore!.run(insertStmt, [tenantId, deviceId, entry.name, entry.value, collectedAt]);
+          await tx.execute(
+            'INSERT INTO health_metrics (tenant_id, device_id, metric_name, metric_value, collected_at) VALUES ($1, $2, $3, $4, $5)',
+            [tenantId, deviceId, entry.name, entry.value, collectedAt]
+          );
         }
       });
 
@@ -915,21 +925,22 @@ export class HealthMonitor {
     // 内存 Map 只存最近 100 条，对于 'week' 趋势完全不够，必须查询 health_metrics 表
     if (this.dataStore) {
       try {
-        const query = `
+        let paramIdx = 1;
+        let query = `
           SELECT 
             metric_value as score,
             collected_at as timestamp
           FROM health_metrics 
           WHERE metric_name = 'overall_health_score'
-          AND collected_at >= ?
-          ${deviceId ? 'AND device_id = ?' : ''}
-          ORDER BY collected_at ASC
-        `;
+          AND collected_at >= $${paramIdx++}`;
+        const params: unknown[] = [new Date(startTime).toISOString()];
+        if (deviceId) {
+          query += ` AND device_id = $${paramIdx++}`;
+          params.push(deviceId);
+        }
+        query += ' ORDER BY collected_at ASC';
 
-        const params = [new Date(startTime).toISOString()];
-        if (deviceId) params.push(deviceId);
-
-        const dbRows = this.dataStore.query<any>(query, params);
+        const dbRows = await this.dataStore.query<any>(query, params);
         if (dbRows && dbRows.length > 0) {
           const dataPoints = dbRows.map((r: any) => {
             const score = Math.round(r.score);

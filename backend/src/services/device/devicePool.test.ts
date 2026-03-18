@@ -4,35 +4,41 @@
  * Tests for connection pooling, reuse, idle cleanup,
  * release, disconnectAll, and error handling.
  *
- * RouterOSClient is mocked since we cannot connect to real devices in tests.
+ * DeviceClient is mocked since we cannot connect to real devices in tests.
  *
  * Requirements: 5.4, 5.5, 5.7
  */
 
-import { DataStore } from '../core/dataStore';
+import type { DataStore } from '../dataStore';
+import { createMockPgDataStore } from '../../test/helpers/mockPgDataStore';
 import { DeviceManager, Device } from './deviceManager';
-import { DevicePool, DevicePoolError, PooledConnection } from './devicePool';
-import { RouterOSClient } from '../routerosClient';
+import { DevicePool, DevicePoolError, PooledConnection, DeviceClient } from './devicePool';
 
-// ─── Mock RouterOSClient ─────────────────────────────────────────────────────
+// ─── Mock DeviceClient factory ───────────────────────────────────────────────
 
-jest.mock('../routerosClient', () => {
+function createMockDeviceClient(): DeviceClient {
+  let connected = false;
   return {
-    RouterOSClient: jest.fn().mockImplementation(() => {
-      let connected = false;
-      return {
-        connect: jest.fn().mockImplementation(async () => {
-          connected = true;
-          return true;
-        }),
-        disconnect: jest.fn().mockImplementation(async () => {
-          connected = false;
-        }),
-        isConnected: jest.fn().mockImplementation(() => connected),
-      };
+    connect: jest.fn().mockImplementation(async () => {
+      connected = true;
+      return true;
     }),
+    disconnect: jest.fn().mockImplementation(async () => {
+      connected = false;
+    }),
+    isConnected: jest.fn().mockImplementation(() => connected),
+    print: jest.fn().mockResolvedValue([]),
+    getConfig: jest.fn().mockReturnValue(null),
   };
-});
+}
+
+// Mock deviceDriverManager to return mock clients
+const mockDeviceDriverManager = {
+  getDriver: jest.fn().mockImplementation(() => createMockDeviceClient()),
+};
+jest.mock('./deviceDriverManager', () => ({
+  deviceDriverManager: mockDeviceDriverManager,
+}));
 
 // ─── Test Setup ──────────────────────────────────────────────────────────────
 
@@ -48,16 +54,15 @@ let testDevice: Device;
 beforeEach(async () => {
   jest.clearAllMocks();
 
-  dataStore = new DataStore({ inMemory: true });
-  await dataStore.initialize();
+  dataStore = createMockPgDataStore();
 
   // Create test users
-  dataStore.run(
-    "INSERT INTO users (id, username, email, password_hash) VALUES (?, ?, ?, ?)",
+  await dataStore.execute(
+    "INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)",
     [TEST_TENANT_ID, 'pooluser1', 'pool1@example.com', 'hash1'],
   );
-  dataStore.run(
-    "INSERT INTO users (id, username, email, password_hash) VALUES (?, ?, ?, ?)",
+  await dataStore.execute(
+    "INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)",
     [TEST_TENANT_ID_2, 'pooluser2', 'pool2@example.com', 'hash2'],
   );
 
@@ -80,8 +85,10 @@ beforeEach(async () => {
   });
 
   // Manually set status to 'error' (not offline) so getConnection will proceed
-  // (createDevice defaults to 'offline', which blocks automatic connection)
-  dataStore.run("UPDATE devices SET status = 'error' WHERE id = ?", [testDevice.id]);
+  await dataStore.execute(
+    "UPDATE devices SET status = $1 WHERE id = $2",
+    ['error', testDevice.id],
+  );
 });
 
 afterEach(async () => {
@@ -157,17 +164,19 @@ describe('DevicePool.getConnection', () => {
 
     // Should be a new client instance (since mock creates new instances)
     expect(client2).toBeDefined();
-    expect(RouterOSClient).toHaveBeenCalledTimes(2);
+    expect(mockDeviceDriverManager.getDriver).toHaveBeenCalledTimes(2);
   });
 
   it('should update device status to error on connection failure', async () => {
-    // Make the next RouterOSClient.connect fail
-    (RouterOSClient as jest.MockedClass<typeof RouterOSClient>).mockImplementationOnce(() => {
+    // Make the next getDriver return a client whose connect fails
+    mockDeviceDriverManager.getDriver.mockImplementationOnce(() => {
       return {
         connect: jest.fn().mockRejectedValue(new Error('Connection refused')),
         disconnect: jest.fn(),
         isConnected: jest.fn().mockReturnValue(false),
-      } as any;
+        print: jest.fn().mockResolvedValue([]),
+        getConfig: jest.fn().mockReturnValue(null),
+      };
     });
 
     await expect(
@@ -193,7 +202,7 @@ describe('DevicePool.getConnection', () => {
     const client2 = await devicePool.getConnection(TEST_TENANT_ID, device2.id, { force: true });
 
     expect(client1).not.toBe(client2);
-    expect(RouterOSClient).toHaveBeenCalledTimes(2);
+    expect(mockDeviceDriverManager.getDriver).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -230,7 +239,7 @@ describe('DevicePool.releaseConnection', () => {
 
     const client = await devicePool.getConnection(TEST_TENANT_ID, testDevice.id, { force: true });
     expect(client).toBeDefined();
-    expect(RouterOSClient).toHaveBeenCalledTimes(2);
+    expect(mockDeviceDriverManager.getDriver).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -408,7 +417,7 @@ describe('DevicePool EventEmitter-based waitForConnection', () => {
       resolveConnect = resolve;
     });
 
-    (RouterOSClient as jest.MockedClass<typeof RouterOSClient>).mockImplementationOnce(() => {
+    mockDeviceDriverManager.getDriver.mockImplementationOnce(() => {
       let connected = false;
       return {
         connect: jest.fn().mockImplementation(async () => {
@@ -418,7 +427,9 @@ describe('DevicePool EventEmitter-based waitForConnection', () => {
         }),
         disconnect: jest.fn(),
         isConnected: jest.fn().mockImplementation(() => connected),
-      } as any;
+        print: jest.fn().mockResolvedValue([]),
+        getConfig: jest.fn().mockReturnValue(null),
+      };
     });
 
     // Start connection (will be pending)
@@ -450,16 +461,18 @@ describe('DevicePool EventEmitter-based waitForConnection', () => {
 
   it('should resolve waitForConnection on timeout when connection takes too long', async () => {
     // Create a connection that never completes
-    (RouterOSClient as jest.MockedClass<typeof RouterOSClient>).mockImplementationOnce(() => {
+    mockDeviceDriverManager.getDriver.mockImplementationOnce(() => {
       return {
         connect: jest.fn().mockImplementation(() => new Promise(() => { })), // never resolves
         disconnect: jest.fn(),
         isConnected: jest.fn().mockReturnValue(false),
-      } as any;
+        print: jest.fn().mockResolvedValue([]),
+        getConfig: jest.fn().mockReturnValue(null),
+      };
     });
 
     // Manually set up a 'connecting' entry to test waitForConnection directly
-    const client = new RouterOSClient();
+    const client = createMockDeviceClient();
     const pooledConn: PooledConnection = {
       client,
       deviceId: testDevice.id,
@@ -496,14 +509,16 @@ describe('DevicePool EventEmitter-based waitForConnection', () => {
       rejectConnect = reject;
     });
 
-    (RouterOSClient as jest.MockedClass<typeof RouterOSClient>).mockImplementationOnce(() => {
+    mockDeviceDriverManager.getDriver.mockImplementationOnce(() => {
       return {
         connect: jest.fn().mockImplementation(async () => {
           await connectPromise;
         }),
         disconnect: jest.fn(),
         isConnected: jest.fn().mockReturnValue(false),
-      } as any;
+        print: jest.fn().mockResolvedValue([]),
+        getConfig: jest.fn().mockReturnValue(null),
+      };
     });
 
     // Start connection (will be pending)
@@ -538,7 +553,7 @@ describe('DevicePool connection status tracking', () => {
       resolveConnect = resolve;
     });
 
-    (RouterOSClient as jest.MockedClass<typeof RouterOSClient>).mockImplementationOnce(() => {
+    mockDeviceDriverManager.getDriver.mockImplementationOnce(() => {
       let connected = false;
       return {
         connect: jest.fn().mockImplementation(async () => {
@@ -548,7 +563,9 @@ describe('DevicePool connection status tracking', () => {
         }),
         disconnect: jest.fn(),
         isConnected: jest.fn().mockImplementation(() => connected),
-      } as any;
+        print: jest.fn().mockResolvedValue([]),
+        getConfig: jest.fn().mockReturnValue(null),
+      };
     });
 
     const connectionPromise = devicePool.getConnection(TEST_TENANT_ID, testDevice.id);

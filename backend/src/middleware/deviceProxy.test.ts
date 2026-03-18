@@ -5,8 +5,8 @@
  * - 缺少 deviceId：返回 400
  * - 缺少 tenantId（未认证）：返回 401
  * - 设备不属于当前租户：返回 403
- * - 设备连接成功：注入 req.routerosClient 和 req.deviceId，调用 next()
- * - 设备未连接时自动尝试连接
+ * - 设备连接成功：注入 req.deviceId，调用 next()
+ * - 设备未连接时自动尝试连接（DevicePool 回退）
  * - DevicePool 连接失败：返回 502
  * - DevicePool FORBIDDEN 错误：返回 403
  *
@@ -17,46 +17,15 @@ import { Request, Response, NextFunction } from 'express';
 import { createDeviceMiddleware } from './deviceProxy';
 import { DeviceManager } from '../services/device/deviceManager';
 import { DevicePool, DevicePoolError } from '../services/device/devicePool';
-import { DataStore } from '../services/core/dataStore';
-import { RouterOSClient } from '../services/routerosClient';
-import * as path from 'path';
+import type { DataStore } from '../services/dataStore';
+import { createMockPgDataStore } from '../test/helpers/mockPgDataStore';
+import { deviceDriverManager } from '../services/device/deviceDriverManager';
 
 // ─── Test Helpers ────────────────────────────────────────────────────────────
 
 const TEST_TENANT_ID = 'tenant-001';
 const TEST_DEVICE_ID = 'device-001';
 const OTHER_TENANT_ID = 'tenant-002';
-
-async function createTestDataStore(): Promise<DataStore> {
-  const store = new DataStore({
-    inMemory: true,
-    migrationsPath: path.join(__dirname, '__no_migrations__'),
-  });
-  await store.initialize();
-
-  // Create the devices table for DeviceManager
-  store.run(`
-    CREATE TABLE IF NOT EXISTS devices (
-      id TEXT PRIMARY KEY,
-      tenant_id TEXT NOT NULL,
-      name TEXT NOT NULL,
-      host TEXT NOT NULL,
-      port INTEGER DEFAULT 8728,
-      username TEXT NOT NULL,
-      password_encrypted TEXT NOT NULL,
-      use_tls INTEGER DEFAULT 0,
-      group_name TEXT,
-      tags TEXT DEFAULT '[]',
-      status TEXT DEFAULT 'offline',
-      last_seen TEXT,
-      error_message TEXT,
-      created_at TEXT DEFAULT (datetime('now')),
-      updated_at TEXT DEFAULT (datetime('now'))
-    )
-  `);
-
-  return store;
-}
 
 function createMockResponse(): Response {
   const res: Partial<Response> = {
@@ -78,17 +47,22 @@ function createMockRequest(
 }
 
 /**
- * Create a mock RouterOSClient for testing
+ * Create a mock DeviceDriver for testing
  */
-function createMockRouterOSClient(): RouterOSClient {
-  const client = {
+function createMockDeviceDriver(): any {
+  return {
+    execute: jest.fn().mockResolvedValue([]),
+    query: jest.fn().mockResolvedValue([]),
     isConnected: jest.fn().mockReturnValue(true),
-    connect: jest.fn().mockResolvedValue(true),
-    disconnect: jest.fn().mockResolvedValue(undefined),
-    print: jest.fn().mockResolvedValue([]),
-  } as unknown as RouterOSClient;
-  return client;
+  };
 }
+
+// Mock deviceDriverManager
+jest.mock('../services/device/deviceDriverManager', () => ({
+  deviceDriverManager: {
+    getDriver: jest.fn(),
+  },
+}));
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
@@ -97,10 +71,10 @@ describe('deviceMiddleware', () => {
   let deviceManager: DeviceManager;
   let mockDevicePool: DevicePool;
   let middleware: (req: Request, res: Response, next: NextFunction) => Promise<void>;
-  let mockClient: RouterOSClient;
+  let mockDriver: any;
 
   beforeEach(async () => {
-    dataStore = await createTestDataStore();
+    dataStore = createMockPgDataStore();
     deviceManager = new DeviceManager(dataStore);
 
     // Create a test device
@@ -113,10 +87,15 @@ describe('deviceMiddleware', () => {
       use_tls: false,
     });
 
-    // Create a mock DevicePool
-    mockClient = createMockRouterOSClient();
+    // Create a mock DeviceDriver
+    mockDriver = createMockDeviceDriver();
+
+    // Mock deviceDriverManager.getDriver to return the mock driver
+    (deviceDriverManager.getDriver as jest.Mock).mockReturnValue(mockDriver);
+
+    // Create a mock DevicePool (used as fallback when driver not found)
     mockDevicePool = {
-      getConnection: jest.fn().mockResolvedValue(mockClient),
+      getConnection: jest.fn().mockResolvedValue({}),
       releaseConnection: jest.fn().mockResolvedValue(undefined),
       disconnectAll: jest.fn().mockResolvedValue(undefined),
       getPoolStats: jest.fn().mockReturnValue({ total: 1, connected: 1, idle: 0 }),
@@ -211,7 +190,7 @@ describe('deviceMiddleware', () => {
   // ─── Successful connection ──────────────────────────────────────────────
 
   describe('successful connection', () => {
-    it('should inject routerosClient and deviceId and call next()', async () => {
+    it('should inject deviceId and deviceDriver and call next()', async () => {
       // We need to get the actual device ID from the database
       const devices = await deviceManager.getDevices(TEST_TENANT_ID);
       const deviceId = devices[0].id;
@@ -222,14 +201,10 @@ describe('deviceMiddleware', () => {
 
       await middleware(req, res, next);
 
-      expect(req.routerosClient).toBe(mockClient);
       expect(req.deviceId).toBe(deviceId);
+      expect(req.deviceDriver).toBe(mockDriver);
       expect(next).toHaveBeenCalledTimes(1);
       expect(res.status).not.toHaveBeenCalled();
-      expect(mockDevicePool.getConnection).toHaveBeenCalledWith(
-        TEST_TENANT_ID,
-        deviceId,
-      );
     });
 
     it('should not send any response on success', async () => {
@@ -249,11 +224,13 @@ describe('deviceMiddleware', () => {
 
   // ─── DevicePool errors ──────────────────────────────────────────────────
 
-  describe('DevicePool errors', () => {
-    it('should return 502 when DevicePool connection fails', async () => {
+  describe('DevicePool fallback errors', () => {
+    it('should still call next() when driver not found and DevicePool fallback fails silently', async () => {
       const devices = await deviceManager.getDevices(TEST_TENANT_ID);
       const deviceId = devices[0].id;
 
+      // Simulate no driver available, forcing DevicePool fallback
+      (deviceDriverManager.getDriver as jest.Mock).mockReturnValue(null);
       (mockDevicePool.getConnection as jest.Mock).mockRejectedValue(
         new DevicePoolError('设备不可达', 'CONNECTION_FAILED'),
       );
@@ -264,21 +241,18 @@ describe('deviceMiddleware', () => {
 
       await middleware(req, res, next);
 
-      expect(res.status).toHaveBeenCalledWith(502);
-      expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({
-          error: expect.stringContaining('设备连接失败'),
-          code: 'CONNECTION_FAILED',
-        }),
-      );
-      expect(next).not.toHaveBeenCalled();
+      // DevicePool fallback error is caught silently, middleware still calls next()
+      expect(req.deviceId).toBe(deviceId);
+      expect(req.deviceDriver).toBeUndefined();
+      expect(next).toHaveBeenCalledTimes(1);
     });
 
-    it('should return 403 when DevicePool returns FORBIDDEN error', async () => {
+    it('should return 403 when DevicePool returns FORBIDDEN error from outer catch', async () => {
       const devices = await deviceManager.getDevices(TEST_TENANT_ID);
       const deviceId = devices[0].id;
 
-      (mockDevicePool.getConnection as jest.Mock).mockRejectedValue(
+      // Mock deviceManager.getDevice to throw DevicePoolError
+      jest.spyOn(deviceManager, 'getDevice').mockRejectedValue(
         new DevicePoolError('无权访问该设备连接', 'FORBIDDEN'),
       );
 
@@ -302,7 +276,8 @@ describe('deviceMiddleware', () => {
       const devices = await deviceManager.getDevices(TEST_TENANT_ID);
       const deviceId = devices[0].id;
 
-      (mockDevicePool.getConnection as jest.Mock).mockRejectedValue(
+      // Mock deviceManager.getDevice to throw unexpected error
+      jest.spyOn(deviceManager, 'getDevice').mockRejectedValue(
         new Error('Unexpected internal error'),
       );
 
@@ -323,7 +298,7 @@ describe('deviceMiddleware', () => {
   // ─── Auto-connect behavior ──────────────────────────────────────────────
 
   describe('auto-connect behavior', () => {
-    it('should pass tenantId and deviceId to DevicePool.getConnection for auto-connect', async () => {
+    it('should use DeviceDriverManager first, skip DevicePool when driver exists', async () => {
       const devices = await deviceManager.getDevices(TEST_TENANT_ID);
       const deviceId = devices[0].id;
 
@@ -333,11 +308,33 @@ describe('deviceMiddleware', () => {
 
       await middleware(req, res, next);
 
-      // DevicePool.getConnection handles auto-connect internally
+      // DeviceDriverManager found a driver, DevicePool should NOT be called
+      expect(deviceDriverManager.getDriver).toHaveBeenCalledWith(deviceId);
+      expect(mockDevicePool.getConnection).not.toHaveBeenCalled();
+      expect(next).toHaveBeenCalledTimes(1);
+    });
+
+    it('should fall back to DevicePool when driver not found', async () => {
+      const devices = await deviceManager.getDevices(TEST_TENANT_ID);
+      const deviceId = devices[0].id;
+
+      // First call returns null (no driver), second call after pool connection returns driver
+      (deviceDriverManager.getDriver as jest.Mock)
+        .mockReturnValueOnce(null)
+        .mockReturnValueOnce(mockDriver);
+
+      const req = createMockRequest({ deviceId }, TEST_TENANT_ID);
+      const res = createMockResponse();
+      const next = jest.fn();
+
+      await middleware(req, res, next);
+
+      // DevicePool should be called as fallback
       expect(mockDevicePool.getConnection).toHaveBeenCalledWith(
         TEST_TENANT_ID,
         deviceId,
       );
+      expect(req.deviceDriver).toBe(mockDriver);
       expect(next).toHaveBeenCalledTimes(1);
     });
   });

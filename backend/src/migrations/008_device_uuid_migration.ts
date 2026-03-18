@@ -11,7 +11,7 @@
  * 注意：采用 INSERT-UPDATE-DELETE 策略避免 FK 约束冲突
  */
 
-import { MigrationDefinition } from '../services/core/dataStore';
+import { MigrationDefinition } from '../types/migration';
 
 const migration: MigrationDefinition = {
   version: 8,

@@ -119,15 +119,78 @@ cd opsevo-x
 # 配置环境变量
 cp .env.example .env
 # 编辑 .env，至少设置 PG_PASSWORD 和 AI 供应商密钥
+```
 
-# 启动所有服务（PostgreSQL + Python Core + BFF）
+编辑 `.env` 配置：
+
+```bash
+# 必填
+PG_PASSWORD=your-secure-password
+
+# AI 供应商（选择一个）
+AI_PROVIDER=gemini
+GEMINI_API_KEY=your-gemini-key
+
+# 可选：修改内部 API 密钥以增强安全性
+INTERNAL_API_KEY=your-random-secret
+```
+
+启动所有服务：
+
+```bash
+# 启动 PostgreSQL + Python Core + BFF（3 个服务）
 docker-compose up -d
 
-# 查看日志
+# 查看服务状态
+docker-compose ps
+
+# 查看 BFF 日志
 docker-compose logs -f opsevo-bff
 
-# 含 Nginx 反向代理
-docker-compose --profile with-nginx up -d
+# 查看所有日志
+docker-compose logs -f
+```
+
+通过 `http://your-server:8080` 访问平台。
+
+#### 端口映射
+
+| 端口 | 协议 | 服务 | 说明 |
+| ---- | ---- | ---- | ---- |
+| 8080 | TCP | BFF | Web UI + API（可通过 `PORT` 配置） |
+| 514 | UDP | BFF | Syslog 接收（可通过 `SYSLOG_PORT` 配置） |
+| 162 | UDP | BFF | SNMP Trap 接收（可通过 `SNMP_TRAP_PORT` 配置） |
+| 5432 | TCP | PostgreSQL | 数据库（可通过 `PG_PORT` 配置） |
+| 8001 | TCP | Python Core | Embedding 服务（可通过 `PYTHON_CORE_PORT` 配置） |
+
+#### 数据持久化
+
+使用 Docker Volume 保证数据在容器重启后不丢失：
+
+| Volume | 挂载路径 | 内容 |
+| ------ | -------- | ---- |
+| `opsevo-data` | `/app/backend/data` | 配置、规则、知识库 |
+| `opsevo-logs` | `/app/backend/logs` | 应用日志 |
+| `opsevo-pgdata` | `/var/lib/postgresql/data` | PostgreSQL 数据文件 |
+
+#### 常用操作
+
+```bash
+# 停止所有服务
+docker-compose down
+
+# 停止并删除数据卷（警告：会删除所有数据）
+docker-compose down -v
+
+# 代码更新后重新构建
+docker-compose build --no-cache
+docker-compose up -d
+
+# 重启单个服务
+docker-compose restart opsevo-bff
+
+# 查看资源占用
+docker stats
 ```
 
 ### 开发环境
@@ -163,6 +226,7 @@ npm run dev
 | AI_MODEL_NAME | gemini-1.5-flash | LLM 模型名 |
 | PORT | 8080 | 外部访问端口 |
 | SYSLOG_PORT | 514 | Syslog UDP 端口 |
+| SNMP_TRAP_PORT | 162 | SNMP Trap UDP 端口 |
 
 完整配置见 `.env.example`。
 

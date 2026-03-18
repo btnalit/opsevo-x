@@ -157,6 +157,7 @@ backend/test-api.js
 
 # Code audit reports (generated files)
 reports/
+docs/
 
 # Python Core runtime artifacts
 **/__pycache__/

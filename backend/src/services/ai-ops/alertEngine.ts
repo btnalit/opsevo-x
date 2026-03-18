@@ -55,7 +55,6 @@ import { alertPipeline } from './alertPipeline';
 import { knowledgeBase } from './rag';
 import { ConcurrencyController, ConcurrencyConfig, ConcurrencyStatus } from './concurrencyController';
 import { LRUCache, CacheStats as LRUCacheStats } from '../core/lruCache';
-import type { DataStore } from '../core/dataStore';
 import type { DataStore as PgDataStore } from '../dataStore';
 
 const DATA_DIR = path.join(process.cwd(), 'data', 'ai-ops');
@@ -199,7 +198,7 @@ export class AlertEngine implements IAlertEngine {
   private preprocessedEventHandlers: Array<(event: UnifiedEvent | CompositeEvent) => void> = [];
 
   // ==================== DeviceManager 依赖 ====================
-  // Requirements: G4.12 - 通过 DeviceDriver 标准化接口替代 RouterOS API 直接调用
+  // Requirements: G4.12 - 通过 DeviceDriver 标准化接口替代直接 API 调用
   private deviceManager: DeviceManager | null = null;
 
   // ==================== Syslog Topic 严重度映射 ====================
@@ -252,19 +251,11 @@ export class AlertEngine implements IAlertEngine {
   // 是否正在持久化
   private isPersisting = false;
 
-  // 标记初始化时是否已有 DataStore（用于检测 setDataStore 后需要重新加载）
-  private _dataStoreLoadedOnInit = false;
-
   // 缓存清理定时器
   private cacheCleanupTimer: ReturnType<typeof setInterval> | null = null;
 
   // 最大缓存天数（内存中只保留最近 N 天的事件缓存）
   private readonly MAX_CACHE_DAYS = 2;
-
-  // ==================== DataStore 集成 ====================
-  // Requirements: 9.2 - 告警规则和事件关联 tenant_id 和 device_id
-  // 当 DataStore 可用时，使用 SQLite 替代 JSON 文件存储
-  private dataStore: DataStore | null = null;
 
   // ==================== PostgreSQL DataStore 集成 ====================
   // Requirements: C3.12 - 统一迁移至 PostgreSQL
@@ -280,17 +271,6 @@ export class AlertEngine implements IAlertEngine {
   }
 
   /**
-   * 设置 DataStore 实例
-   * 当 DataStore 可用时，告警规则和事件将使用 SQLite 存储
-   * 替代 JSON 文件存储，支持 tenant_id 和 device_id 关联
-   * Requirements: 9.2
-   */
-  setDataStore(dataStore: DataStore): void {
-    this.dataStore = dataStore;
-    logger.info('AlertEngine: DataStore backend configured, using SQLite for rules and events storage');
-  }
-
-  /**
    * 设置 PostgreSQL DataStore 实例
    * Requirements: C3.12 - 统一迁移至 PostgreSQL
    */
@@ -301,7 +281,7 @@ export class AlertEngine implements IAlertEngine {
 
   /**
    * 设置 DeviceManager 实例
-   * 用于通过 DeviceDriver 标准化接口执行设备操作，替代 RouterOS API 直接调用
+   * 用于通过 DeviceDriver 标准化接口执行设备操作，替代直接 API 调用
    * Requirements: G4.12
    */
   setDeviceManager(dm: DeviceManager): void {
@@ -340,16 +320,6 @@ export class AlertEngine implements IAlertEngine {
    */
   async initialize(): Promise<void> {
     if (this.initialized) {
-      // 如果 DataStore 在初始化后才被注入，需要重新加载数据
-      // 防止在 setDataStore() 之前就被其他代码路径触发了 initialize()
-      if (this.dataStore && !this._dataStoreLoadedOnInit) {
-        logger.info('AlertEngine: DataStore was set after initial initialization, reloading data from DataStore...');
-        await Promise.all([
-          this.loadRules(),
-          this.loadActiveAlerts(),
-        ]);
-        this._dataStoreLoadedOnInit = true;
-      }
       return;
     }
 
@@ -380,7 +350,6 @@ export class AlertEngine implements IAlertEngine {
     // Requirements: 4.1 - 按配置间隔周期性清理过期指纹
     this.startSyslogFingerprintCleanupTimer();
 
-    this._dataStoreLoadedOnInit = !!this.dataStore;
     this.initialized = true;
     logger.info(`AlertEngine initialized in ${Date.now() - startTime}ms (persistInterval: ${this.config.persistIntervalMs}ms, maxConcurrentPipeline: ${this.config.maxConcurrentPipeline}, maxCacheEntries: ${this.config.maxCacheEntries})`);
   }
@@ -614,38 +583,6 @@ export class AlertEngine implements IAlertEngine {
       }
     }
 
-    if (this.dataStore) {
-      try {
-        this.dataStore.transaction(() => {
-          for (const rule of this.rules) {
-            const tenantId = rule.tenantId || 'default';
-            const deviceId = rule.deviceId || null;
-            const config = JSON.stringify({
-              metricLabel: rule.metricLabel,
-              targetStatus: rule.targetStatus,
-              duration: rule.duration,
-              cooldownMs: rule.cooldownMs,
-              channels: rule.channels,
-              autoResponse: rule.autoResponse,
-              lastTriggeredAt: rule.lastTriggeredAt,
-            });
-            const createdAt = new Date(rule.createdAt).toISOString();
-            const updatedAt = new Date(rule.updatedAt).toISOString();
-
-            this.dataStore!.run(
-              `INSERT OR REPLACE INTO alert_rules (id, tenant_id, device_id, name, metric, operator, threshold, severity, enabled, config, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-              [rule.id, tenantId, deviceId, rule.name, rule.metric, rule.operator, rule.threshold, rule.severity, rule.enabled ? 1 : 0, config, createdAt, updatedAt]
-            );
-          }
-        });
-        logger.debug(`Rules persisted to DataStore: ${this.rules.length} rules`);
-        return;
-      } catch (error) {
-        logger.error('Failed to persist rules to DataStore, falling back to file:', error);
-      }
-    }
-
     // Fallback: 写入 JSON 文件
     await this.ensureDataDir();
     await fs.writeFile(RULES_FILE, JSON.stringify(this.rules, null, 2), 'utf-8');
@@ -655,21 +592,11 @@ export class AlertEngine implements IAlertEngine {
   /**
    * 持久化指定日期的事件
    * Requirements: 3.1 - 使用 LRU 缓存
-   * Requirements: 9.2 - 当 DataStore 可用时写入 alert_events 表
    */
   private async persistEventsForDate(dateStr: string): Promise<void> {
     if (!this.eventsCache) return;
 
-    // 当 DataStore 可用时，事件通常已在 saveEvent 中直接写入 SQLite
-    // 但如果写入 SQLite 失败（触发了 Fallback 机制），eventsDirty 会记录下这些脏数据。
-    // 因此，只有当该日期没有脏数据时，才可以安全跳过文件持久化阶段。
-    const dirtySet = this.eventsDirty.get(dateStr);
-    if (this.dataStore && (!dirtySet || dirtySet.size === 0)) {
-      logger.debug(`Events for ${dateStr} already persisted to DataStore via saveEvent`);
-      return;
-    }
-
-    // Fallback: 从 LRU 缓存中获取该日期的所有事件并写入文件
+    // 从 LRU 缓存中获取该日期的所有事件并写入文件
     // 逻辑变更：读取现有文件 -> 合并缓存中的事件 -> 写回文件
     // 防止覆盖掉因 LRU 驱逐而不在缓存中但仍存在于文件中的事件
 
@@ -773,41 +700,29 @@ export class AlertEngine implements IAlertEngine {
         this.rulesDirty = false;
       }
 
-      // 当 DataStore 可用时，事件一般已经在 saveEvent 直接写入 SQLite
-      // 但对于插入失败产生了 fallback 脏数据的，需要落盘
-      if (this.dataStore) {
-        for (const [dateStr, eventIds] of this.eventsDirty) {
-          if (eventIds.size > 0) {
-            await this.persistEventsForDate(dateStr);
+      // 持久化所有缓存的事件到文件（按日期分组）
+      if (this.eventsCache) {
+        const dateGroups = new Map<string, AlertEvent[]>();
+        for (const [key, event] of this.eventsCache.entries()) {
+          const dateStr = getDateString(event.triggeredAt);
+          if (!dateGroups.has(dateStr)) {
+            dateGroups.set(dateStr, []);
+          }
+          dateGroups.get(dateStr)!.push(event);
+        }
+
+        for (const [dateStr, events] of dateGroups) {
+          if (events.length > 0) {
+            await this.ensureDataDir();
+            const filePath = getEventsFilePath(dateStr);
+            await fs.writeFile(filePath, JSON.stringify(events, null, 2), 'utf-8');
+            logger.debug(`Events persisted for ${dateStr}: ${events.length} events`);
           }
         }
-        this.eventsDirty.clear();
-        logger.info('All pending data flushed (DataStore mode)');
-      } else {
-        // Fallback: 持久化所有缓存的事件到文件（按日期分组）
-        if (this.eventsCache) {
-          const dateGroups = new Map<string, AlertEvent[]>();
-          for (const [key, event] of this.eventsCache.entries()) {
-            const dateStr = getDateString(event.triggeredAt);
-            if (!dateGroups.has(dateStr)) {
-              dateGroups.set(dateStr, []);
-            }
-            dateGroups.get(dateStr)!.push(event);
-          }
-
-          for (const [dateStr, events] of dateGroups) {
-            if (events.length > 0) {
-              await this.ensureDataDir();
-              const filePath = getEventsFilePath(dateStr);
-              await fs.writeFile(filePath, JSON.stringify(events, null, 2), 'utf-8');
-              logger.debug(`Events persisted for ${dateStr}: ${events.length} events`);
-            }
-          }
-        }
-        this.eventsDirty.clear();
-
-        logger.info('All pending data flushed to disk');
       }
+      this.eventsDirty.clear();
+
+      logger.info('All pending data flushed');
     } catch (error) {
       logger.error('Failed to flush data:', error);
       throw error;
@@ -1039,55 +954,7 @@ export class AlertEngine implements IAlertEngine {
       }
     }
 
-    // 1. 从 DataStore (SQLite) 加载（Primary Source）
-    if (this.dataStore) {
-      try {
-        const rows = this.dataStore.query<{
-          id: string;
-          tenant_id: string;
-          device_id: string | null;
-          name: string;
-          metric: string;
-          operator: string;
-          threshold: number;
-          severity: string;
-          enabled: number;
-          config: string;
-          created_at: string;
-          updated_at: string;
-        }>('SELECT * FROM alert_rules');
-
-        for (const row of rows) {
-          const config = JSON.parse(row.config || '{}');
-          const rule: AlertRule = {
-            id: row.id,
-            name: row.name,
-            enabled: row.enabled === 1,
-            metric: row.metric as MetricType,
-            metricLabel: config.metricLabel,
-            operator: row.operator as AlertOperator,
-            threshold: row.threshold,
-            targetStatus: config.targetStatus,
-            duration: config.duration ?? 1,
-            cooldownMs: config.cooldownMs ?? 300000,
-            severity: row.severity as AlertSeverity,
-            channels: config.channels ?? [],
-            autoResponse: config.autoResponse,
-            createdAt: new Date(row.created_at).getTime(),
-            updatedAt: new Date(row.updated_at).getTime(),
-            lastTriggeredAt: config.lastTriggeredAt,
-            tenantId: row.tenant_id,
-            deviceId: row.device_id || undefined,
-          };
-          rulesMap.set(rule.id, rule);
-        }
-        logger.info(`Loaded ${rulesMap.size} alert rules from DataStore`);
-      } catch (error) {
-        logger.error('Failed to load alert rules from DataStore:', error);
-      }
-    }
-
-    // 2. 从 JSON 文件加载（Supplement & Fallback）
+    // 1. 从 JSON 文件加载（Supplement & Fallback）
     // 即使 DB 有数据，也检查 JSON 文件，合并可能因 DB 写入失败而仅存在于文件中的规则
     try {
       const data = await fs.readFile(RULES_FILE, 'utf-8');
@@ -1123,26 +990,14 @@ export class AlertEngine implements IAlertEngine {
     }
 
     this.rules = Array.from(rulesMap.values());
-    logger.info(`Total rules loaded (hybrid): ${this.rules.length}`);
-
-    // 3. 如果 DataStore 可用且从文件合并了额外规则，同步回 DataStore
-    if (this.dataStore && this.rules.length > 0) {
-      this.rulesDirty = true;
-    }
+    logger.info(`Total rules loaded: ${this.rules.length}`);
   }
 
   /**
    * 保存告警规则
    * Requirements: 11.2 - 更新内存缓存并异步持久化
-   * Requirements: 9.2 - 当 DataStore 可用时写入 alert_rules 表
    */
   private async saveRules(): Promise<void> {
-    // 当 DataStore 可用时，标记脏数据由 persistRules 写入 SQLite
-    if (this.dataStore) {
-      this.rulesDirty = true;
-      return;
-    }
-
     if (this.config.enableMemoryCache) {
       // 标记为脏数据，等待异步持久化
       this.rulesDirty = true;
@@ -1157,50 +1012,8 @@ export class AlertEngine implements IAlertEngine {
   /**
    * 读取指定日期的告警事件
    * Requirements: 11.1, 3.1 - 使用 LRU 缓存
-   * Requirements: 9.2 - 当 DataStore 可用时从 alert_events 表读取
    */
   private async readEventsFile(dateStr: string): Promise<AlertEvent[]> {
-    // 当 DataStore 可用时，从 SQLite 读取
-    if (this.dataStore) {
-      try {
-        // 计算日期范围（该天的开始和结束时间戳对应的 ISO 字符串）
-        const dayStart = new Date(dateStr + 'T00:00:00.000Z').toISOString();
-        const dayEnd = new Date(dateStr + 'T23:59:59.999Z').toISOString();
-
-        const rows = this.dataStore.query<{
-          id: string;
-          tenant_id: string;
-          device_id: string | null;
-          rule_id: string;
-          severity: string;
-          message: string;
-          metric_value: number | null;
-          status: string;
-          acknowledged_at: string | null;
-          resolved_at: string | null;
-          created_at: string;
-          notify_channels: string | null;
-          auto_response_config: string | null;
-        }>(
-          'SELECT * FROM alert_events WHERE created_at >= ? AND created_at <= ?',
-          [dayStart, dayEnd]
-        );
-
-        const events: AlertEvent[] = rows.map((row) => this.dbRowToAlertEvent(row));
-
-        // 加载到 LRU 缓存
-        if (this.config.enableMemoryCache && this.eventsCache) {
-          for (const event of events) {
-            this.eventsCache.set(event.id, event);
-          }
-        }
-
-        return events;
-      } catch (error) {
-        logger.error(`Failed to read alert events from DataStore for ${dateStr}, falling back to file:`, error);
-      }
-    }
-
     // Fallback: 从文件读取并与缓存合并
     // 逻辑变更：不再优先返回缓存，而是始终读取文件（如果存在）并与缓存合并
     // 防止因缓存驱逐导致读取到不完整的数据
@@ -1254,7 +1067,6 @@ export class AlertEngine implements IAlertEngine {
   /**
    * 写入告警事件
    * Requirements: 11.2, 3.1 - 更新 LRU 缓存并异步持久化
-   * Requirements: 9.2 - 当 DataStore 可用时写入 alert_events 表
    */
   private async writeEventsFile(dateStr: string, events: AlertEvent[]): Promise<void> {
     // PostgreSQL path (highest priority)
@@ -1289,38 +1101,6 @@ export class AlertEngine implements IAlertEngine {
         return;
       } catch (error) {
         logger.error('Failed to write events to PostgreSQL, falling back:', error);
-      }
-    }
-
-    // 当 DataStore 可用时，批量写入 SQLite
-    if (this.dataStore) {
-      try {
-        this.dataStore.transaction(() => {
-          for (const event of events) {
-            const tenantId = event.tenantId || 'default';
-            const deviceId = event.deviceId || null;
-            const createdAt = new Date(event.triggeredAt).toISOString();
-            const resolvedAt = event.resolvedAt ? new Date(event.resolvedAt).toISOString() : null;
-            const notifyChannels = JSON.stringify(event.notifyChannels || []);
-            const autoResponseConfig = JSON.stringify(event.autoResponseConfig || {});
-
-            this.dataStore!.run(
-              `INSERT OR REPLACE INTO alert_events (id, tenant_id, device_id, rule_id, severity, message, metric_value, status, resolved_at, created_at, notify_channels, auto_response_config)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-              [event.id, tenantId, deviceId, event.ruleId, event.severity, event.message, event.currentValue, event.status, resolvedAt, createdAt, notifyChannels, autoResponseConfig]
-            );
-          }
-        });
-
-        // 同时更新 LRU 缓存
-        if (this.config.enableMemoryCache && this.eventsCache) {
-          for (const event of events) {
-            this.eventsCache.set(event.id, event);
-          }
-        }
-        return;
-      } catch (error) {
-        logger.error('Failed to write events to DataStore, falling back to file:', error);
       }
     }
 
@@ -1382,32 +1162,6 @@ export class AlertEngine implements IAlertEngine {
         return;
       } catch (error) {
         logger.error('Failed to save event to PostgreSQL, falling back:', error);
-      }
-    }
-
-    // 当 DataStore 可用时，直接写入 SQLite
-    if (this.dataStore) {
-      try {
-        const tenantId = event.tenantId || 'default';
-        const deviceId = event.deviceId || null;
-        const createdAt = new Date(event.triggeredAt).toISOString();
-        const resolvedAt = event.resolvedAt ? new Date(event.resolvedAt).toISOString() : null;
-        const notifyChannels = JSON.stringify(event.notifyChannels || []);
-        const autoResponseConfig = JSON.stringify(event.autoResponseConfig || {});
-
-        this.dataStore.run(
-          `INSERT OR REPLACE INTO alert_events (id, tenant_id, device_id, rule_id, severity, message, metric_value, status, resolved_at, created_at, notify_channels, auto_response_config)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [event.id, tenantId, deviceId, event.ruleId || null, event.severity, event.message, event.currentValue ?? null, event.status, resolvedAt, createdAt, notifyChannels, autoResponseConfig]
-        );
-
-        // 同时更新 LRU 缓存
-        if (this.config.enableMemoryCache && this.eventsCache) {
-          this.eventsCache.set(event.id, event);
-        }
-        return;
-      } catch (error) {
-        logger.error('Failed to save event to DataStore, falling back to file:', error);
       }
     }
 
@@ -1473,39 +1227,7 @@ export class AlertEngine implements IAlertEngine {
       }
     }
 
-    // 混合加载策略：同时从 DataStore 和 JSON 文件加载，合并结果
-    // 与 getAlertHistory() 保持一致的混合检索策略
-
-    // 1. 从 DataStore (SQLite) 加载活跃告警（Primary Source）
-    if (this.dataStore) {
-      try {
-        const rows = this.dataStore.query<{
-          id: string;
-          tenant_id: string;
-          device_id: string | null;
-          rule_id: string;
-          severity: string;
-          message: string;
-          metric_value: number | null;
-          status: string;
-          acknowledged_at: string | null;
-          resolved_at: string | null;
-          created_at: string;
-          notify_channels: string | null;
-          auto_response_config: string | null;
-        }>("SELECT * FROM alert_events WHERE status = 'active'");
-
-        for (const row of rows) {
-          const event = this.dbRowToAlertEvent(row);
-          this.activeAlerts.set(event.id, event);
-        }
-        logger.info(`Loaded ${this.activeAlerts.size} active alerts from DataStore`);
-      } catch (error) {
-        logger.error('Failed to load active alerts from DataStore:', error);
-      }
-    }
-
-    // 2. 从 JSON 文件加载（Supplement & Fallback）
+    // 1. 从 JSON 文件加载（Fallback）
     // 即使 DB 有数据，也检查文件，合并可能因 DB 写入失败而仅存在于文件中的活跃告警
     try {
       const now = Date.now();
@@ -1550,22 +1272,7 @@ export class AlertEngine implements IAlertEngine {
       logger.error('Failed to read active alerts from files:', error);
     }
 
-    logger.info(`Total active alerts loaded (hybrid): ${this.activeAlerts.size}`);
-
-    // 3. 如果 DataStore 可用且从文件合并了额外告警，标记脏数据以同步回 DataStore
-    if (this.dataStore && this.activeAlerts.size > 0) {
-      for (const [id, event] of this.activeAlerts) {
-        const dateStr = getDateString(event.triggeredAt);
-        let dirtySet = this.eventsDirty.get(dateStr);
-        if (!dirtySet) {
-          dirtySet = new Set();
-          this.eventsDirty.set(dateStr, dirtySet);
-        }
-        // 只标记从文件合并来的事件为脏数据（需要同步到 DB）
-        // 通过尝试在 DB 中查找来判断
-        // 简化处理：标记所有事件，persistDirtyData 会处理去重
-      }
-    }
+    logger.info(`Total active alerts loaded: ${this.activeAlerts.size}`);
   }
 
   /**
@@ -1623,34 +1330,7 @@ export class AlertEngine implements IAlertEngine {
 
     this.rules.push(rule);
 
-    // 当 DataStore 可用时，直接写入 SQLite
-    if (this.dataStore) {
-      try {
-        const tenantId = tenant_id || ruleInput.tenantId || 'default';
-        const config = JSON.stringify({
-          metricLabel: rule.metricLabel,
-          targetStatus: rule.targetStatus,
-          duration: rule.duration,
-          cooldownMs: rule.cooldownMs,
-          channels: rule.channels,
-          autoResponse: rule.autoResponse,
-          lastTriggeredAt: rule.lastTriggeredAt,
-        });
-        const createdAt = new Date(now).toISOString();
-        const updatedAt = new Date(now).toISOString();
-
-        this.dataStore.run(
-          `INSERT INTO alert_rules (id, tenant_id, device_id, name, metric, operator, threshold, severity, enabled, config, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [rule.id, tenantId, device_id || ruleInput.deviceId || null, rule.name, rule.metric, rule.operator, rule.threshold, rule.severity, rule.enabled ? 1 : 0, config, createdAt, updatedAt]
-        );
-      } catch (error) {
-        logger.error('Failed to save rule to DataStore, falling back to file:', error);
-        await this.saveRules();
-      }
-    } else {
-      await this.saveRules();
-    }
+    await this.saveRules();
 
     logger.info(`Created alert rule: ${rule.name} (${rule.id})`);
     return rule;
@@ -1677,34 +1357,7 @@ export class AlertEngine implements IAlertEngine {
 
     this.rules[index] = updatedRule;
 
-    // 当 DataStore 可用时，直接更新 SQLite
-    if (this.dataStore) {
-      try {
-        const ruleAny = updatedRule as AlertRule & { tenant_id?: string; device_id?: string | null };
-        const tenantId = ruleAny.tenant_id || ruleAny.tenantId || 'default';
-        const deviceId = ruleAny.device_id || ruleAny.deviceId || null;
-        const config = JSON.stringify({
-          metricLabel: updatedRule.metricLabel,
-          targetStatus: updatedRule.targetStatus,
-          duration: updatedRule.duration,
-          cooldownMs: updatedRule.cooldownMs,
-          channels: updatedRule.channels,
-          autoResponse: updatedRule.autoResponse,
-          lastTriggeredAt: updatedRule.lastTriggeredAt,
-        });
-        const updatedAt = new Date(updatedRule.updatedAt).toISOString();
-
-        this.dataStore.run(
-          `UPDATE alert_rules SET tenant_id = ?, device_id = ?, name = ?, metric = ?, operator = ?, threshold = ?, severity = ?, enabled = ?, config = ?, updated_at = ? WHERE id = ?`,
-          [tenantId, deviceId, updatedRule.name, updatedRule.metric, updatedRule.operator, updatedRule.threshold, updatedRule.severity, updatedRule.enabled ? 1 : 0, config, updatedAt, id]
-        );
-      } catch (error) {
-        logger.error('Failed to update rule in DataStore, falling back to file:', error);
-        await this.saveRules();
-      }
-    } else {
-      await this.saveRules();
-    }
+    await this.saveRules();
 
     logger.info(`Updated alert rule: ${updatedRule.name} (${id})`);
     return updatedRule;
@@ -1725,16 +1378,7 @@ export class AlertEngine implements IAlertEngine {
     const rule = this.rules[index];
     this.rules.splice(index, 1);
 
-    // 当 DataStore 可用时，直接从 SQLite 删除
-    if (this.dataStore) {
-      try {
-        this.dataStore.run('DELETE FROM alert_rules WHERE id = ?', [id]);
-      } catch (error) {
-        logger.error('Failed to delete rule from DataStore:', error);
-      }
-    } else {
-      await this.saveRules();
-    }
+    await this.saveRules();
 
     // 清理触发状态
     this.triggerStates.delete(id);
@@ -2652,7 +2296,7 @@ export class AlertEngine implements IAlertEngine {
 
   /**
    * 执行自动响应脚本
-   * Requirements: G4.12 - 通过 DeviceManager 执行设备操作，替代 RouterOS API 直接调用
+   * Requirements: G4.12 - 通过 DeviceManager 执行设备操作，替代直接 API 调用
    */
   private async executeAutoResponse(event: AlertEvent, rule: AlertRule): Promise<void> {
     if (!rule.autoResponse?.script) return;
@@ -2845,7 +2489,7 @@ export class AlertEngine implements IAlertEngine {
    * 清理范围：
    * 1. 内存 activeAlerts Map（立即生效，阻止当前运行的 Brain tick）
    * 2. JSON 事件文件（防止重启后 loadActiveAlerts 重新加载残留告警）
-   * 注：DataStore (SQLite) 中的 alert_events 已由 deviceManager.deleteDevice 事务级联清理
+   * 注：DataStore (PostgreSQL) 中的 alert_events 已由 deviceManager.deleteDevice 事务级联清理
    */
   clearAlertsForDevice(deviceId: string): number {
     // 1. 清理内存缓存
@@ -2959,50 +2603,7 @@ export class AlertEngine implements IAlertEngine {
       }
     }
 
-    // 1. 尝试从数据库获取 (Primary Source)
-    if (this.dataStore) {
-      try {
-        const fromStr = new Date(from).toISOString();
-        const toStr = new Date(to).toISOString();
-
-        // 修复：查询时间窗口内所有存在的告警（包括开始于窗口前但结束于窗口内的，或仍在活跃的）
-        // created_at <= to AND (resolved_at >= from OR resolved_at IS NULL)
-        let query = 'SELECT * FROM alert_events WHERE created_at <= ? AND (resolved_at >= ? OR resolved_at IS NULL)';
-        const params: any[] = [toStr, fromStr];
-
-        if (deviceId) {
-          query += ' AND device_id = ?';
-          params.push(deviceId);
-        }
-
-        query += ' ORDER BY created_at DESC';
-
-        const rows = this.dataStore.query<{
-          id: string;
-          tenant_id: string;
-          device_id: string | null;
-          rule_id: string;
-          severity: string;
-          message: string;
-          metric_value: number | null;
-          status: string;
-          acknowledged_at: string | null;
-          resolved_at: string | null;
-          created_at: string;
-          notify_channels: string | null;
-          auto_response_config: string | null;
-        }>(query, params);
-
-        for (const row of rows) {
-          const event = this.dbRowToAlertEvent(row);
-          resultEvents.set(event.id, event);
-        }
-      } catch (error) {
-        logger.error('Failed to get alert history from DataStore (will use file fallback):', error);
-      }
-    }
-
-    // 2. 从文件读取 (Fallback & Supplement)
+    // 从文件读取 (Fallback & Supplement)
     // 即使 DB 可用，我们也读取文件，以防 DB 写入失败导致数据丢失 (Foreign Key 失败等情况)
     // 这是一个 "混合检索策略" (Hybrid Retrieval Strategy)
     try {
@@ -3127,17 +2728,7 @@ export class AlertEngine implements IAlertEngine {
       }
     }
 
-    // 当 DataStore 可用时，从 SQLite 删除
-    if (this.dataStore) {
-      try {
-        this.dataStore.run('DELETE FROM alert_events WHERE id = ?', [id]);
-      } catch (error) {
-        logger.error('Failed to delete event from DataStore:', error);
-        // 即使 SQLite 删除失败也继续尝试文件删除
-      }
-    }
-
-    // 同时从文件中删除（混合存储策略）
+    // 从文件中删除
     // Syslog 事件可能因 FK 约束未能写入 DB，仅存在于文件中
     // 即使 DataStore 可用，也需要清理文件中的残留数据
     {
@@ -3222,12 +2813,6 @@ export class AlertEngine implements IAlertEngine {
           found.status = 'resolved';
           found.resolvedAt = now;
           await this.writeEventsFile(dateStr, events);
-
-          // Requirements: 9.2 - 确保状态同步到数据库 (如果启用了 DataStore)
-          // 防止 file-fallback 路径下更新了文件但未更新数据库，导致 getAlertHistory 查询不到
-          if (this.dataStore) {
-            await this.saveEvent(found);
-          }
 
           // 清除指纹缓存，允许同样的告警再次触发
           const fingerprint = fingerprintCache.generateFingerprint(found);
@@ -3356,36 +2941,7 @@ export class AlertEngine implements IAlertEngine {
       }
     }
 
-    // 4. 当 DataStore 可用时，从 SQLite 查询
-    if (this.dataStore) {
-      try {
-        const rows = this.dataStore.query<{
-          id: string;
-          tenant_id: string;
-          device_id: string | null;
-          rule_id: string;
-          severity: string;
-          message: string;
-          metric_value: number | null;
-          status: string;
-          acknowledged_at: string | null;
-          resolved_at: string | null;
-          created_at: string;
-          notify_channels: string | null;
-          auto_response_config: string | null;
-        }>('SELECT * FROM alert_events WHERE id = ?', [id]);
-
-        if (rows.length > 0) {
-          return this.dbRowToAlertEvent(rows[0]);
-        }
-        // DB 中未找到，继续从文件中查找（混合检索策略）
-        // Syslog 事件可能因 FK 约束未能写入 DB，仅存在于文件中
-      } catch (error) {
-        logger.error('Failed to get alert event from DataStore, falling back to file:', error);
-      }
-    }
-
-    // 4. 从文件中查找 — 分级策略：先查 90 天，再全目录扫描
+    // 从文件中查找 — 分级策略：先查 90 天，再全目录扫描
     const now = Date.now();
     const ninetyDaysAgo = now - 90 * 24 * 60 * 60 * 1000;
     const dates = this.getDateRange(ninetyDaysAgo, now);

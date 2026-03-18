@@ -23,8 +23,8 @@ import {
   IAlertPreprocessor,
   EventSource,
 } from '../../types/ai-ops';
-import { RouterOSClient } from '../routerosClient';
 import { logger } from '../../utils/logger';
+import type { DevicePool } from '../device/devicePool';
 
 /**
  * 默认聚合规则
@@ -502,12 +502,12 @@ export class AlertPreprocessor implements IAlertPreprocessor {
     }
   }
 
-  private devicePool: any | null = null; // Store DevicePool instance
+  private devicePool: DevicePool | null = null; // Store DevicePool instance
 
   /**
    * 设置设备连接池
    */
-  setDevicePool(devicePool: any): void {
+  setDevicePool(devicePool: DevicePool): void {
     this.devicePool = devicePool;
     logger.debug('AlertPreprocessor device pool set');
   }
@@ -565,13 +565,13 @@ export class AlertPreprocessor implements IAlertPreprocessor {
       }
 
       // Get system identity
-      const identityResult = await (client as RouterOSClient).print<{ name: string }>(
+      const identityResult = await client.print<{ name: string }>(
         '/system/identity'
       );
       const hostname = identityResult[0]?.name || 'unknown';
 
       // Get system resource info
-      const resourceResult = await (client as RouterOSClient).print<{
+      const resourceResult = await client.print<{
         'board-name'?: string;
         version?: string;
         'architecture-name'?: string;
@@ -580,7 +580,7 @@ export class AlertPreprocessor implements IAlertPreprocessor {
 
       // Get connection config for IP
       const config = client.getConfig();
-      const ip = config?.host || 'unknown';
+      const ip = (config?.host as string) || 'unknown';
 
       const deviceInfo: DeviceInfo = {
         hostname,

@@ -54,14 +54,10 @@ import { FormattedKnowledge, KnowledgeType } from '../ai-ops/rag/types/intellige
 // Requirements: 9.3, 9.4 - Feature flag routing for gradual migration
 import { FeatureFlagManager } from '../ai-ops/stateMachine/featureFlagManager';
 import { StateMachineOrchestrator } from '../ai-ops/stateMachine/stateMachineOrchestrator';
-
-// Multi-device support: RouterOSClient type for request-level device client
-// Requirements: 8.1, 8.2
-import { RouterOSClient } from '../routerosClient';
 import { RelevanceScorer } from './relevanceScorer';
 
 // 泛化设备支持：DeviceManager 类型引用
-// Requirements: J2.6 - 替换 routerosClient 为 deviceId + DeviceManager
+// Requirements: J2.6 - 替换旧设备客户端为 deviceId + DeviceManager
 import type { DeviceManager } from '../device/deviceManager';
 
 // ==================== 类型定义 ====================
@@ -143,8 +139,6 @@ export interface UnifiedChatRequest {
   deviceId?: string;
   /** 多设备支持：请求级租户 ID */
   tenantId?: string;
-  /** 多设备支持：请求级 RouterOS 客户端（由 deviceProxy 中间件注入） */
-  routerosClient?: RouterOSClient;
 }
 
 /**
@@ -231,8 +225,6 @@ export interface UnifiedScriptRequest {
   script: string;
   sessionId?: string;
   dryRun?: boolean;
-  /** 多设备支持：请求级 RouterOS 客户端（由 deviceProxy 中间件注入） */
-  routerosClient?: RouterOSClient;
   /** 泛化设备支持：目标设备 ID */
   deviceId?: string;
 }
@@ -357,7 +349,7 @@ export class UnifiedAgentService {
   private _stateMachineOrchestrator: StateMachineOrchestrator | null = null;
 
   // 泛化设备支持：DeviceManager 引用
-  // Requirements: J2.6 - 替换 routerosClient 为 deviceId + DeviceManager
+  // Requirements: J2.6 - 通过 deviceId + DeviceManager 管理设备
   private deviceManagerRef: DeviceManager | null = null;
 
   // 标记是否使用依赖注入
@@ -495,7 +487,7 @@ export class UnifiedAgentService {
 
   /**
    * 注入 DeviceManager（泛化设备支持）
-   * Requirements: J2.6 - 替换 routerosClient 为 deviceId + DeviceManager
+   * Requirements: J2.6 - 通过 deviceId + DeviceManager 管理设备
    */
   setDeviceManager(dm: DeviceManager): void {
     this.deviceManagerRef = dm;
@@ -1126,7 +1118,7 @@ export class UnifiedAgentService {
 
   /**
    * 执行脚本
-   * Requirement 3.1: 支持 RouterOS 脚本执行
+   * Requirement 3.1: 支持设备脚本执行
    */
   async executeScript(request: UnifiedScriptRequest): Promise<ScriptExecuteResult> {
     this.ensureInitialized();
@@ -1135,7 +1127,6 @@ export class UnifiedAgentService {
       const result = await this.scriptExecutorService.execute({
         script: request.script,
         dryRun: request.dryRun,
-        routerosClient: request.routerosClient,
         deviceId: request.deviceId,
       });
 
@@ -1174,7 +1165,7 @@ export class UnifiedAgentService {
     if (result.success && result.output && request.sessionId) {
       try {
         // 构建分析请求
-        const deviceLabel = request.deviceId ? '设备' : 'RouterOS';
+        const deviceLabel = '设备';
         const analysisMessage = `请分析以下${deviceLabel}命令执行结果：\n\n命令：\n\`\`\`\n${request.script}\n\`\`\`\n\n执行结果：\n\`\`\`\n${result.output}\n\`\`\`\n\n请简要说明执行结果的含义，以及是否有需要注意的问题。`;
 
         const analysisResponse = await this.chat({
@@ -1748,9 +1739,9 @@ export class UnifiedAgentService {
           // 新增：传递预检索结果
           preRetrievedKnowledge,
           skipKnowledgeRetrieval: !!preRetrievedKnowledge,
-          // 多设备支持：传递请求级 RouterOS 客户端
+          // 多设备支持：传递请求级设备 ID
           // Requirements: 8.1, 8.2
-          routerosClient: request.routerosClient,
+          deviceId: request.deviceId,
         };
         const reActResult = await this.executeReActWithRouting(
           request.message,
@@ -2250,9 +2241,9 @@ export class UnifiedAgentService {
           // 新增：传递预检索结果（流式路径）
           preRetrievedKnowledge,
           skipKnowledgeRetrieval: !!preRetrievedKnowledge,
-          // 多设备支持：传递请求级 RouterOS 客户端
+          // 多设备支持：传递请求级设备 ID
           // Requirements: 8.1, 8.2
-          routerosClient: request.routerosClient,
+          deviceId: request.deviceId,
         };
         const reActResult = await this.executeReActWithRouting(
           request.message,
@@ -2596,8 +2587,8 @@ export class UnifiedAgentService {
 
   /**
    * 构建带有上下文的系统提示词
-   * Requirements: J2.6 - 当 deviceId 可用时，使用泛化设备上下文；否则回退到 RouterOS 路径
-   * Requirement 1.4: RouterOS 上下文注入（向后兼容）
+   * Requirements: J2.6 - 当 deviceId 可用时，使用泛化设备上下文；否则回退到默认路径
+   * Requirement 1.4: 设备上下文注入（向后兼容）
    */
   private async buildSystemPromptWithContext(deviceId?: string): Promise<string> {
     // 泛化设备路径：当 deviceId 可用时，通过 ContextBuilderService 的设备无关方法构建
@@ -2611,12 +2602,12 @@ export class UnifiedAgentService {
       }
     }
 
-    // RouterOS 向后兼容路径
+    // 向后兼容路径：无 deviceId 时使用默认连接上下文
     try {
       const context = await this.contextBuilderService.getConnectionContext();
       return this.contextBuilderService.buildSystemPromptWithContext(context);
     } catch (error) {
-      logger.warn('Failed to get RouterOS context, using default prompt', { error });
+      logger.warn('Failed to get device context, using default prompt', { error });
       return this.contextBuilderService.buildSystemPrompt();
     }
   }

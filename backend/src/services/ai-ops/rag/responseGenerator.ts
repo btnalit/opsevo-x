@@ -561,7 +561,7 @@ export class ResponseGenerator {
       messages: [
         {
           role: 'system',
-          content: '你是一个专业的 RouterOS 网络设备运维助手。请基于提供的信息生成清晰、有帮助的回答。',
+          content: '你是一个专业的 AIOps 智能运维助手。请基于提供的信息生成清晰、有帮助的回答。',
         },
         ...historyMessages,
         {
@@ -767,7 +767,7 @@ export class ResponseGenerator {
       
       for (const result of failedResults) {
         if (result.toolName === 'device_query') {
-          suggestions.push('确认 RouterOS API 服务已启用');
+          suggestions.push('确认设备 API 服务已启用');
         } else if (result.toolName === 'knowledge_search') {
           suggestions.push('尝试使用不同的关键词进行搜索');
         }

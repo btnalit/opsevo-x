@@ -15,8 +15,6 @@
 import { AgentTool } from './mastraAgent';
 import { knowledgeBase, KnowledgeQuery } from './knowledgeBase';
 import { ragEngine } from './ragEngine';
-import { routerosClient } from '../../routerosClient';
-import type { RouterOSClient } from '../../routerosClient';
 import { configSnapshotService } from '../configSnapshotService';
 import { alertEngine } from '../alertEngine';
 import { rootCauseAnalyzer } from '../rootCauseAnalyzer';
@@ -25,30 +23,32 @@ import { logger } from '../../../utils/logger';
 import { AlertEvent, UnifiedEvent, RAGDocument } from '../../../types/ai-ops';
 import { IntelligentRetriever, intelligentRetriever } from './intelligentRetriever';
 import { KnowledgeFormatter, knowledgeFormatter } from './knowledgeFormatter';
-import { convertToApiFormat, isFullCliCommand } from '../../../utils/routerosCliParser';
 import { deviceDriverManager } from '../../device/deviceDriverManager';
+import { serviceRegistry } from '../../serviceRegistry';
+import { SERVICE_NAMES } from '../../bootstrap';
 
 // ==================== 多设备支持：请求级客户端提取 ====================
 
 /**
- * 从工具参数中提取请求级 RouterOS 客户端，回退到全局单例
- * 当提供 deviceId 时，优先通过 deviceDriverManager 获取设备驱动
- * Requirements: 8.1, 8.2
+ * 从工具参数中提取有效的设备客户端
+ * 优先通过 deviceId + DevicePool 获取设备专属连接，
+ * 回退到 ServiceRegistry 中的全局默认客户端（单设备模式）
  * 
- * @param params 工具参数（可能包含 routerosClient 或 deviceId 字段）
- * @returns 有效的 RouterOS 客户端实例
+ * @param params 工具参数（可能包含 deviceId 或 tickDeviceId 字段）
+ * @returns 有效的设备客户端实例
  */
-function getEffectiveClient(params: Record<string, unknown>): RouterOSClient {
+function getEffectiveClient(params: Record<string, unknown>): any {
   // 优先使用 deviceDriverManager（当提供 deviceId 时）
-  if (params.deviceId && typeof params.deviceId === 'string') {
-    const driver = deviceDriverManager.getDriver(params.deviceId);
+  const deviceId = (params.deviceId as string) || (params.tickDeviceId as string);
+  if (deviceId) {
+    const driver = deviceDriverManager.getDriver(deviceId);
     if (driver) {
-      // 返回一个适配器对象，将 DeviceDriver 接口适配为 RouterOSClient 兼容接口
-      // 注意：这里仍返回 RouterOSClient 类型以保持向后兼容
-      logger.debug('getEffectiveClient: using deviceDriverManager for device', { deviceId: params.deviceId });
+      logger.debug('getEffectiveClient: using deviceDriverManager for device', { deviceId });
     }
   }
-  return (params.routerosClient as RouterOSClient) || routerosClient;
+  // 回退到 ServiceRegistry 中的 DevicePool
+  const devicePool = serviceRegistry.tryGet<any>(SERVICE_NAMES.DEVICE_POOL);
+  return devicePool ? { _pool: devicePool, deviceId } : null;
 }
 
 /**
@@ -996,33 +996,17 @@ export const executeCommandTool: EnhancedAgentTool = {
       }
 
       // 判断 args 是否为有效（非空）对象
-      // Fix: 空对象 {} 视为无 args，避免阻止 CLI 格式自动检测
+      // Fix: 空对象 {} 视为无 args，避免阻止命令格式自动检测
       const hasValidArgs = args && typeof args === 'object' && Object.keys(args).length > 0;
 
-      // 自动检测完整 CLI 命令格式（包含路径和参数）
-      // 当 LLM 传入完整 CLI 命令（如 "/ip/address/add address=192.168.1.1/24 interface=ether1"）时
-      // 自动分离路径和参数
-      if (!hasValidArgs && isFullCliCommand(command)) {
-        const { apiCommand, params: cliParams } = convertToApiFormat(command);
-        logger.info(`Auto-detected full CLI command, converted: ${command} -> ${apiCommand}`, { params: cliParams });
-        const result = await client.executeRaw(apiCommand, cliParams);
+      // 命令格式转换由设备驱动插件负责，平台层直接透传
+      // 如果命令包含空格且无显式参数，尝试作为原始命令执行
+      if (!hasValidArgs && command.includes(' ')) {
+        logger.info(`Executing raw command: ${command}`);
+        const result = await client.executeRaw(command, []);
         return {
           success: true,
-          command: apiCommand,
-          args: {},
-          result,
-        };
-      }
-
-      // 自动检测 CLI 风格命令（路径中包含空格，如 "/ip arp print"）
-      // 这类命令没有 = 参数，但路径需要转换为 API 格式
-      if (!hasValidArgs && command.startsWith('/') && command.includes(' ')) {
-        const { apiCommand, params: cliParams } = convertToApiFormat(command);
-        logger.info(`Auto-detected CLI-style command with spaces, converted: ${command} -> ${apiCommand}`, { params: cliParams });
-        const result = await client.executeRaw(apiCommand, cliParams);
-        return {
-          success: true,
-          command: apiCommand,
+          command,
           args: {},
           result,
         };
@@ -1077,7 +1061,12 @@ export const monitorMetricsTool: EnhancedAgentTool = {
     },
     interface: {
       type: 'string',
-      description: '指定接口名称，仅获取该接口的流量指标。如 ether1、bridge1。不指定则获取所有接口。',
+      description: '指定接口名称，仅获取该接口的流量指标。不指定则获取所有接口。',
+      required: false,
+    },
+    deviceId: {
+      type: 'string',
+      description: '目标设备 ID。多设备模式下必须指定。',
       required: false,
     },
   },
@@ -1086,18 +1075,82 @@ export const monitorMetricsTool: EnhancedAgentTool = {
     try {
       const metricsParam = params.metrics as string[] | undefined;
       const interfaceName = params.interface as string | undefined;
+      const deviceId = (params.deviceId as string) || (params.tickDeviceId as string);
 
       // 默认获取所有指标
       const metricsToFetch = metricsParam && metricsParam.length > 0
         ? metricsParam
         : ['all'];
 
-      // 多设备支持：使用请求级客户端，回退到全局单例
-      // Requirements: 8.1, 8.2
-      const client = getEffectiveClient(params);
+      const fetchAll = metricsToFetch.includes('all');
 
-      // 检查连接状态
-      if (!client.isConnected()) {
+      // 优先通过 DeviceDriver 采集标准化指标
+      if (deviceId) {
+        const driver = deviceDriverManager.getDriver(deviceId);
+        if (driver) {
+          try {
+            const deviceMetrics = await driver.collectMetrics();
+            const result: Record<string, unknown> = {};
+
+            if (fetchAll || metricsToFetch.includes('cpu')) {
+              result.cpu = {
+                load: deviceMetrics.cpuUsage ?? 0,
+                usagePercent: `${(deviceMetrics.cpuUsage ?? 0).toFixed(1)}%`,
+              };
+            }
+
+            if (fetchAll || metricsToFetch.includes('memory')) {
+              result.memory = {
+                usagePercent: `${(deviceMetrics.memoryUsage ?? 0).toFixed(1)}%`,
+              };
+            }
+
+            if (fetchAll || metricsToFetch.includes('disk')) {
+              result.disk = {
+                usagePercent: `${(deviceMetrics.diskUsage ?? 0).toFixed(1)}%`,
+              };
+            }
+
+            if (fetchAll || metricsToFetch.includes('interfaces')) {
+              let ifaces = deviceMetrics.interfaces || [];
+              if (interfaceName) {
+                ifaces = ifaces.filter(i => i.name === interfaceName);
+              }
+              result.interfaces = ifaces.map(iface => ({
+                name: iface.name,
+                status: iface.status,
+                rxBytes: iface.rxBytes ?? 0,
+                txBytes: iface.txBytes ?? 0,
+                rxPackets: iface.rxPackets ?? 0,
+                txPackets: iface.txPackets ?? 0,
+                rxErrors: iface.rxErrors ?? 0,
+                txErrors: iface.txErrors ?? 0,
+              }));
+            }
+
+            if (deviceMetrics.uptime !== undefined) {
+              result.uptime = deviceMetrics.uptime;
+            }
+
+            return {
+              success: true,
+              timestamp: deviceMetrics.timestamp,
+              deviceId: deviceMetrics.deviceId,
+              metrics: result,
+            };
+          } catch (driverError) {
+            logger.warn('DeviceDriver collectMetrics failed, falling back to legacy client', {
+              deviceId,
+              error: driverError instanceof Error ? driverError.message : String(driverError),
+            });
+            // 降级到旧客户端路径
+          }
+        }
+      }
+
+      // 回退: 通过旧客户端接口采集
+      const client = getEffectiveClient(params);
+      if (!client || !client.isConnected()) {
         return {
           success: false,
           error: '[DEVICE_DISCONNECTED] 未连接到受管设备，请检查设备状态或等待自动重连。',
@@ -1105,14 +1158,13 @@ export const monitorMetricsTool: EnhancedAgentTool = {
       }
 
       const result: Record<string, unknown> = {};
-      const fetchAll = metricsToFetch.includes('all');
 
-      // 获取 CPU 和内存指标（来自 /system/resource）
-      if (fetchAll || metricsToFetch.includes('cpu') || metricsToFetch.includes('memory')) {
+      // 通过设备驱动查询获取指标
+      if (fetchAll || metricsToFetch.includes('cpu') || metricsToFetch.includes('memory') || metricsToFetch.includes('disk')) {
         try {
-          const resources = await client.print<Record<string, string>>('/system/resource');
+          const resources = await client.print('/system/resource');
           if (resources && resources.length > 0) {
-            const resource = resources[0];
+            const resource = resources[0] as Record<string, string>;
 
             if (fetchAll || metricsToFetch.includes('cpu')) {
               result.cpu = {
@@ -1127,13 +1179,15 @@ export const monitorMetricsTool: EnhancedAgentTool = {
               const freeMemory = parseInt(resource['free-memory'] || '0', 10);
               const usedMemory = totalMemory - freeMemory;
               const usagePercent = totalMemory > 0 ? ((usedMemory / totalMemory) * 100).toFixed(1) : '0';
+              result.memory = { total: totalMemory, free: freeMemory, used: usedMemory, usagePercent: `${usagePercent}%` };
+            }
 
-              result.memory = {
-                total: totalMemory,
-                free: freeMemory,
-                used: usedMemory,
-                usagePercent: `${usagePercent}%`,
-              };
+            if (fetchAll || metricsToFetch.includes('disk')) {
+              const totalHdd = parseInt(resource['total-hdd-space'] || '0', 10);
+              const freeHdd = parseInt(resource['free-hdd-space'] || '0', 10);
+              const usedHdd = totalHdd - freeHdd;
+              const usagePercent = totalHdd > 0 ? ((usedHdd / totalHdd) * 100).toFixed(1) : '0';
+              result.disk = { total: totalHdd, free: freeHdd, used: usedHdd, usagePercent: `${usagePercent}%` };
             }
           }
         } catch (error) {
@@ -1141,36 +1195,11 @@ export const monitorMetricsTool: EnhancedAgentTool = {
         }
       }
 
-      // 获取磁盘指标（来自 /system/resource）
-      if (fetchAll || metricsToFetch.includes('disk')) {
-        try {
-          const resources = await client.print<Record<string, string>>('/system/resource');
-          if (resources && resources.length > 0) {
-            const resource = resources[0];
-            const totalHdd = parseInt(resource['total-hdd-space'] || '0', 10);
-            const freeHdd = parseInt(resource['free-hdd-space'] || '0', 10);
-            const usedHdd = totalHdd - freeHdd;
-            const usagePercent = totalHdd > 0 ? ((usedHdd / totalHdd) * 100).toFixed(1) : '0';
-
-            result.disk = {
-              total: totalHdd,
-              free: freeHdd,
-              used: usedHdd,
-              usagePercent: `${usagePercent}%`,
-            };
-          }
-        } catch (error) {
-          logger.warn('Failed to fetch disk metrics', { error });
-        }
-      }
-
-      // 获取接口流量指标
       if (fetchAll || metricsToFetch.includes('interfaces')) {
         try {
           const query = interfaceName ? { name: interfaceName } : undefined;
-          const interfaces = await client.print<Record<string, string>>('/interface', query);
-
-          result.interfaces = interfaces.map(iface => ({
+          const interfaces = await client.print('/interface', query);
+          result.interfaces = interfaces.map((iface: Record<string, string>) => ({
             name: iface.name,
             type: iface.type,
             running: iface.running === 'true',
@@ -1230,6 +1259,11 @@ export const checkConnectivityTool: EnhancedAgentTool = {
       description: 'ping 次数，默认 4。增加次数可以获得更准确的延迟统计。',
       required: false,
     },
+    deviceId: {
+      type: 'string',
+      description: '目标设备 ID。多设备模式下必须指定。',
+      required: false,
+    },
   },
   metadata: TOOL_METADATA.check_connectivity,
   execute: async (params: Record<string, unknown>) => {
@@ -1237,6 +1271,7 @@ export const checkConnectivityTool: EnhancedAgentTool = {
       const target = params.target as string;
       const checkType = (params.type as string) || 'ping';
       const count = (params.count as number) || 4;
+      const deviceId = (params.deviceId as string) || (params.tickDeviceId as string);
 
       if (!target) {
         return {
@@ -1245,12 +1280,41 @@ export const checkConnectivityTool: EnhancedAgentTool = {
         };
       }
 
-      // 多设备支持：使用请求级客户端，回退到全局单例
-      // Requirements: 8.1, 8.2
-      const client = getEffectiveClient(params);
+      // 优先通过 DeviceDriver 执行
+      if (deviceId) {
+        const driver = deviceDriverManager.getDriver(deviceId);
+        if (driver) {
+          try {
+            if (checkType === 'ping') {
+              const result = await driver.execute('ping', { target, count });
+              return {
+                success: true,
+                type: 'ping',
+                target,
+                count,
+                results: result.data ?? { message: result.success ? 'Ping completed' : 'Ping failed' },
+              };
+            } else if (checkType === 'traceroute') {
+              const result = await driver.execute('traceroute', { target });
+              return {
+                success: true,
+                type: 'traceroute',
+                target,
+                results: result.data ?? { message: result.success ? 'Traceroute completed' : 'Traceroute failed' },
+              };
+            }
+          } catch (driverError) {
+            logger.warn('DeviceDriver connectivity check failed, falling back to legacy client', {
+              deviceId,
+              error: driverError instanceof Error ? driverError.message : String(driverError),
+            });
+          }
+        }
+      }
 
-      // 检查连接状态
-      if (!client.isConnected()) {
+      // 回退: 通过旧客户端接口执行
+      const client = getEffectiveClient(params);
+      if (!client || !client.isConnected()) {
         return {
           success: false,
           error: '[DEVICE_DISCONNECTED] 未连接到受管设备，请检查设备状态或等待自动重连。',
@@ -1258,17 +1322,12 @@ export const checkConnectivityTool: EnhancedAgentTool = {
       }
 
       if (checkType === 'ping') {
-        // 执行 ping 命令
-        // RouterOS ping: /ping address=x.x.x.x count=4
         try {
           const pingParams = [
             `=address=${target}`,
             `=count=${count}`,
           ];
-
           const result = await client.executeRaw('/ping', pingParams);
-
-          // 解析 ping 结果
           const pingResults = Array.isArray(result) ? result : [];
           const successCount = pingResults.filter((r: Record<string, string>) => r.status === 'echo-reply' || r.time).length;
           const avgTime = pingResults.length > 0
@@ -1294,24 +1353,12 @@ export const checkConnectivityTool: EnhancedAgentTool = {
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : String(error);
           const errorCode = classifyAgentToolError(errorMessage);
-          return {
-            success: false,
-            type: 'ping',
-            target,
-            error: `[${errorCode}] ${errorMessage}`,
-          };
+          return { success: false, type: 'ping', target, error: `[${errorCode}] ${errorMessage}` };
         }
       } else if (checkType === 'traceroute') {
-        // 执行 traceroute 命令
-        // RouterOS traceroute: /tool/traceroute address=x.x.x.x
         try {
-          const traceParams = [
-            `=address=${target}`,
-          ];
-
+          const traceParams = [`=address=${target}`];
           const result = await client.executeRaw('/tool/traceroute', traceParams);
-
-          // 解析 traceroute 结果
           const hops = Array.isArray(result) ? result : [];
 
           return {
@@ -1331,12 +1378,7 @@ export const checkConnectivityTool: EnhancedAgentTool = {
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : String(error);
           const errorCode = classifyAgentToolError(errorMessage);
-          return {
-            success: false,
-            type: 'traceroute',
-            target,
-            error: `[${errorCode}] ${errorMessage}`,
-          };
+          return { success: false, type: 'traceroute', target, error: `[${errorCode}] ${errorMessage}` };
         }
       } else {
         return {

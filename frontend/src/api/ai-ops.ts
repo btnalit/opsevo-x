@@ -454,6 +454,7 @@ export interface FaultPattern {
   autoHeal: boolean
   builtin: boolean
   conditions: FaultCondition[]
+  conditionLogic?: 'AND' | 'OR'
   remediationScript: string
   rollbackScript?: string
   verificationScript?: string
