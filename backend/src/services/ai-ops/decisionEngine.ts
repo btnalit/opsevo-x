@@ -1459,13 +1459,16 @@ export class DecisionEngine implements IDecisionEngine {
     // Publish event to EventBus if available
     if (this.eventBus) {
       this.eventBus.publish({
-        type: 'decision_observed',
+        type: 'internal',
         payload: {
+          subType: 'decision_observed',
           decisionId: decision.id,
           alertId: decision.alertId,
           reasoning: decision.reasoning,
         },
         priority: 'low',
+        source: 'decision_engine',
+        schemaVersion: '1.0',
       }).catch(err => {
         logger.warn('Failed to publish observe event to EventBus:', err);
       });
@@ -1549,14 +1552,17 @@ export class DecisionEngine implements IDecisionEngine {
     // Publish feedback event to EventBus if available
     if (this.eventBus) {
       this.eventBus.publish({
-        type: 'decision_feedback_applied',
+        type: 'internal',
         payload: {
+          subType: 'decision_feedback_applied',
           decisionId: feedback.decisionId,
           outcome: feedback.outcome,
           score: feedback.score,
           ruleId: rule.id,
         },
         priority: 'low',
+        source: 'decision_engine',
+        schemaVersion: '1.0',
       }).catch(err => {
         logger.warn('Failed to publish feedback event to EventBus:', err);
       });

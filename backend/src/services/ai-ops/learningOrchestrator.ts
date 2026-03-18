@@ -247,3 +247,26 @@ export class LearningOrchestrator {
     this.evolutionEngine = engine;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Lazy singleton — deps are injected at startup via initLearningOrchestrator()
+// ---------------------------------------------------------------------------
+
+let _instance: LearningOrchestrator | null = null;
+
+/**
+ * Initialize the global LearningOrchestrator singleton.
+ * Must be called during application startup after all deps are available.
+ */
+export function initLearningOrchestrator(deps: LearningOrchestratorDeps): LearningOrchestrator {
+  _instance = new LearningOrchestrator(deps);
+  return _instance;
+}
+
+/**
+ * Get the global LearningOrchestrator singleton.
+ * Returns null if not yet initialized (safe for optional usage).
+ */
+export function getLearningOrchestrator(): LearningOrchestrator | null {
+  return _instance;
+}

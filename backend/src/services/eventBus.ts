@@ -24,14 +24,7 @@ export type EventType =
 
 export type Priority = 'critical' | 'high' | 'medium' | 'low' | 'info';
 
-/** 优先级数值映射，数值越小优先级越高 */
-const PRIORITY_ORDER: Record<Priority, number> = {
-  critical: 0,
-  high: 1,
-  medium: 2,
-  low: 3,
-  info: 4,
-};
+/** @deprecated PRIORITY_ORDER removed — PriorityQueue was a memory leak (never dequeued in production) */
 
 export interface PerceptionEvent {
   id: string;
@@ -100,89 +93,16 @@ const VALID_PRIORITIES = new Set<Priority>([
 
 // ─── 优先级队列 ───
 
-/**
- * 最小堆优先级队列，按 priority 数值排序（数值小 = 优先级高）
- */
-class PriorityQueue<T extends { priority: Priority; timestamp: number }> {
-  private heap: T[] = [];
-
-  get size(): number {
-    return this.heap.length;
-  }
-
-  enqueue(item: T): void {
-    this.heap.push(item);
-    this.bubbleUp(this.heap.length - 1);
-  }
-
-  dequeue(): T | undefined {
-    if (this.heap.length === 0) return undefined;
-    const top = this.heap[0];
-    const last = this.heap.pop()!;
-    if (this.heap.length > 0) {
-      this.heap[0] = last;
-      this.sinkDown(0);
-    }
-    return top;
-  }
-
-  peek(): T | undefined {
-    return this.heap[0];
-  }
-
-  clear(): void {
-    this.heap = [];
-  }
-
-  toArray(): T[] {
-    return [...this.heap];
-  }
-
-  private compare(a: T, b: T): number {
-    const pa = PRIORITY_ORDER[a.priority];
-    const pb = PRIORITY_ORDER[b.priority];
-    if (pa !== pb) return pa - pb;
-    // 同优先级按时间戳 FIFO
-    return a.timestamp - b.timestamp;
-  }
-
-  private bubbleUp(idx: number): void {
-    while (idx > 0) {
-      const parent = Math.floor((idx - 1) / 2);
-      if (this.compare(this.heap[idx], this.heap[parent]) >= 0) break;
-      [this.heap[idx], this.heap[parent]] = [this.heap[parent], this.heap[idx]];
-      idx = parent;
-    }
-  }
-
-  private sinkDown(idx: number): void {
-    const len = this.heap.length;
-    while (true) {
-      let smallest = idx;
-      const left = 2 * idx + 1;
-      const right = 2 * idx + 2;
-      if (left < len && this.compare(this.heap[left], this.heap[smallest]) < 0) {
-        smallest = left;
-      }
-      if (right < len && this.compare(this.heap[right], this.heap[smallest]) < 0) {
-        smallest = right;
-      }
-      if (smallest === idx) break;
-      [this.heap[idx], this.heap[smallest]] = [this.heap[smallest], this.heap[idx]];
-      idx = smallest;
-    }
-  }
-}
+/** @deprecated PriorityQueue removed — was a memory leak (enqueued all events, never dequeued in production) */
 
 
 // ─── EventBus 核心 ───
 
 export class EventBus {
   private subscribers: Map<EventType, Set<EventSubscriber>> = new Map();
-  private eventQueue: PriorityQueue<PerceptionEvent> = new PriorityQueue();
+  /** Counter of total published events (replaces PriorityQueue which was a memory leak) */
+  private publishedCount: number = 0;
   private activeSources: Map<string, PerceptionSourceMeta> = new Map();
-  /** 已分配的事件 ID 集合，保证生命周期内唯一 (PD.5) */
-  private assignedIds: Set<string> = new Set();
 
   // ─── 发布 ───
 
@@ -213,8 +133,8 @@ export class EventBus {
       timestamp,
     } as PerceptionEvent;
 
-    // 入优先级队列
-    this.eventQueue.enqueue(fullEvent);
+    // Track published event count (no longer enqueuing — was a memory leak)
+    this.publishedCount++;
 
     // 投递到所有匹配订阅者 (PD.4)
     await this.dispatch(fullEvent);
@@ -297,24 +217,24 @@ export class EventBus {
   // ─── 队列操作 ───
 
   /**
-   * 获取队列深度
+   * 获取已发布事件总数（原为队列深度，但队列从未被消费导致内存泄漏，现改为计数器）
    */
   getQueueDepth(): number {
-    return this.eventQueue.size;
+    return this.publishedCount;
   }
 
   /**
-   * 从优先级队列中取出最高优先级事件
+   * @deprecated PriorityQueue removed — was never dequeued in production (memory leak)
    */
   dequeue(): PerceptionEvent | undefined {
-    return this.eventQueue.dequeue();
+    return undefined;
   }
 
   /**
-   * 查看队列头部事件（不移除）
+   * @deprecated PriorityQueue removed — was never dequeued in production (memory leak)
    */
   peek(): PerceptionEvent | undefined {
-    return this.eventQueue.peek();
+    return undefined;
   }
 
   /**
@@ -328,10 +248,9 @@ export class EventBus {
    * 清空队列和已分配 ID（主要用于测试）
    */
   reset(): void {
-    this.eventQueue.clear();
+    this.publishedCount = 0;
     this.subscribers.clear();
     this.activeSources.clear();
-    this.assignedIds.clear();
   }
 
   // ─── 内部方法 ───
@@ -383,12 +302,7 @@ export class EventBus {
    * 生成全局唯一事件 ID (PD.5)
    */
   private generateUniqueId(): string {
-    let id: string;
-    do {
-      id = uuidv4();
-    } while (this.assignedIds.has(id));
-    this.assignedIds.add(id);
-    return id;
+    return uuidv4();
   }
 
   /**

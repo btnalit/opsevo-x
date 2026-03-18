@@ -245,6 +245,8 @@ export {
 // 学习编排器 (Requirements: F2.8, F2.9, F2.10, F3.11, F3.12, F4.13, F4.20, F4.21)
 export {
   LearningOrchestrator,
+  initLearningOrchestrator,
+  getLearningOrchestrator,
   type LearningOrchestratorDeps,
   type CriticServiceLike,
   type ReflectorServiceLike,
@@ -257,6 +259,9 @@ export {
   type EvolutionResult,
   type LearningStepError,
 } from './learningOrchestrator';
+
+// 持续学习协调器 (Requirements: F2.8)
+export { ContinuousLearner, continuousLearner } from './continuousLearner';
 
 // 进化引擎 (Requirements: F4.14, F4.15, F4.16, F4.17, F4.18, F4.19)
 export {

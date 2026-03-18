@@ -55,7 +55,7 @@ describe('EventBus', () => {
       expect(typeof event.timestamp).toBe('number');
     });
 
-    it('should enqueue event into priority queue', async () => {
+    it('should increment published count', async () => {
       await bus.publish(makeEvent());
       expect(bus.getQueueDepth()).toBe(1);
     });
@@ -252,46 +252,24 @@ describe('EventBus', () => {
     });
   });
 
-  // ─── 优先级队列 ───
+  // ─── deprecated queue operations (PriorityQueue removed — was memory leak) ───
 
-  describe('priority queue', () => {
-    it('should dequeue events in priority order', async () => {
-      await bus.publish(makeEvent({ priority: 'low', source: 'a' }));
-      await bus.publish(makeEvent({ priority: 'critical', source: 'b' }));
-      await bus.publish(makeEvent({ priority: 'high', source: 'c' }));
-
-      const e1 = bus.dequeue();
-      const e2 = bus.dequeue();
-      const e3 = bus.dequeue();
-
-      expect(e1?.priority).toBe('critical');
-      expect(e2?.priority).toBe('high');
-      expect(e3?.priority).toBe('low');
-    });
-
-    it('should dequeue same-priority events in FIFO order', async () => {
-      // Use slightly different timestamps to ensure ordering
-      const e1 = await bus.publish(makeEvent({ priority: 'medium', source: 'first' }));
-      const e2 = await bus.publish(makeEvent({ priority: 'medium', source: 'second' }));
-
-      const d1 = bus.dequeue();
-      const d2 = bus.dequeue();
-
-      expect(d1?.source).toBe('first');
-      expect(d2?.source).toBe('second');
-    });
-
-    it('should return undefined when dequeuing empty queue', () => {
+  describe('deprecated queue operations', () => {
+    it('dequeue should return undefined (PriorityQueue removed)', async () => {
+      await bus.publish(makeEvent({ priority: 'critical', source: 'a' }));
       expect(bus.dequeue()).toBeUndefined();
     });
 
-    it('peek should return highest priority without removing', async () => {
-      await bus.publish(makeEvent({ priority: 'low' }));
+    it('peek should return undefined (PriorityQueue removed)', async () => {
       await bus.publish(makeEvent({ priority: 'critical' }));
+      expect(bus.peek()).toBeUndefined();
+    });
 
-      const peeked = bus.peek();
-      expect(peeked?.priority).toBe('critical');
-      expect(bus.getQueueDepth()).toBe(2); // not removed
+    it('getQueueDepth should return total published count', async () => {
+      await bus.publish(makeEvent({ priority: 'low', source: 'a' }));
+      await bus.publish(makeEvent({ priority: 'critical', source: 'b' }));
+      await bus.publish(makeEvent({ priority: 'high', source: 'c' }));
+      expect(bus.getQueueDepth()).toBe(3);
     });
   });
 

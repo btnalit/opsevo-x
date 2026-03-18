@@ -53,6 +53,9 @@ import {
   faultPatternLibrary,
   feedbackService,
   patternLearner,
+  continuousLearner,
+  degradationManager,
+  initLearningOrchestrator,
 } from './services/ai-ops';
 import { ragEngine, fastPathMetrics } from './services/ai-ops/rag';
 import { scriptSynthesizer } from './services/ai-ops/scriptSynthesizer';
@@ -500,6 +503,15 @@ async function registerAuthRoutes(): Promise<void> {
       logger.warn('PgDataStore not available for CriticService, using file fallback');
     }
 
+    // LearningOrchestrator: wire deps (F2.8, F2.9, F3.12, F3.11)
+    initLearningOrchestrator({
+      critic: criticService,
+      reflector: reflectorService,
+      patternLearner: patternLearner,
+      feedbackService: feedbackService,
+    });
+    logger.info('LearningOrchestrator initialized');
+
     // 6. TopologyDiscoveryService
     topologyDiscoveryService.setDeviceProvider(async () => {
       const tenants = dataStore.query<{ id: string }>('SELECT id FROM users');
@@ -856,9 +868,43 @@ const gracefulShutdown = async (signal: string) => {
     await skillManager.shutdown();
     await fastPathMetrics.destroy();
 
+    // 停止带定时器的 AI-Ops 服务 (Issue 2: 之前遗漏的服务)
+    faultHealer.shutdown();
+    anomalyPredictor.shutdown();
+    healthMonitor.shutdown();
+    continuousLearner.shutdown();
+    degradationManager.shutdown();
+
     // 阶段 5：关闭进化配置文件监听
     logger.info('Phase 5: Shutting down evolution config...');
     shutdownEvolutionConfig();
+
+    // 阶段 6：关闭基础设施连接
+    logger.info('Phase 6: Closing infrastructure connections...');
+
+    // 停止 SNMP Trap 接收器 (UDP server)
+    try {
+      const snmpReceiver = serviceRegistry.tryGet<any>(SERVICE_NAMES.SNMP_TRAP_RECEIVER);
+      if (snmpReceiver) { await snmpReceiver.stop(); }
+    } catch { /* not initialized */ }
+
+    // 关闭设备连接池
+    try {
+      const devicePool = serviceRegistry.tryGet<DevicePool>(SERVICE_NAMES.DEVICE_POOL);
+      if (devicePool) { await devicePool.destroy(); }
+    } catch { /* not initialized */ }
+
+    // 关闭 SQLite 连接
+    try {
+      const dataStore = serviceRegistry.tryGet<DataStore>(SERVICE_NAMES.DATA_STORE);
+      if (dataStore) { await dataStore.close(); }
+    } catch { /* not initialized */ }
+
+    // 关闭 PostgreSQL 连接池
+    try {
+      const pgDataStore = serviceRegistry.tryGet<any>(SERVICE_NAMES.PG_DATA_STORE);
+      if (pgDataStore) { await pgDataStore.close(); }
+    } catch { /* not initialized */ }
 
     logger.info('All AI-Ops services stopped successfully');
   } catch (error) {
