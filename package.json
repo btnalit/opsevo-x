@@ -1,0 +1,27 @@
+{
+  "name": "opsevo-x",
+  "version": "1.0.0",
+  "description": "Opsevo-x — 泛化 AIOps 智能运维平台",
+  "main": "index.js",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:backend": "cd backend && npm run dev",
+    "dev:frontend": "cd frontend && npm run dev",
+    "build": "npm run build:backend && npm run build:frontend",
+    "build:backend": "cd backend && npm run build",
+    "build:frontend": "cd frontend && npm run build",
+    "start": "cd backend && npm start",
+    "test": "npm run test:backend && npm run test:frontend",
+    "test:backend": "cd backend && npm test",
+    "test:frontend": "cd frontend && npm test",
+    "lint": "npm run lint:backend && npm run lint:frontend",
+    "lint:backend": "cd backend && npm run lint",
+    "lint:frontend": "cd frontend && npm run lint"
+  },
+  "keywords": ["aiops", "intelligent-ops", "device-agnostic", "event-driven", "brain-loop"],
+  "author": "Opsevo Team",
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

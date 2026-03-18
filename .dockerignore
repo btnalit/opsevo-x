@@ -1,0 +1,119 @@
+# Git
+.git
+.gitignore
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Node modules (will be installed in container)
+node_modules
+**/node_modules
+
+# Build outputs (will be built in container)
+backend/dist
+frontend/dist
+
+# Logs
+*.log
+logs
+**/logs
+
+# Environment files (use docker-compose environment instead)
+.env
+.env.local
+.env.*.local
+
+# Test files
+**/*.test.ts
+**/*.spec.ts
+**/test
+**/tests
+**/__tests__
+coverage
+**/coverage
+
+# Documentation (exclude docs folder but keep SKILL.md files)
+docs
+*.md
+!backend/data/ai-ops/skills/**/SKILL.md
+CHANGELOG.md
+CONTRIBUTING.md
+LICENSE.md
+
+# Reports
+reports
+
+# Docker files (not needed inside container)
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# Kiro specs
+.kiro
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+tmp
+temp
+*.tmp
+*.temp
+
+# Data files (will be mounted as volume, except skills)
+backend/data/ai-agent.json
+backend/data/connection.json
+backend/data/prompt-templates.json
+backend/data/ai-ops/alerts
+backend/data/ai-ops/analysis
+backend/data/ai-ops/audit
+backend/data/ai-ops/channels.json
+backend/data/ai-ops/decisions
+backend/data/ai-ops/enhancement
+# Keep evolution-config.json for Docker build (needed as initial template)
+# backend/data/ai-ops/evolution-config.json
+backend/data/ai-ops/feedback
+backend/data/ai-ops/filters
+backend/data/ai-ops/health
+backend/data/ai-ops/metrics
+backend/data/ai-ops/metrics-config.json
+backend/data/ai-ops/notifications
+backend/data/ai-ops/patterns
+backend/data/ai-ops/rag
+backend/data/ai-ops/remediations
+backend/data/ai-ops/reports
+backend/data/ai-ops/scheduler
+backend/data/ai-ops/snapshots
+backend/data/ai-ops/prompt-templates.json
+# Keep skills directory for Docker build (do NOT exclude)
+
+# Certificates (will be mounted as volume)
+certs
+
+# Development config
+nodemon.json
+jest.config.js
+vitest.config.ts
+tsconfig.node.json
+.eslintrc.*
+.prettierrc*
+
+# Python cache artifacts
+**/__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+python-core/.venv
+python-core/.env
+
+# Backup files
+*-bk
+*.bak
+*.backup
+
+# Test artifacts
+__test_vector_migrations_*

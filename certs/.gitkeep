@@ -1,0 +1,4 @@
+# Place your SSL certificates here for HTTPS support
+# Required files:
+# - server.crt (SSL certificate)
+# - server.key (SSL private key)

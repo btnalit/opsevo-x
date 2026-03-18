@@ -1,0 +1,168 @@
+{
+  "profileId": "routeros",
+  "displayName": "MikroTik RouterOS",
+  "vendor": "MikroTik",
+  "model": "RouterOS",
+  "baseUrl": "https://{{host}}:{{port}}/rest",
+  "auth": {
+    "type": "basic"
+  },
+  "timeout": 30000,
+  "retries": 2,
+  "tls": {
+    "rejectUnauthorized": false
+  },
+  "endpoints": [
+    {
+      "actionType": "system.resource",
+      "method": "GET",
+      "path": "/system/resource",
+      "description": "Get system resource usage (CPU, memory, uptime)",
+      "readOnly": true,
+      "riskLevel": "low",
+      "outputFormat": "json"
+    },
+    {
+      "actionType": "system.identity",
+      "method": "GET",
+      "path": "/system/identity",
+      "description": "Get system identity (hostname)",
+      "readOnly": true,
+      "riskLevel": "low"
+    },
+    {
+      "actionType": "system.routerboard",
+      "method": "GET",
+      "path": "/system/routerboard",
+      "description": "Get routerboard hardware info",
+      "readOnly": true,
+      "riskLevel": "low"
+    },
+    {
+      "actionType": "interface.list",
+      "method": "GET",
+      "path": "/interface",
+      "description": "List all network interfaces",
+      "readOnly": true,
+      "riskLevel": "low"
+    },
+    {
+      "actionType": "interface.get",
+      "method": "GET",
+      "path": "/interface/:id",
+      "description": "Get interface details by ID",
+      "readOnly": true,
+      "riskLevel": "low"
+    },
+    {
+      "actionType": "ip.address.list",
+      "method": "GET",
+      "path": "/ip/address",
+      "description": "List IP addresses",
+      "readOnly": true,
+      "riskLevel": "low"
+    },
+    {
+      "actionType": "ip.route.list",
+      "method": "GET",
+      "path": "/ip/route",
+      "description": "List IP routes",
+      "readOnly": true,
+      "riskLevel": "low"
+    },
+    {
+      "actionType": "ip.firewall.filter.list",
+      "method": "GET",
+      "path": "/ip/firewall/filter",
+      "description": "List firewall filter rules",
+      "readOnly": true,
+      "riskLevel": "low"
+    },
+    {
+      "actionType": "ip.firewall.nat.list",
+      "method": "GET",
+      "path": "/ip/firewall/nat",
+      "description": "List firewall NAT rules",
+      "readOnly": true,
+      "riskLevel": "low"
+    },
+    {
+      "actionType": "ip.dns.list",
+      "method": "GET",
+      "path": "/ip/dns",
+      "description": "Get DNS configuration",
+      "readOnly": true,
+      "riskLevel": "low"
+    },
+    {
+      "actionType": "ip.dhcp-server.lease.list",
+      "method": "GET",
+      "path": "/ip/dhcp-server/lease",
+      "description": "List DHCP leases",
+      "readOnly": true,
+      "riskLevel": "low"
+    },
+    {
+      "actionType": "system.logging.list",
+      "method": "GET",
+      "path": "/log",
+      "description": "Get system logs",
+      "readOnly": true,
+      "riskLevel": "low"
+    },
+    {
+      "actionType": "generic.add",
+      "method": "PUT",
+      "path": "/:path",
+      "description": "Add a new record to any path",
+      "readOnly": false,
+      "riskLevel": "medium"
+    },
+    {
+      "actionType": "generic.set",
+      "method": "PATCH",
+      "path": "/:path/:id",
+      "description": "Update a record by ID",
+      "readOnly": false,
+      "riskLevel": "medium"
+    },
+    {
+      "actionType": "generic.remove",
+      "method": "DELETE",
+      "path": "/:path/:id",
+      "description": "Remove a record by ID",
+      "readOnly": false,
+      "riskLevel": "high"
+    },
+    {
+      "actionType": "interface.enable",
+      "method": "POST",
+      "path": "/interface/set",
+      "description": "Enable an interface",
+      "readOnly": false,
+      "riskLevel": "high",
+      "bodyTemplate": { "disabled": "false" }
+    },
+    {
+      "actionType": "interface.disable",
+      "method": "POST",
+      "path": "/interface/set",
+      "description": "Disable an interface",
+      "readOnly": false,
+      "riskLevel": "critical",
+      "bodyTemplate": { "disabled": "true" }
+    }
+  ],
+  "metricsEndpoints": {
+    "cpuUsage": "system.resource",
+    "memoryUsage": "system.resource",
+    "uptime": "system.resource",
+    "interfaces": "interface.list"
+  },
+  "dataEndpoints": {
+    "topology": "interface.list",
+    "routes": "ip.route.list",
+    "firewall": "ip.firewall.filter.list",
+    "logs": "system.logging.list"
+  }
+}

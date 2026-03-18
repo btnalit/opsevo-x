@@ -1,0 +1,35 @@
+{
+  "allowedTools": [
+    "knowledge_search",
+    "device_query",
+    "monitor_metrics",
+    "config_diff"
+  ],
+  "toolPriority": [
+    "knowledge_search",
+    "device_query",
+    "monitor_metrics"
+  ],
+  "toolDefaults": {
+    "device_query": {
+      "limit": 100
+    },
+    "knowledge_search": {
+      "limit": 5,
+      "minScore": 0.3
+    }
+  },
+  "toolConstraints": {},
+  "caps": {
+    "maxTokens": 4096,
+    "temperature": 0.1,
+    "maxIterations": 15
+  },
+  "knowledgeConfig": {
+    "enabled": true,
+    "priorityTypes": ["config", "manual", "pattern"],
+    "minScore": 0.3
+  },
+  "outputFormat": "structured",
+  "requireCitations": true
+}

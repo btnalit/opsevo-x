@@ -1,0 +1,231 @@
+/* src/styles/theme.css */
+
+/* 
+ * Tech-Dark Theme System V2
+ * A professional, high-performance dark theme inspired by modern monitoring tools.
+ */
+:root {
+  /* Cyber-Dark Reference Palette - "Blue-Grey Slate" Scheme */
+  --el-color-primary: #409eff;
+  --el-color-primary-light-3: #79bbff;
+  --el-color-primary-light-5: #a0cfff;
+  --el-color-primary-light-7: #c6e2ff;
+  --el-color-primary-light-8: #d9ecff;
+  --el-color-primary-light-9: #ecf5ff;
+  --el-color-primary-dark-2: #337ecc;
+
+  /* Neutrals (Cyber Blue-Grey Slate Scale) */
+  --el-bg-color: #161c24;
+  /* Main Background - Slate Blue-Grey */
+  --el-bg-color-page: #161c24;
+  --el-bg-color-overlay: #1e2530;
+  /* Card Surface */
+
+  /* Text Hierarchy */
+  --el-text-color-primary: #f0f6fc;
+  --el-text-color-regular: #b0c4cf;
+  --el-text-color-secondary: #8b9eb0;
+  --el-text-color-placeholder: #526175;
+  --el-text-color-disabled: #3d4959;
+
+  /* Borders & Fills */
+  --el-border-color: #526175;
+  /* High contrast border */
+  --el-border-color-light: #5d7085;
+  /* Grid lines & Section separators */
+  --el-border-color-lighter: #3d4959;
+  /* Standard component borders */
+  --el-border-color-extra-light: #2d3b4d;
+  /* Softest separation, now visible */
+  --el-fill-color: #242f3d;
+  --el-fill-color-light: #2d3b4d;
+  --el-fill-color-lighter: #161e29;
+  --el-fill-color-extra-light: #121822;
+  --el-fill-color-blank: transparent;
+
+  /* Depth & FX */
+  --el-box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  --el-box-shadow-light: 0 4px 12px rgba(0, 0, 0, 0.3);
+
+  /* Specialized AIOps Tokens */
+  --ai-glass-bg: rgba(30, 37, 48, 0.85);
+  --ai-glass-border: rgba(240, 246, 252, 0.1);
+  --ai-sidebar-bg: #1e2530;
+  --ai-header-bg: rgba(30, 37, 48, 0.95);
+
+  /* Element Plus Component Sync */
+  --el-card-bg-color: var(--el-bg-color-overlay);
+  --el-menu-bg-color: var(--ai-sidebar-bg);
+  --el-dialog-bg-color: var(--el-bg-color-overlay);
+  --el-border-radius-base: 8px;
+
+  /* Code Highlighting Tokens (VS Code Dark+ Style) */
+  --ai-code-text: #d4d4d4;
+  --ai-code-keyword: #569cd6;
+  --ai-code-string: #ce9178;
+  --ai-code-number: #b5cea8;
+  --ai-code-comment: #6a9955;
+  --ai-code-function: #dcdcaa;
+  --ai-code-variable: #9cdcfe;
+  --ai-code-builtin: #4ec9b0;
+  --ai-code-bg: #1e1e1e;
+  --ai-code-header-bg: #2d2d2d;
+  --ai-code-border: #3d3d3d;
+
+  /* Global Loading Mask */
+  --el-loading-mask-color: rgba(22, 28, 36, 0.85);
+  --el-mask-color: rgba(22, 28, 36, 0.85);
+  --el-mask-color-extra-light: rgba(22, 28, 36, 0.5);
+}
+
+/* Global Reset (Safe) */
+html,
+body {
+  background-color: var(--el-bg-color);
+  color: var(--el-text-color-primary);
+  margin: 0;
+  padding: 0;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  color-scheme: dark;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* Glassmorphism Classes (Opt-in) */
+.glass-panel {
+  background: var(--ai-glass-bg) !important;
+  backdrop-filter: blur(12px) !important;
+  -webkit-backdrop-filter: blur(12px) !important;
+  border: 1px solid var(--ai-glass-border) !important;
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3) !important;
+}
+
+/* Typography Helpers (Safe) */
+.font-mono {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace !important;
+}
+
+/* Global Scrollbar (Stylistic only) */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--el-bg-color);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--el-border-color-light);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--el-text-color-placeholder);
+}
+
+::-webkit-scrollbar-corner {
+  background: var(--el-bg-color);
+}
+
+/* Element Component Overrides (Safe CSS only) */
+.el-card {
+  --el-card-border-color: var(--el-border-color-extra-light);
+  --el-card-bg-color: var(--el-bg-color-overlay);
+  border-radius: 12px;
+  border: 1px solid var(--el-card-border-color);
+}
+
+/* Global Input & Textarea Dark Mode Safeguards */
+.el-input__inner,
+.el-textarea__inner {
+  background-color: var(--el-fill-color-lighter) !important;
+  color: var(--el-text-color-primary) !important;
+  border-color: var(--el-border-color-light) !important;
+  box-shadow: none !important;
+}
+
+.el-input__inner:focus,
+.el-textarea__inner:focus {
+  background-color: var(--el-fill-color-light) !important;
+  border-color: var(--el-color-primary) !important;
+  box-shadow: none !important;
+}
+
+/* Input Group/Append/Prepend */
+.el-input-group__append,
+.el-input-group__prepend {
+  background-color: var(--el-fill-color-extra-light) !important;
+  border-color: var(--el-border-color-lighter) !important;
+  color: var(--el-text-color-regular) !important;
+}
+
+.el-table {
+  --el-table-header-bg-color: var(--el-fill-color-light);
+  --el-table-row-hover-bg-color: var(--el-fill-color);
+  --el-table-tr-bg-color: transparent;
+  --el-table-border-color: var(--el-border-color-lighter);
+  background-color: transparent !important;
+  border: 1px solid var(--el-border-color-lighter) !important;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.el-table--border .el-table__cell {
+  border-right: 1px solid var(--el-border-color-lighter) !important;
+  border-bottom: 1px solid var(--el-border-color-lighter) !important;
+}
+
+.el-table__inner-wrapper::before {
+  background-color: var(--el-border-color-lighter) !important;
+}
+
+.el-table--striped .el-table__row--striped td {
+  background: var(--el-fill-color-lighter) !important;
+}
+
+/* Main Layout Structural Borders */
+.app-header {
+  border-bottom: 1px solid var(--el-border-color-lighter) !important;
+}
+
+.app-aside {
+  border-right: 1px solid var(--el-border-color-lighter) !important;
+}
+
+.el-menu {
+  border-right: none !important;
+}
+
+/* Button Focus/Hover Consistency */
+.el-button:not(.el-button--primary):not(.el-button--success):not(.el-button--warning):not(.el-button--danger) {
+  --el-button-hover-bg-color: var(--el-fill-color-light);
+  --el-button-hover-border-color: var(--el-border-color-light);
+  --el-button-active-bg-color: var(--el-fill-color);
+}
+
+/* Dialog Consistency */
+.el-dialog {
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.el-dialog__header {
+  margin-right: 0;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+
+/* Loading Mask Dark Theme Override - prevent white flash */
+.el-loading-mask {
+  background-color: var(--el-loading-mask-color, rgba(22, 28, 36, 0.85)) !important;
+}
+
+.el-loading-spinner .circular {
+  stroke: var(--el-color-primary) !important;
+}
+
+.el-loading-spinner .el-loading-text {
+  color: var(--el-text-color-regular) !important;
+}

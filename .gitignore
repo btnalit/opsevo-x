@@ -1,0 +1,179 @@
+# Dependencies
+node_modules/
+*/node_modules/
+
+# Production builds
+dist/
+build/
+*/dist/
+*/build/
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Logs (use specific path to avoid blocking backend/logs/.gitkeep exception)
+/logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage directory used by tools like istanbul
+coverage/
+*.lcov
+
+# nyc test coverage
+.nyc_output
+
+# Dependency directories
+jspm_packages/
+
+# TypeScript cache
+*.tsbuildinfo
+
+# Optional npm cache directory
+.npm
+
+# Optional eslint cache
+.eslintcache
+
+# Optional REPL history
+.node_repl_history
+
+# Output of 'npm pack'
+*.tgz
+
+# Yarn Integrity file
+.yarn-integrity
+
+# parcel-bundler cache (https://parceljs.org/)
+.cache
+.parcel-cache
+
+# Vite generated temporary files
+*.mjs
+
+# Next.js build output
+.next
+
+# Nuxt.js build / generate output
+.nuxt
+
+# Gatsby files
+.cache/
+public
+!frontend/public/
+
+# Storybook build outputs
+.out
+.storybook-out
+
+# Temporary folders
+tmp/
+temp/
+
+# Editor directories and files
+.vscode/
+.idea/
+.kiro/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Configuration files with sensitive data
+config/local.json
+config/production.json
+
+# Backend data directory (contains sensitive connection info and history)
+# Note: To allow exceptions in subdirectories, we must NOT exclude the parent with /*
+backend/data/ai-agent.json
+backend/data/connection.json
+backend/data/prompt-templates.json
+
+# AI-Ops data directory (exclude runtime data, keep skills and default configs)
+backend/data/ai-ops/alerts
+backend/data/ai-ops/analysis
+backend/data/ai-ops/audit
+backend/data/ai-ops/channels.json
+backend/data/ai-ops/decisions
+backend/data/ai-ops/enhancement
+backend/data/ai-ops/feedback
+backend/data/ai-ops/filters
+backend/data/ai-ops/metrics
+backend/data/ai-ops/metrics-config.json
+backend/data/ai-ops/notifications
+backend/data/ai-ops/patterns
+backend/data/ai-ops/rag
+backend/data/ai-ops/remediations
+backend/data/ai-ops/reports
+backend/data/ai-ops/scheduler
+backend/data/ai-ops/health
+backend/data/ai-ops/snapshots
+backend/data/*.db*
+# Custom skills are user-created at runtime, exclude them
+backend/data/ai-ops/skills/custom
+backend/data/ai-ops/skills/metrics.json
+
+# Keep these files for Docker build:
+# - backend/data/ai-ops/skills/builtin (builtin skills)
+# - backend/data/ai-ops/skills/mapping.json (skill mapping)
+# - backend/data/ai-ops/evolution-config.json (initial config template)
+
+# SSL Certificates (keep .gitkeep)
+certs/*
+!certs/.gitkeep
+
+# Backend logs
+backend/logs/*
+!backend/logs/.gitkeep
+
+# Test files
+backend/test-api.js
+
+# Code audit reports (generated files)
+reports/
+
+# Python Core runtime artifacts
+**/__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+python-core/.venv/
+python-core/.env
+
+# Plugin runtime artifacts
+plugins/**/node_modules/
+plugins/**/dist/
+
+# Backup files
+*-bk
+*.bak
+*.backup
+
+# Test artifacts (Jest migration temp dirs)
+__test_vector_migrations_*

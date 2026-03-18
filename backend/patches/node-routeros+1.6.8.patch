@@ -1,0 +1,63 @@
+diff --git a/node_modules/node-routeros/dist/Channel.js b/node_modules/node-routeros/dist/Channel.js
+index ef56575..8d865bb 100644
+--- a/node_modules/node-routeros/dist/Channel.js
++++ b/node_modules/node-routeros/dist/Channel.js
+@@ -128,6 +128,12 @@ class Channel extends events_1.EventEmitter {
+                     this.emit('done', this.data);
+                 this.close();
+                 break;
++            case '!empty':
++                // Handle empty response (no data) - treat like !done with empty data
++                if (!this.trapped)
++                    this.emit('done', this.data);
++                this.close();
++                break;
+             default:
+                 this.emit('unknown', reply);
+                 this.close();
+diff --git a/node_modules/node-routeros/dist/connector/Receiver.js b/node_modules/node-routeros/dist/connector/Receiver.js
+index a184119..97f8860 100644
+--- a/node_modules/node-routeros/dist/connector/Receiver.js
++++ b/node_modules/node-routeros/dist/connector/Receiver.js
+@@ -109,7 +109,7 @@ class Receiver {
+                     // Subtract the data we are taking from the length we desire
+                     this.dataLength -= data.length;
+                     // Add this data to our current line
+-                    this.currentLine += iconv.decode(data, 'win1252');
++                    this.currentLine += iconv.decode(data, 'utf8');
+                     // If there is no more desired data we want...
+                     if (this.dataLength === 0) {
+                         // Push the data to the sentance
+@@ -130,7 +130,7 @@ class Receiver {
+                     // slice off the part that we desire
+                     const tmpBuffer = data.slice(0, this.dataLength);
+                     // decode this segment
+-                    const tmpStr = iconv.decode(tmpBuffer, 'win1252');
++                    const tmpStr = iconv.decode(tmpBuffer, 'utf8');
+                     // Add this to our current line
+                     this.currentLine += tmpStr;
+                     // save our line...
+@@ -247,7 +247,9 @@ class Receiver {
+             tag.callback(this.currentPacket);
+         }
+         else {
+-            throw new RosException_1.RosException('UNREGISTEREDTAG');
++            // Ignore data for unregistered tags instead of throwing
++            // This can happen when !empty or !done closes the channel but more data arrives
++            info('Ignoring data for unregistered tag %s', currentTag);
+         }
+         this.cleanUp();
+     }
+diff --git a/node_modules/node-routeros/dist/connector/Transmitter.js b/node_modules/node-routeros/dist/connector/Transmitter.js
+index 9dbda9e..ff173e5 100644
+--- a/node_modules/node-routeros/dist/connector/Transmitter.js
++++ b/node_modules/node-routeros/dist/connector/Transmitter.js
+@@ -64,7 +64,7 @@ class Transmitter {
+     encodeString(str) {
+         if (str === null)
+             return String.fromCharCode(0);
+-        const encoded = iconv.encode(str, 'win1252');
++        const encoded = iconv.encode(str, 'utf8');
+         let data;
+         let len = encoded.length;
+         let offset = 0;

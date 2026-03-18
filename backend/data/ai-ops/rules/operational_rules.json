@@ -1,0 +1,32 @@
+[
+  {
+    "id": "f0047bb9-e109-4f87-ac11-f1a23b793973",
+    "type": "correction",
+    "description": "在接口重置操作前，必须检查链路状态",
+    "condition": "relevant_context",
+    "source": {
+      "type": "feedback",
+      "refId": "mock-reflection-id",
+      "createdAt": 1771051421344
+    },
+    "initialConfidence": 0.7,
+    "confidence": 0.7,
+    "usageCount": 0,
+    "tags": []
+  },
+  {
+    "id": "c8c61425-169a-4da0-89ec-2107ea0bafba",
+    "type": "correction",
+    "description": "建议使用 /interface print detail 代替 /interface print",
+    "condition": "relevant_context",
+    "source": {
+      "type": "feedback",
+      "refId": "mock-reflection-id",
+      "createdAt": 1771051421377
+    },
+    "initialConfidence": 0.7,
+    "confidence": 0.7,
+    "usageCount": 0,
+    "tags": []
+  }
+]

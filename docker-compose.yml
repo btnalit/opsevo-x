@@ -1,0 +1,116 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg15
+    container_name: opsevo-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${PG_DATABASE:-opsevo}
+      POSTGRES_USER: ${PG_USER:-opsevo}
+      POSTGRES_PASSWORD: ${PG_PASSWORD:?PG_PASSWORD is required}
+    ports:
+      - "${PG_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres/init-extensions.sql:/docker-entrypoint-initdb.d/01-init-extensions.sql:ro
+    networks:
+      - opsevo-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PG_USER:-opsevo} -d ${PG_DATABASE:-opsevo}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  opsevo-bff:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: opsevo-bff
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8080}:3099"
+      - "${SYSLOG_PORT:-514}:514/udp"
+    environment:
+      - NODE_ENV=production
+      - PORT=3099
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - DATABASE_URL=postgresql://${PG_USER:-opsevo}:${PG_PASSWORD}@postgres:5432/${PG_DATABASE:-opsevo}
+      - INTERNAL_API_KEY=${INTERNAL_API_KEY:-changeme-internal-key}
+      - PYTHON_CORE_URL=http://python-core:8001
+    volumes:
+      # Persist connection configuration
+      - opsevo-data:/app/backend/data
+      # Persist logs
+      - opsevo-logs:/app/backend/logs
+    networks:
+      - opsevo-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      python-core:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3099/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  python-core:
+    build:
+      context: ./python-core
+      dockerfile: Dockerfile
+    container_name: opsevo-python-core
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgresql://${PG_USER:-opsevo}:${PG_PASSWORD}@postgres:5432/${PG_DATABASE:-opsevo}
+      - INTERNAL_API_KEY=${INTERNAL_API_KEY:-changeme-internal-key}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-all-MiniLM-L6-v2}
+      - EMBEDDING_REMOTE_URL=${EMBEDDING_REMOTE_URL:-}
+      - EMBEDDING_REMOTE_API_KEY=${EMBEDDING_REMOTE_API_KEY:-}
+    ports:
+      - "${PYTHON_CORE_PORT:-8001}:8001"
+    networks:
+      - opsevo-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # Optional: Nginx reverse proxy with SSL support
+  nginx:
+    image: nginx:alpine
+    container_name: opsevo-nginx
+    restart: unless-stopped
+    ports:
+      - "${NGINX_HTTP_PORT:-80}:80"
+      - "${NGINX_HTTPS_PORT:-443}:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./certs:/etc/nginx/certs:ro
+    depends_on:
+      - opsevo-bff
+    networks:
+      - opsevo-network
+    profiles:
+      - with-nginx
+
+volumes:
+  opsevo-data:
+    name: opsevo-data
+  opsevo-logs:
+    name: opsevo-logs
+  pgdata:
+    name: opsevo-pgdata
+
+networks:
+  opsevo-network:
+    name: opsevo-network
+    driver: bridge
