@@ -138,7 +138,8 @@ INTERNAL_API_KEY=your-random-secret
 启动所有服务：
 
 ```bash
-# 启动 PostgreSQL + Python Core + BFF（3 个服务）
+# 拉取镜像并启动 PostgreSQL + Python Core + BFF（3 个服务）
+docker-compose pull
 docker-compose up -d
 
 # 查看服务状态
@@ -182,8 +183,8 @@ docker-compose down
 # 停止并删除数据卷（警告：会删除所有数据）
 docker-compose down -v
 
-# 代码更新后重新构建
-docker-compose build --no-cache
+# 更新到最新镜像
+docker-compose pull
 docker-compose up -d
 
 # 重启单个服务

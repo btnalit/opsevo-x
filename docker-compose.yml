@@ -24,9 +24,7 @@ services:
       start_period: 10s
 
   opsevo-bff:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ghcr.io/btnalit/opsevo-x:latest
     container_name: opsevo-bff
     restart: unless-stopped
     ports:
@@ -60,9 +58,7 @@ services:
       start_period: 10s
 
   python-core:
-    build:
-      context: ./python-core
-      dockerfile: Dockerfile
+    image: ghcr.io/btnalit/opsevo-x-python-core:latest
     container_name: opsevo-python-core
     restart: unless-stopped
     environment:

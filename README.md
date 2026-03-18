@@ -138,7 +138,8 @@ INTERNAL_API_KEY=your-random-secret
 Start all services:
 
 ```bash
-# Start PostgreSQL + Python Core + BFF (3 services)
+# Pull images and start PostgreSQL + Python Core + BFF (3 services)
+docker-compose pull
 docker-compose up -d
 
 # Check service status
@@ -182,8 +183,8 @@ docker-compose down
 # Stop and remove volumes (WARNING: deletes all data)
 docker-compose down -v
 
-# Rebuild after code changes
-docker-compose build --no-cache
+# Update to latest images
+docker-compose pull
 docker-compose up -d
 
 # Restart a single service
