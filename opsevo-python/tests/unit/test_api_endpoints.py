@@ -156,7 +156,10 @@ class TestAuthLogin:
         resp = await client.post("/api/auth/login", json={
             "username": "", "password": "",
         })
-        assert resp.status_code == 400
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["success"] is False
+        assert data["code"] == "MISSING_FIELDS"
 
 
 class TestAuthRegister:

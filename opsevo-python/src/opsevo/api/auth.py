@@ -39,11 +39,11 @@ async def login(
     auth: AuthService = Depends(get_auth_service),
 ):
     if not body.username or not body.password:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Missing username or password")
+        return ErrorResponse(error="请输入用户名和密码", code="MISSING_FIELDS").model_dump()
 
     user = await auth.authenticate(body.username, body.password)
     if user is None:
-        return ErrorResponse(error="Invalid credentials", code="INVALID_CREDENTIALS").model_dump()
+        return ErrorResponse(error="用户名或密码错误", code="INVALID_CREDENTIALS").model_dump()
 
     access = auth.generate_access_token(str(user["id"]), user["username"])
     refresh = auth.generate_refresh_token(str(user["id"]))
@@ -68,15 +68,15 @@ async def register(
     auth: AuthService = Depends(get_auth_service),
 ):
     if not body.username or not body.email or not body.password:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Missing required fields")
+        return ErrorResponse(error="请填写所有必填字段", code="MISSING_FIELDS").model_dump()
 
     if body.invitation_code != INVITATION_CODE:
-        return ErrorResponse(error="Invalid invitation code", code="INVALID_INVITATION_CODE").model_dump()
+        return ErrorResponse(error="邀请码无效", code="INVALID_INVITATION_CODE").model_dump()
 
     try:
         user = await auth.create_user(body.username, body.email, body.password)
     except Exception:
-        raise HTTPException(status.HTTP_409_CONFLICT, detail="Username or email already exists")
+        return ErrorResponse(error="用户名或邮箱已存在", code="USERNAME_OR_EMAIL_EXISTS").model_dump()
     return RegisterResponse(
         data=RegisterResponseData(
             user=UserInfo(
