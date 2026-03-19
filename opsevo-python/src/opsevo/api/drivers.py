@@ -29,6 +29,23 @@ def _get_driver_manager(request: Request):
     return request.app.state.container.driver_manager()
 
 
+def _profile_to_camel(row: dict | None) -> dict | None:
+    """Convert DB snake_case keys to frontend camelCase for profile rows."""
+    if row is None:
+        return None
+    out = {}
+    for k, v in row.items():
+        if k == "target_system":
+            out["targetSystem"] = v
+        elif k == "created_at":
+            out["created_at"] = str(v) if v else None
+        elif k == "updated_at":
+            out["updated_at"] = str(v) if v else None
+        else:
+            out[k] = v
+    return out
+
+
 # ==================== Drivers ====================
 
 @router.get("/drivers")
@@ -122,7 +139,7 @@ async def list_profiles(
     rows = await ds.query(
         "SELECT * FROM api_profiles ORDER BY created_at DESC"
     )
-    return {"success": True, "data": rows or []}
+    return {"success": True, "data": [_profile_to_camel(r) for r in (rows or [])]}
 
 
 @router.post("/profiles")
@@ -144,7 +161,7 @@ async def create_profile(
         [pid, name, target_system, version, endpoints, auth],
     )
     row = await ds.query_one("SELECT * FROM api_profiles WHERE id=$1", [pid])
-    return {"success": True, "data": row}
+    return {"success": True, "data": _profile_to_camel(row)}
 
 
 @router.get("/profiles/{profile_id}")
@@ -156,7 +173,7 @@ async def get_profile(
     row = await ds.query_one("SELECT * FROM api_profiles WHERE id=$1", [profile_id])
     if not row:
         raise HTTPException(404, "Profile not found")
-    return {"success": True, "data": row}
+    return {"success": True, "data": _profile_to_camel(row)}
 
 
 @router.put("/profiles/{profile_id}")
@@ -190,7 +207,7 @@ async def update_profile(
             tuple(params),
         )
     row = await ds.query_one("SELECT * FROM api_profiles WHERE id=$1", [profile_id])
-    return {"success": True, "data": row}
+    return {"success": True, "data": _profile_to_camel(row)}
 
 
 @router.delete("/profiles/{profile_id}")
@@ -236,7 +253,7 @@ async def import_profile(
         [pid, name, target_system, version, endpoints, auth],
     )
     row = await ds.query_one("SELECT * FROM api_profiles WHERE id=$1", [pid])
-    return {"success": True, "data": row}
+    return {"success": True, "data": _profile_to_camel(row)}
 
 
 @router.get("/profiles/{profile_id}/export")
@@ -249,7 +266,7 @@ async def export_profile(
     if not row:
         raise HTTPException(404, "Profile not found")
     from fastapi.responses import Response
-    export_data = json.dumps(row, default=str, ensure_ascii=False)
+    export_data = json.dumps(_profile_to_camel(row), default=str, ensure_ascii=False)
     return Response(
         content=export_data,
         media_type="application/json",
