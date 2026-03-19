@@ -155,6 +155,10 @@ backend/logs/*
 # Test files
 backend/test-api.js
 
+# Legacy backends (kept locally for reference, excluded from git)
+backend/
+python-core/
+
 # Code audit reports (generated files)
 reports/
 docs/
