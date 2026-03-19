@@ -34,8 +34,8 @@ COPY opsevo-python/profiles/ ./profiles/
 COPY --from=frontend-builder /app/frontend/dist ./public
 
 # Copy skill data files to backup location
-COPY backend/data/ai-ops/skills /app/skills-backup
-COPY backend/data/ai-ops/evolution-config.json /app/config-backup/evolution-config.json
+COPY opsevo-python/data/ai-ops/skills /app/skills-backup
+COPY opsevo-python/data/ai-ops/evolution-config.json /app/config-backup/evolution-config.json
 
 # Create data directory
 RUN mkdir -p /app/data/ai-ops/skills/custom

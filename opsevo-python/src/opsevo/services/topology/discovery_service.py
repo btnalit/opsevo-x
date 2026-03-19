@@ -38,7 +38,7 @@ from opsevo.services.topology.types import (
 
 logger = structlog.get_logger(__name__)
 
-DATA_DIR = Path("backend/data/ai-ops")
+DATA_DIR = Path("data/ai-ops")
 
 
 class TopologyDiscoveryService:

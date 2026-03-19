@@ -109,51 +109,9 @@ Thumbs.db
 config/local.json
 config/production.json
 
-# Backend data directory (contains sensitive connection info and history)
-# Note: To allow exceptions in subdirectories, we must NOT exclude the parent with /*
-backend/data/ai-agent.json
-backend/data/connection.json
-backend/data/prompt-templates.json
-
-# AI-Ops data directory (exclude runtime data, keep skills and default configs)
-backend/data/ai-ops/alerts
-backend/data/ai-ops/analysis
-backend/data/ai-ops/audit
-backend/data/ai-ops/channels.json
-backend/data/ai-ops/decisions
-backend/data/ai-ops/enhancement
-backend/data/ai-ops/feedback
-backend/data/ai-ops/filters
-backend/data/ai-ops/metrics
-backend/data/ai-ops/metrics-config.json
-backend/data/ai-ops/notifications
-backend/data/ai-ops/patterns
-backend/data/ai-ops/rag
-backend/data/ai-ops/remediations
-backend/data/ai-ops/reports
-backend/data/ai-ops/scheduler
-backend/data/ai-ops/health
-backend/data/ai-ops/snapshots
-backend/data/*.db*
-# Custom skills are user-created at runtime, exclude them
-backend/data/ai-ops/skills/custom
-backend/data/ai-ops/skills/metrics.json
-
-# Keep these files for Docker build:
-# - backend/data/ai-ops/skills/builtin (builtin skills)
-# - backend/data/ai-ops/skills/mapping.json (skill mapping)
-# - backend/data/ai-ops/evolution-config.json (initial config template)
-
 # SSL Certificates (keep .gitkeep)
 certs/*
 !certs/.gitkeep
-
-# Backend logs
-backend/logs/*
-!backend/logs/.gitkeep
-
-# Test files
-backend/test-api.js
 
 # Legacy backends (kept locally for reference, excluded from git)
 backend/
