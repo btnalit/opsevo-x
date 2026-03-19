@@ -1,0 +1,193 @@
+vendor: OpenWrt
+model: OpenWrt
+driver_type: ssh
+base_url: ""
+auth:
+  type: password
+timeout: 30000
+
+endpoints:
+  # ── 系统信息 ──
+  - action_type: get_system_resource
+    path: "ubus call system board; echo '---'; cat /proc/uptime; echo '---'; top -bn1 | head -5; echo '---'; free"
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_system_info
+    path: "ubus call system info"
+    method: GET
+    read_only: true
+    risk_level: low
+
+  # ── 网络接口 ──
+  - action_type: get_interfaces
+    path: "ubus call network.interface dump"
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_interface_status
+    path: "ifconfig; echo '---'; ip -s link"
+    method: GET
+    read_only: true
+    risk_level: low
+
+  # ── 路由 ──
+  - action_type: get_routes
+    path: "ip route show"
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_ipv6_routes
+    path: "ip -6 route show"
+    method: GET
+    read_only: true
+    risk_level: low
+
+  # ── 防火墙 ──
+  - action_type: get_firewall_rules
+    path: "uci show firewall"
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_firewall_zones
+    path: "uci show firewall | grep 'firewall.@zone'"
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_iptables
+    path: "iptables -L -n -v 2>/dev/null; echo '---'; nft list ruleset 2>/dev/null"
+    method: GET
+    read_only: true
+    risk_level: low
+
+  # ── DNS / DHCP ──
+  - action_type: get_dns
+    path: "uci show dhcp; echo '---'; cat /tmp/resolv.conf.d/resolv.conf.auto 2>/dev/null"
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_dhcp_leases
+    path: "cat /tmp/dhcp.leases 2>/dev/null"
+    method: GET
+    read_only: true
+    risk_level: low
+
+  # ── 无线 ──
+  - action_type: get_wireless
+    path: "uci show wireless; echo '---'; iwinfo"
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_wireless_clients
+    path: "for iface in $(iwinfo | grep ESSID | awk '{print $1}'); do echo \"=== $iface ===\"; iwinfo $iface assoclist; done"
+    method: GET
+    read_only: true
+    risk_level: low
+
+  # ── IP 地址 ──
+  - action_type: get_ip_addresses
+    path: "ip addr show"
+    method: GET
+    read_only: true
+    risk_level: low
+
+  # ── 日志 ──
+  - action_type: get_syslog
+    path: "logread -l 100"
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_kernel_log
+    path: "dmesg | tail -50"
+    method: GET
+    read_only: true
+    risk_level: low
+
+  # ── 软件包 ──
+  - action_type: get_packages
+    path: "opkg list-installed"
+    method: GET
+    read_only: true
+    risk_level: low
+
+  # ── 配置导出/导入 ──
+  - action_type: export_config
+    path: "sysupgrade -b - | base64"
+    method: GET
+    read_only: true
+    risk_level: medium
+
+  # ── 写操作（风险较高）──
+  - action_type: restart_network
+    path: "/etc/init.d/network restart"
+    method: POST
+    read_only: false
+    risk_level: high
+  - action_type: restart_firewall
+    path: "/etc/init.d/firewall restart"
+    method: POST
+    read_only: false
+    risk_level: high
+  - action_type: restart_wireless
+    path: "wifi reload"
+    method: POST
+    read_only: false
+    risk_level: medium
+  - action_type: reboot
+    path: "reboot"
+    method: POST
+    read_only: false
+    risk_level: critical
+
+metrics_endpoints:
+  cpu_usage: get_system_resource
+  memory_usage: get_system_info
+  interfaces: get_interface_status
+
+data_capabilities:
+  - topology
+  - routes
+  - interfaces
+  - firewall
+  - dns
+  - dhcp
+  - wireless
+  - packages
+  - syslog
+
+config_paths:
+  - get_interfaces
+  - get_firewall_rules
+  - get_dns
+  - get_wireless
+  - get_routes
+  - get_ip_addresses
+
+severity_mapping:
+  critical:
+    - emerg
+    - alert
+    - crit
+  warning:
+    - err
+    - warning
+  info:
+    - notice
+    - info
+    - debug
+
+remediation_templates:
+  interface_down: |
+    ifup {interface_name}
+  high_cpu: |
+    for pid in $(top -bn1 | awk 'NR>4 && $7+0>80 {print $1}' | head -3); do kill -9 $pid; done
+  dns_not_resolving: |
+    /etc/init.d/dnsmasq restart
+  wireless_down: |
+    wifi reload
+  firewall_lockout: |
+    /etc/init.d/firewall restart
+  disk_full: |
+    rm -rf /tmp/opkg-lists/*; opkg clean
+
+script_language: ash
