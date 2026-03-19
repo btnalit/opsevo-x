@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any, Awaitable, Callable, TypeVar
 
-from psycopg import AsyncConnection
+from psycopg import AsyncConnection, AsyncRawCursor
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
@@ -61,6 +61,7 @@ class PgDataStore(DataStore):
         idle_seconds = self._settings.pg_idle_timeout / 1000.0
         self._pool = AsyncConnectionPool(
             conninfo=self._settings.database_url,
+            kwargs={"cursor_factory": AsyncRawCursor},
             min_size=self._settings.pg_pool_min,
             max_size=self._settings.pg_pool_max,
             max_idle=idle_seconds,
