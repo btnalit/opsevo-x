@@ -1,0 +1,77 @@
+vendor: MikroTik
+model: RouterOS
+driver_type: api
+base_url: "https://{{host}}:{{port}}"
+auth:
+  type: basic
+timeout: 30000
+
+endpoints:
+  - action_type: get_system_resource
+    path: /rest/system/resource
+    method: GET
+    read_only: true
+    risk_level: low
+    response_transform: routeros_json
+  - action_type: get_interfaces
+    path: /rest/interface
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_firewall_rules
+    path: /rest/ip/firewall/filter
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_routes
+    path: /rest/ip/route
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_dns
+    path: /rest/ip/dns
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_ip_addresses
+    path: /rest/ip/address
+    method: GET
+    read_only: true
+    risk_level: low
+
+metrics_endpoints:
+  cpu_usage: get_system_resource
+  memory_usage: get_system_resource
+  interfaces: get_interfaces
+
+data_capabilities:
+  - topology
+  - routes
+  - interfaces
+  - firewall
+  - dns
+
+config_paths:
+  - get_interfaces
+  - get_firewall_rules
+  - get_system_resource
+  - get_routes
+  - get_ip_addresses
+
+severity_mapping:
+  critical:
+    - system
+    - error
+  warning:
+    - warning
+  info:
+    - info
+    - debug
+
+remediation_templates:
+  interface_down: |
+    /interface enable {interface_name}
+  high_cpu: |
+    /system script run cleanup
+
+script_language: routeros

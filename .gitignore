@@ -164,6 +164,7 @@ docs/
 *.pyc
 *.pyo
 .pytest_cache/
+.hypothesis/
 python-core/.venv/
 python-core/.env
 

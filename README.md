@@ -4,12 +4,11 @@
 
 [English](README.md) | [中文](README.zh-CN.md)
 
-![Version](https://img.shields.io/badge/version-3.0.0-blue.svg)
-![Node](https://img.shields.io/badge/node-%3E%3D18.0.0-green.svg)
-![Python](https://img.shields.io/badge/python-%3E%3D3.11-blue.svg)
-![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)
-![TypeScript](https://img.shields.io/badge/TypeScript-5.3-blue.svg)
+![Version](https://img.shields.io/badge/version-4.0.0-blue.svg)
+![Python](https://img.shields.io/badge/python-%3E%3D3.12-blue.svg)
 ![Vue](https://img.shields.io/badge/Vue-3.4-42b883.svg)
+![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688.svg)
 
 **Generalized AIOps Platform — Device-Agnostic, Event-Driven Intelligent Operations Framework**
 
@@ -27,10 +26,11 @@ Opsevo-x is a generalized AIOps intelligent operations platform. Through a devic
 
 - **Device-Agnostic** — Unified DeviceDriver interface with pluggable drivers (API / SSH / SNMP)
 - **Event-Driven** — EventBus + BrainLoopEngine replaces polling; unified perception sources (Syslog / SNMP Trap / Webhook)
-- **AI Brain** — Multi-LLM adapters (OpenAI / Gemini / Qwen / Zhipu), ReAct reasoning, RAG knowledge augmentation
+- **AI Brain** — Multi-LLM adapters (OpenAI / Gemini / Claude / DeepSeek / Qwen / Zhipu), ReAct reasoning, RAG knowledge augmentation
 - **Learning & Evolution** — Critic → Reflector → PatternLearner → EvolutionEngine closed loop
-- **Vectorization** — PostgreSQL + pgvector; Python Core as the single Embedding entry point
+- **Vectorization** — PostgreSQL + pgvector; built-in Embedding (local or remote API)
 - **Skill Capsules** — Extensible skill system with MCP Gateway integration
+- **Unified Backend** — Single Python/FastAPI process serves API, frontend, and all AIOps services
 
 ---
 
@@ -58,11 +58,10 @@ Opsevo-x uses an 8-layer architecture (Layer 0 – Layer 7):
 │  ToolRegistry │ SkillFactory │ MCP Gateway │ Skill Capsules     │
 ├─────────────────────────────────────────────────────────────────┤
 │  Layer 2: Knowledge & Prompt                                    │
-│  PromptModule │ KnowledgeGraph │ KnowledgeBase                  │
+│  PromptComposer │ KnowledgeGraph │ KnowledgeBase │ VectorStore  │
 ├─────────────────────────────────────────────────────────────────┤
 │  Layer 1: AI Foundation                                         │
-│  Python Core (Embedding + VectorStore) │ AdapterPool            │
-│  RateLimiter │ TokenBudget                                      │
+│  EmbeddingService │ AdapterPool │ RateLimiter │ TokenBudget     │
 ├─────────────────────────────────────────────────────────────────┤
 │  Layer 0: Infrastructure                                        │
 │  EventBus │ PgDataStore │ DeviceManager │ SyslogManager         │
@@ -76,26 +75,22 @@ Opsevo-x uses an 8-layer architecture (Layer 0 – Layer 7):
 | Layer | Technology | Description |
 | ----- | ---------- | ----------- |
 | Frontend | Vue 3 + TypeScript + Vite | AIOps Workbench |
-| BFF Gateway | Node.js + Express + TypeScript | BFF layer — routing, auth, device proxy |
-| AIOps Core | Python 3.11+ + FastAPI | Vectorization / single Embedding entry point |
+| Backend | Python 3.12+ + FastAPI + Uvicorn | Unified backend — API, auth, AIOps, Embedding |
 | Database | PostgreSQL 15 + pgvector | Unified business + vector storage |
 | Device Drivers | Pluggable API / SSH / SNMP Drivers | Adapts to any device via Profile config |
-| AI / LLM | OpenAI, Gemini, Qwen, Zhipu | Multi-provider adapters |
-| Testing | Jest + fast-check / pytest + hypothesis | Property-based testing |
-| Deployment | Docker Compose | Node.js BFF + Python Core + PostgreSQL |
+| AI / LLM | OpenAI, Gemini, Claude, DeepSeek, Qwen, Zhipu | Multi-provider adapters |
+| Testing | pytest + hypothesis | Property-based testing |
+| Deployment | Docker Compose | Python backend + PostgreSQL (2 containers) |
 
 ### Deployment Architecture
 
 ```text
-Browser ──→ Node.js BFF (:3099) ──REST──→ Python Core (:8001)
-                │                              │
-                └──── pg client ───→ PostgreSQL + pgvector (:5432)
-                                               ↑
-                                    psycopg ───┘
-
-Syslog Sources ──UDP/TCP :514──→ BFF (SyslogManager)
-SNMP Devices ──UDP :162──→ BFF (SNMPTrapReceiver)
-Webhooks ──HTTP POST──→ BFF (EventBus)
+Browser ──→ Python/FastAPI (:3099) ──psycopg──→ PostgreSQL + pgvector (:5432)
+                │
+                ├── Serves Vue 3 SPA (static files)
+                ├── REST API + SSE streaming
+                ├── Syslog receiver (UDP :514)
+                └── SNMP Trap receiver (UDP :162)
 ```
 
 ---
@@ -104,8 +99,7 @@ Webhooks ──HTTP POST──→ BFF (EventBus)
 
 ### Prerequisites
 
-- Node.js >= 18.0.0
-- Python >= 3.11
+- Python >= 3.12
 - PostgreSQL 15 + pgvector (provided automatically by Docker Compose)
 - Docker & Docker Compose
 
@@ -126,6 +120,7 @@ Edit `.env` with your settings:
 ```bash
 # Required
 PG_PASSWORD=your-secure-password
+JWT_SECRET=your-jwt-secret
 
 # AI provider (choose one)
 AI_PROVIDER=gemini
@@ -138,15 +133,15 @@ INTERNAL_API_KEY=your-random-secret
 Start all services:
 
 ```bash
-# Pull images and start PostgreSQL + Python Core + BFF (3 services)
+# Pull images and start PostgreSQL + Opsevo (2 services)
 docker-compose pull
 docker-compose up -d
 
 # Check service status
 docker-compose ps
 
-# View BFF logs
-docker-compose logs -f opsevo-bff
+# View logs
+docker-compose logs -f opsevo
 
 # View all logs
 docker-compose logs -f
@@ -158,11 +153,10 @@ Access the platform at `http://your-server:8080`.
 
 | Port | Protocol | Service | Description |
 | ---- | -------- | ------- | ----------- |
-| 8080 | TCP | BFF | Web UI + API (configurable via `PORT`) |
-| 514 | UDP | BFF | Syslog receiver (configurable via `SYSLOG_PORT`) |
-| 162 | UDP | BFF | SNMP Trap receiver (configurable via `SNMP_TRAP_PORT`) |
+| 8080 | TCP | Opsevo | Web UI + API (configurable via `PORT`) |
+| 514 | UDP | Opsevo | Syslog receiver (configurable via `SYSLOG_PORT`) |
+| 162 | UDP | Opsevo | SNMP Trap receiver (configurable via `SNMP_TRAP_PORT`) |
 | 5432 | TCP | PostgreSQL | Database (configurable via `PG_PORT`) |
-| 8001 | TCP | Python Core | Embedding service (configurable via `PYTHON_CORE_PORT`) |
 
 #### Data Persistence
 
@@ -170,8 +164,8 @@ Docker volumes are used to persist data across container restarts:
 
 | Volume | Mount Point | Content |
 | ------ | ----------- | ------- |
-| `opsevo-data` | `/app/backend/data` | Configuration, rules, knowledge base |
-| `opsevo-logs` | `/app/backend/logs` | Application logs |
+| `opsevo-data` | `/app/data` | Configuration, rules, knowledge base |
+| `opsevo-logs` | `/app/logs` | Application logs |
 | `opsevo-pgdata` | `/var/lib/postgresql/data` | PostgreSQL database files |
 
 #### Common Operations
@@ -188,7 +182,7 @@ docker-compose pull
 docker-compose up -d
 
 # Restart a single service
-docker-compose restart opsevo-bff
+docker-compose restart opsevo
 
 # View resource usage
 docker stats
@@ -197,21 +191,18 @@ docker stats
 ### Local Development
 
 ```bash
-# Install dependencies
-cd backend && npm install
-cd ../frontend && npm install
+# Install Python dependencies
+cd opsevo-python
+pip install -e ".[dev]"
 
-# Start PostgreSQL (requires local PostgreSQL or Docker)
-docker-compose up -d postgres python-core
+# Start PostgreSQL
+docker-compose up -d postgres
 
-# Start backend
-cd backend && npm run dev    # port 3099
+# Start backend (with hot reload)
+uvicorn opsevo.main:app --host 0.0.0.0 --port 3099 --reload
 
-# Start frontend
-cd frontend && npm run dev   # port 5173
-
-# Or use concurrent start from root
-npm run dev
+# Start frontend (in another terminal)
+cd frontend && npm install && npm run dev   # port 5173
 ```
 
 ### Key Environment Variables
@@ -221,9 +212,10 @@ npm run dev
 | PG_PASSWORD | *(required)* | PostgreSQL password |
 | PG_USER | opsevo | PostgreSQL username |
 | PG_DATABASE | opsevo | Database name |
-| INTERNAL_API_KEY | changeme | BFF ↔ Python Core internal auth key |
-| EMBEDDING_MODEL | all-MiniLM-L6-v2 | Local embedding model |
-| AI_PROVIDER | gemini | AI provider (openai / gemini / qwen / zhipu) |
+| JWT_SECRET | *(required in production)* | JWT signing secret |
+| INTERNAL_API_KEY | changeme | Internal auth key |
+| EMBEDDING_MODEL | all-MiniLM-L6-v2 | Embedding model name |
+| AI_PROVIDER | gemini | AI provider (openai / gemini / claude / deepseek / qwen / zhipu) |
 | AI_MODEL_NAME | gemini-1.5-flash | LLM model name |
 | PORT | 8080 | External access port |
 | SYSLOG_PORT | 514 | Syslog UDP port |
@@ -237,11 +229,11 @@ See `.env.example` for the full configuration reference.
 
 Opsevo-x abstracts all device interactions through a unified DeviceDriver interface, supporting three driver types:
 
-| Driver | Directory | Use Case |
-| ------ | --------- | -------- |
-| API Driver | `plugins/api-driver/` | REST API devices (RouterOS, Cisco DNA, etc.) — configured via YAML Profiles |
-| SSH Driver | `plugins/ssh-driver/` | Linux / Unix servers — SSH command execution + metric collection |
-| SNMP Driver | `plugins/snmp-driver/` | Network device monitoring via SNMP v2c / v3 |
+| Driver | Protocol | Use Case |
+| ------ | -------- | -------- |
+| API Driver | HTTP REST | REST API devices (RouterOS, Cisco DNA, etc.) — configured via YAML Profiles |
+| SSH Driver | SSH | Linux / Unix servers — SSH command execution + metric collection |
+| SNMP Driver | SNMP v2c/v3 | Network device monitoring via SNMP |
 
 The API Driver uses a Profile mechanism: YAML config files describe device API endpoint mappings, authentication methods, and response transformation rules — no code required to onboard a new device type.
 
@@ -251,33 +243,35 @@ The API Driver uses a Profile mechanism: YAML config files describe device API e
 
 ```text
 opsevo-x/
-├── backend/                      # Node.js BFF Gateway
-│   └── src/
-│       ├── controllers/          # Controller layer
-│       ├── routes/               # Route definitions
-│       ├── services/
-│       │   ├── ai/               # LLM adapters
-│       │   ├── ai-ops/           # AIOps core services
-│       │   │   ├── brain/        # BrainLoopEngine
-│       │   │   ├── rag/          # RAG knowledge base + ReAct reasoning
-│       │   │   ├── skill/        # Skill system
-│       │   │   ├── prompt/       # Modular prompt system
-│       │   │   ├── stateMachine/ # State machine orchestration
-│       │   │   └── ...           # Alerts / evolution / inspection / tracing
-│       │   ├── device/           # DeviceManager + DevicePool
-│       │   ├── syslog/           # SyslogManager
-│       │   ├── snmp/             # SNMPTrapReceiver
-│       │   └── core/             # EventBus, PgDataStore, ServiceLifecycle
-│       └── types/                # Type definitions
-├── frontend/                     # Vue 3 AIOps Workbench
-├── plugins/                      # Device driver plugins
-│   ├── api-driver/               # API Driver + Profiles
-│   ├── ssh-driver/               # SSH Driver
-│   └── snmp-driver/              # SNMP Driver
-├── python-core/                  # Python Core (Embedding + VectorStore)
-├── docker-compose.yml            # Three-service orchestration
-├── Dockerfile                    # BFF multi-stage build
-└── .env.example                  # Environment variable template
+├── opsevo-python/                # Python unified backend
+│   ├── src/opsevo/
+│   │   ├── api/                  # FastAPI route handlers
+│   │   ├── middleware/           # Auth, timeout, device context
+│   │   ├── models/              # Pydantic data models
+│   │   ├── services/
+│   │   │   ├── ai/              # LLM adapters + prompt system
+│   │   │   ├── ai_ops/          # AIOps core (alerts, scheduler, evolution)
+│   │   │   ├── brain/           # BrainLoopEngine + OODA loop
+│   │   │   ├── rag/             # RAG + ReAct + VectorStore + Embedding
+│   │   │   ├── skill/           # Skill capsule system
+│   │   │   ├── mcp/             # MCP server/client + tool registry
+│   │   │   ├── topology/        # Topology discovery
+│   │   │   ├── state_machine/   # State machine orchestration
+│   │   │   └── bridges/         # EventBus bridges
+│   │   ├── drivers/             # DeviceDriver plugins (API/SSH/SNMP)
+│   │   ├── data/                # DataStore + migrations
+│   │   ├── events/              # EventBus
+│   │   ├── utils/               # Crypto, tokens, logger
+│   │   ├── main.py              # FastAPI app + lifespan
+│   │   ├── settings.py          # Pydantic Settings
+│   │   └── container.py         # DI container
+│   ├── profiles/                # Device YAML profiles
+│   ├── tests/                   # pytest + hypothesis tests
+│   ├── Dockerfile               # Multi-stage build
+│   └── pyproject.toml           # Python project config
+├── frontend/                    # Vue 3 AIOps Workbench
+├── docker-compose.yml           # 2-service orchestration
+└── .env.example                 # Environment variable template
 ```
 
 ---
@@ -285,24 +279,31 @@ opsevo-x/
 ## Testing
 
 ```bash
-# Backend tests (Jest + fast-check property-based testing)
-cd backend && npm test
+cd opsevo-python
 
-# Frontend tests
-cd frontend && npm test
+# Run all tests
+python -m pytest tests/ -v
 
-# All tests
-npm test
+# Run property-based tests only
+python -m pytest tests/property/ -v
+
+# Run unit tests only
+python -m pytest tests/unit/ -v
+
+# Run integration tests only
+python -m pytest tests/integration/ -v
 ```
 
 ---
 
 ## Development Standards
 
-- TypeScript strict mode
-- ESLint + Prettier
-- Property-based testing (fast-check / hypothesis) for correctness validation
-- Event-driven design — avoid `setInterval` polling
+- Python 3.12+ with type hints
+- Ruff for linting and formatting
+- Property-based testing (hypothesis) for correctness validation
+- Event-driven design — avoid polling
+- Pydantic models for all request/response schemas
+- async/await throughout — no blocking I/O
 
 ---
 

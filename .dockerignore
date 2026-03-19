@@ -107,8 +107,11 @@ tsconfig.node.json
 *.pyc
 *.pyo
 .pytest_cache
+.hypothesis
 python-core/.venv
 python-core/.env
+opsevo-python/.pytest_cache
+opsevo-python/.hypothesis
 
 # Backup files
 *-bk

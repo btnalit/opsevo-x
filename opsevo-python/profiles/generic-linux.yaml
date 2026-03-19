@@ -1,0 +1,42 @@
+vendor: Generic
+model: Linux
+driver_type: ssh
+base_url: ""
+auth:
+  type: password
+timeout: 30000
+
+endpoints: []
+
+metrics_endpoints:
+  cpu_usage: "top -bn1 | head -5"
+  memory_usage: "free -m"
+  interfaces: "ip -s link"
+
+data_capabilities:
+  - topology
+  - routes
+  - interfaces
+
+config_paths: []
+
+severity_mapping:
+  critical:
+    - emerg
+    - alert
+    - crit
+  warning:
+    - err
+    - warning
+  info:
+    - notice
+    - info
+    - debug
+
+remediation_templates:
+  interface_down: |
+    ip link set {interface_name} up
+  high_cpu: |
+    kill -9 $(ps aux --sort=-%cpu | head -2 | tail -1 | awk '{print $2}')
+
+script_language: bash

@@ -1,0 +1,80 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg15
+    container_name: opsevo-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${PG_DATABASE:-opsevo}
+      POSTGRES_USER: ${PG_USER:-opsevo}
+      POSTGRES_PASSWORD: ${PG_PASSWORD:-opsevo123}
+    ports:
+      - "${PG_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - opsevo-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PG_USER:-opsevo} -d ${PG_DATABASE:-opsevo}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  opsevo:
+    build:
+      context: ..
+      dockerfile: opsevo-python/Dockerfile
+    image: ghcr.io/btnalit/opsevo-x:latest
+    container_name: opsevo-python
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8080}:3099"
+      - "${SYSLOG_PORT:-514}:514/udp"
+      - "${SNMP_TRAP_PORT:-162}:162/udp"
+    environment:
+      - ENV=production
+      - PORT=3099
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - DATABASE_URL=postgresql://${PG_USER:-opsevo}:${PG_PASSWORD:-opsevo123}@postgres:5432/${PG_DATABASE:-opsevo}
+      - JWT_SECRET=${JWT_SECRET:-changeme-jwt-secret}
+      - INTERNAL_API_KEY=${INTERNAL_API_KEY:-changeme-internal-key}
+      - AI_PROVIDER=${AI_PROVIDER:-gemini}
+      - AI_MODEL_NAME=${AI_MODEL_NAME:-gemini-1.5-flash}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-all-MiniLM-L6-v2}
+      - EMBEDDING_REMOTE_URL=${EMBEDDING_REMOTE_URL:-}
+      - EMBEDDING_REMOTE_API_KEY=${EMBEDDING_REMOTE_API_KEY:-}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
+      - BRAIN_ENABLED=${BRAIN_ENABLED:-false}
+    volumes:
+      - opsevo-data:/app/data
+      - opsevo-logs:/app/logs
+    networks:
+      - opsevo-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3099/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  opsevo-data:
+    name: opsevo-data
+  opsevo-logs:
+    name: opsevo-logs
+  pgdata:
+    name: opsevo-pgdata
+
+networks:
+  opsevo-network:
+    name: opsevo-network
+    driver: bridge

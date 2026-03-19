@@ -23,32 +23,25 @@ services:
       retries: 5
       start_period: 10s
 
-  opsevo-bff:
+  opsevo:
     image: ghcr.io/btnalit/opsevo-x:latest
-    container_name: opsevo-bff
+    container_name: opsevo
     restart: unless-stopped
     ports:
       - "${PORT:-8080}:3099"
       - "${SYSLOG_PORT:-514}:514/udp"
       - "${SNMP_TRAP_PORT:-162}:162/udp"
     environment:
-      - NODE_ENV=production
-      - PORT=3099
-      - LOG_LEVEL=${LOG_LEVEL:-info}
       - DATABASE_URL=postgresql://${PG_USER:-opsevo}:${PG_PASSWORD:-opsevo123}@postgres:5432/${PG_DATABASE:-opsevo}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
       - INTERNAL_API_KEY=${INTERNAL_API_KEY:-changeme-internal-key}
-      - PYTHON_CORE_URL=http://python-core:8001
     volumes:
-      # Persist connection configuration
-      - opsevo-data:/app/backend/data
-      # Persist logs
-      - opsevo-logs:/app/backend/logs
+      - opsevo-data:/app/data
+      - opsevo-logs:/app/logs
     networks:
       - opsevo-network
     depends_on:
       postgres:
-        condition: service_healthy
-      python-core:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3099/api/health"]
@@ -56,30 +49,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
-
-  python-core:
-    image: ghcr.io/btnalit/opsevo-x-python-core:latest
-    container_name: opsevo-python-core
-    restart: unless-stopped
-    environment:
-      - DATABASE_URL=postgresql://${PG_USER:-opsevo}:${PG_PASSWORD:-opsevo123}@postgres:5432/${PG_DATABASE:-opsevo}
-      - INTERNAL_API_KEY=${INTERNAL_API_KEY:-changeme-internal-key}
-      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-all-MiniLM-L6-v2}
-      - EMBEDDING_REMOTE_URL=${EMBEDDING_REMOTE_URL:-}
-      - EMBEDDING_REMOTE_API_KEY=${EMBEDDING_REMOTE_API_KEY:-}
-    ports:
-      - "${PYTHON_CORE_PORT:-8001}:8001"
-    networks:
-      - opsevo-network
-    depends_on:
-      postgres:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
 
 volumes:
   opsevo-data:

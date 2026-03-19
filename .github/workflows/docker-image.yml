@@ -21,15 +21,10 @@ jobs:
     strategy:
       matrix:
         include:
-          - image: bff
+          - image: python
             context: .
-            dockerfile: ./Dockerfile
+            dockerfile: ./opsevo-python/Dockerfile
             suffix: ""
-            platforms: linux/amd64,linux/arm64
-          - image: python-core
-            context: ./python-core
-            dockerfile: ./python-core/Dockerfile
-            suffix: "-python-core"
             platforms: linux/amd64,linux/arm64
 
     steps:
