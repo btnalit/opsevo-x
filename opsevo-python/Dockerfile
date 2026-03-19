@@ -13,8 +13,8 @@ RUN NODE_OPTIONS="--max-old-space-size=4096" npm run build
 # Stage 2: Python production image
 FROM python:3.12-slim AS production
 
-# Install tini for proper PID 1 signal handling
-RUN apt-get update && apt-get install -y --no-install-recommends tini wget \
+# Install tini, wget, and libpq (required by psycopg)
+RUN apt-get update && apt-get install -y --no-install-recommends tini wget libpq5 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
