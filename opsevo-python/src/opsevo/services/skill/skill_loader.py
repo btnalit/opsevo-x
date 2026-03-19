@@ -31,14 +31,24 @@ class SkillLoader:
         skills: dict[str, dict[str, Any]] = {}
         builtin_dir = self._dir / "builtin"
         if builtin_dir.exists():
-            for f in builtin_dir.iterdir():
-                if f.suffix in (".json", ".yaml", ".yml"):
+            for entry in builtin_dir.iterdir():
+                # Directory-based skill: <name>/config.json + SKILL.md
+                if entry.is_dir():
                     try:
-                        defn = self._load_file(f)
-                        name = defn.get("name", f.stem)
+                        defn = self._load_skill_dir(entry)
+                        if defn is not None:
+                            name = defn.get("name", entry.name)
+                            skills[name] = defn
+                    except Exception:
+                        logger.warning("Failed to load skill dir", dir=str(entry))
+                # Legacy single-file skill
+                elif entry.suffix in (".json", ".yaml", ".yml"):
+                    try:
+                        defn = self._load_file(entry)
+                        name = defn.get("name", entry.stem)
                         skills[name] = defn
                     except Exception:
-                        logger.warning("Failed to load skill", file=str(f))
+                        logger.warning("Failed to load skill", file=str(entry))
 
         # load mapping
         mapping_file = self._dir / "mapping.json"
@@ -54,6 +64,56 @@ class SkillLoader:
 
         logger.info("Skills loaded", count=len(skills))
         return skills
+
+    @staticmethod
+    def _load_skill_dir(dir_path: Path) -> dict[str, Any] | None:
+        """Load a directory-based skill (config.json + optional SKILL.md)."""
+        config_file = dir_path / "config.json"
+        if not config_file.exists():
+            return None
+        with open(config_file, encoding="utf-8") as fh:
+            defn: dict[str, Any] = json.load(fh)
+
+        skill_md = dir_path / "SKILL.md"
+        if skill_md.exists():
+            md_text = skill_md.read_text(encoding="utf-8")
+            meta = SkillLoader._parse_frontmatter(md_text)
+            # Merge frontmatter into definition (frontmatter wins for name/description/tags/triggers)
+            for key in ("name", "description", "version", "author", "tags", "triggers", "suggestedSkills"):
+                if key in meta:
+                    defn[key] = meta[key]
+            defn["system_prompt"] = md_text
+
+        # Ensure name is set
+        if "name" not in defn:
+            defn["name"] = dir_path.name
+        return defn
+
+    @staticmethod
+    def _parse_frontmatter(md_text: str) -> dict[str, Any]:
+        """Parse YAML frontmatter from a markdown file (between --- delimiters)."""
+        if not md_text.startswith("---"):
+            return {}
+        end = md_text.find("---", 3)
+        if end == -1:
+            return {}
+        fm_text = md_text[3:end].strip()
+        if not fm_text:
+            return {}
+        if HAS_YAML:
+            try:
+                return yaml.safe_load(fm_text) or {}
+            except Exception:
+                return {}
+        # Minimal fallback: extract name and description
+        result: dict[str, Any] = {}
+        for line in fm_text.splitlines():
+            if ":" in line:
+                k, v = line.split(":", 1)
+                k, v = k.strip(), v.strip()
+                if k in ("name", "description", "version", "author"):
+                    result[k] = v
+        return result
 
     @staticmethod
     def _load_file(path: Path) -> dict[str, Any]:

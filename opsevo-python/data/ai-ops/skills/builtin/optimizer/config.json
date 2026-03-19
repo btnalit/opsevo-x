@@ -9,7 +9,8 @@
   "toolPriority": [
     "monitor_metrics",
     "knowledge_search",
-    "device_query"
+    "device_query",
+    "execute_command"
   ],
   "toolDefaults": {
     "device_query": {
@@ -27,7 +28,7 @@
   "caps": {
     "maxTokens": 4096,
     "temperature": 0.3,
-    "maxIterations": 12
+    "maxIterations": 15
   },
   "knowledgeConfig": {
     "enabled": true,

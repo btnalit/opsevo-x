@@ -1,0 +1,41 @@
+{
+  "allowedTools": [
+    "knowledge_search",
+    "execute_command",
+    "create_skill",
+    "list_skills"
+  ],
+  "toolPriority": [
+    "knowledge_search",
+    "list_skills",
+    "create_skill",
+    "execute_command"
+  ],
+  "toolDefaults": {
+    "knowledge_search": {
+      "limit": 5,
+      "minScore": 0.3
+    },
+    "execute_command": {
+      "dryRun": true
+    }
+  },
+  "toolConstraints": {
+    "execute_command": {
+      "requireConfirmation": true,
+      "allowedActions": ["write_file", "mkdir"]
+    }
+  },
+  "caps": {
+    "maxTokens": 16384,
+    "temperature": 0.4,
+    "maxIterations": 15
+  },
+  "knowledgeConfig": {
+    "enabled": true,
+    "priorityTypes": ["config", "manual"],
+    "minScore": 0.3
+  },
+  "outputFormat": "structured",
+  "requireCitations": false
+}

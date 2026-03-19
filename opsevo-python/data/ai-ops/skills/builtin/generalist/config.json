@@ -5,7 +5,10 @@
     "monitor_metrics",
     "device_query",
     "execute_command",
-    "alert_analysis"
+    "alert_analysis",
+    "config_diff",
+    "check_connectivity",
+    "generate_remediation"
   ],
   "toolDefaults": {
     "device_query": {
@@ -20,7 +23,7 @@
   "caps": {
     "maxTokens": 4096,
     "temperature": 0.5,
-    "maxIterations": 10
+    "maxIterations": 12
   },
   "knowledgeConfig": {
     "enabled": true,

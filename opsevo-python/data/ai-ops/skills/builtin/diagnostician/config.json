@@ -12,12 +12,12 @@
     "knowledge_search",
     "monitor_metrics",
     "device_query",
-    "execute_command",
-    "alert_analysis"
+    "check_connectivity",
+    "alert_analysis",
+    "execute_command"
   ],
   "toolDefaults": {
     "device_query": {
-      "proplist": "name,type,running,disabled",
       "limit": 50
     },
     "knowledge_search": {
@@ -32,7 +32,7 @@
   "caps": {
     "maxTokens": 4096,
     "temperature": 0.2,
-    "maxIterations": 12
+    "maxIterations": 15
   },
   "knowledgeConfig": {
     "enabled": true,
