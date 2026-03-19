@@ -7,42 +7,318 @@ auth:
 timeout: 30000
 
 endpoints:
+  # ── 系统 ──
   - action_type: get_system_resource
     path: /rest/system/resource
     method: GET
     read_only: true
     risk_level: low
     response_transform: routeros_json
+  - action_type: get_system_identity
+    path: /rest/system/identity
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_system_routerboard
+    path: /rest/system/routerboard
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_system_health
+    path: /rest/system/health
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_system_clock
+    path: /rest/system/clock
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_system_ntp_client
+    path: /rest/system/ntp/client
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_system_logging
+    path: /rest/system/logging
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_system_history
+    path: /rest/system/history
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_system_package
+    path: /rest/system/package
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_system_scheduler
+    path: /rest/system/scheduler
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_system_script
+    path: /rest/system/script
+    method: GET
+    read_only: true
+    risk_level: low
+
+  # ── 网络接口 ──
   - action_type: get_interfaces
     path: /rest/interface
     method: GET
     read_only: true
     risk_level: low
-  - action_type: get_firewall_rules
-    path: /rest/ip/firewall/filter
+  - action_type: get_interface_ethernet
+    path: /rest/interface/ethernet
     method: GET
     read_only: true
     risk_level: low
-  - action_type: get_routes
-    path: /rest/ip/route
+  - action_type: get_interface_bridge
+    path: /rest/interface/bridge
     method: GET
     read_only: true
     risk_level: low
-  - action_type: get_dns
-    path: /rest/ip/dns
+  - action_type: get_interface_bridge_port
+    path: /rest/interface/bridge/port
     method: GET
     read_only: true
     risk_level: low
+  - action_type: get_interface_vlan
+    path: /rest/interface/vlan
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_interface_bonding
+    path: /rest/interface/bonding
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_interface_wireless
+    path: /rest/interface/wireless
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_wireless_registration
+    path: /rest/interface/wireless/registration-table
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_interface_pppoe_client
+    path: /rest/interface/pppoe-client
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_interface_wireguard
+    path: /rest/interface/wireguard
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_interface_wireguard_peers
+    path: /rest/interface/wireguard/peers
+    method: GET
+    read_only: true
+    risk_level: low
+
+  # ── IP ──
   - action_type: get_ip_addresses
     path: /rest/ip/address
     method: GET
     read_only: true
     risk_level: low
+  - action_type: get_ip_pool
+    path: /rest/ip/pool
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_ip_arp
+    path: /rest/ip/arp
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_ip_neighbor
+    path: /rest/ip/neighbor
+    method: GET
+    read_only: true
+    risk_level: low
+
+  # ── 路由 ──
+  - action_type: get_routes
+    path: /rest/ip/route
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_routing_ospf_instance
+    path: /rest/routing/ospf/instance
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_routing_ospf_neighbor
+    path: /rest/routing/ospf/neighbor
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_routing_bgp_connection
+    path: /rest/routing/bgp/connection
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_routing_bgp_session
+    path: /rest/routing/bgp/session
+    method: GET
+    read_only: true
+    risk_level: low
+
+  # ── 防火墙 ──
+  - action_type: get_firewall_rules
+    path: /rest/ip/firewall/filter
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_firewall_nat
+    path: /rest/ip/firewall/nat
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_firewall_mangle
+    path: /rest/ip/firewall/mangle
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_firewall_raw
+    path: /rest/ip/firewall/raw
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_firewall_address_list
+    path: /rest/ip/firewall/address-list
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_firewall_connections
+    path: /rest/ip/firewall/connection
+    method: GET
+    read_only: true
+    risk_level: low
+
+  # ── DNS ──
+  - action_type: get_dns
+    path: /rest/ip/dns
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_dns_static
+    path: /rest/ip/dns/static
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_dns_cache
+    path: /rest/ip/dns/cache
+    method: GET
+    read_only: true
+    risk_level: low
+
+  # ── DHCP ──
+  - action_type: get_dhcp_server
+    path: /rest/ip/dhcp-server
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_dhcp_server_lease
+    path: /rest/ip/dhcp-server/lease
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_dhcp_client
+    path: /rest/ip/dhcp-client
+    method: GET
+    read_only: true
+    risk_level: low
+
+  # ── VPN ──
+  - action_type: get_ipsec_policy
+    path: /rest/ip/ipsec/policy
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_ipsec_peer
+    path: /rest/ip/ipsec/peer
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_ipsec_active_peers
+    path: /rest/ip/ipsec/active-peers
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_l2tp_server
+    path: /rest/interface/l2tp-server/server
+    method: GET
+    read_only: true
+    risk_level: low
+
+  # ── 队列 / QoS ──
+  - action_type: get_queue_simple
+    path: /rest/queue/simple
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_queue_tree
+    path: /rest/queue/tree
+    method: GET
+    read_only: true
+    risk_level: low
+
+  # ── 用户 ──
+  - action_type: get_users
+    path: /rest/user
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_user_active
+    path: /rest/user/active
+    method: GET
+    read_only: true
+    risk_level: low
+
+  # ── 日志 ──
+  - action_type: get_log
+    path: /rest/log
+    method: GET
+    read_only: true
+    risk_level: low
+
+  # ── 配置导出 ──
+  - action_type: export_config
+    path: /rest/export
+    method: POST
+    read_only: true
+    risk_level: medium
+
+  # ── 写操作 ──
+  - action_type: enable_interface
+    path: /rest/interface/set
+    method: POST
+    read_only: false
+    risk_level: medium
+  - action_type: disable_interface
+    path: /rest/interface/set
+    method: POST
+    read_only: false
+    risk_level: medium
+  - action_type: reboot
+    path: /rest/system/reboot
+    method: POST
+    read_only: false
+    risk_level: critical
 
 metrics_endpoints:
   cpu_usage: get_system_resource
   memory_usage: get_system_resource
   interfaces: get_interfaces
+  health: get_system_health
 
 data_capabilities:
   - topology
@@ -50,18 +326,44 @@ data_capabilities:
   - interfaces
   - firewall
   - dns
+  - dhcp
+  - vpn
+  - wireless
+  - qos
+  - users
+  - syslog
+  - packages
+  - routing_protocols
 
 config_paths:
   - get_interfaces
   - get_firewall_rules
-  - get_system_resource
+  - get_firewall_nat
+  - get_firewall_mangle
+  - get_firewall_address_list
+  - get_dns
+  - get_dns_static
+  - get_dhcp_server
+  - get_dhcp_server_lease
   - get_routes
   - get_ip_addresses
+  - get_ip_pool
+  - get_queue_simple
+  - get_queue_tree
+  - get_system_scheduler
+  - get_system_script
+  - get_interface_wireless
+  - get_interface_wireguard
+  - get_interface_wireguard_peers
+  - get_ipsec_policy
+  - get_ipsec_peer
+  - export_config
 
 severity_mapping:
   critical:
     - system
     - error
+    - critical
   warning:
     - warning
   info:
@@ -73,5 +375,17 @@ remediation_templates:
     /interface enable {interface_name}
   high_cpu: |
     /system script run cleanup
+  dns_not_resolving: |
+    /ip dns set allow-remote-requests=yes servers=8.8.8.8,1.1.1.1
+  dhcp_pool_exhausted: |
+    /ip pool set {pool_name} ranges={new_range}
+  firewall_lockout: |
+    /ip firewall filter disable [find where chain=input action=drop]
+  wireless_interference: |
+    /interface wireless set {interface_name} frequency=auto
+  bgp_session_down: |
+    /routing bgp connection disable [find where name={peer_name}]; :delay 3; /routing bgp connection enable [find where name={peer_name}]
+  disk_full: |
+    /file remove [find where name~"backup"]
 
 script_language: routeros

@@ -6,19 +6,294 @@ auth:
   type: password
 timeout: 30000
 
-endpoints: []
+endpoints:
+  # ── 系统信息 ──
+  - action_type: get_system_resource
+    path: >-
+      echo '=== CPU ===';
+      top -bn1 | head -5;
+      echo '=== MEMORY ===';
+      free -m;
+      echo '=== UPTIME ===';
+      uptime;
+      echo '=== LOAD ===';
+      cat /proc/loadavg
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_system_info
+    path: >-
+      echo '=== OS ===';
+      cat /etc/os-release 2>/dev/null || cat /etc/redhat-release 2>/dev/null;
+      echo '=== KERNEL ===';
+      uname -a;
+      echo '=== HOSTNAME ===';
+      hostname -f 2>/dev/null || hostname
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_cpu_detail
+    path: >-
+      echo '=== CPU INFO ===';
+      lscpu 2>/dev/null || cat /proc/cpuinfo | head -30;
+      echo '=== CPU USAGE PER CORE ===';
+      mpstat -P ALL 1 1 2>/dev/null || cat /proc/stat | head -10
+    method: GET
+    read_only: true
+    risk_level: low
+
+  # ── 网络接口 ──
+  - action_type: get_interfaces
+    path: "ip -s link"
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_interface_detail
+    path: >-
+      echo '=== INTERFACES ===';
+      ip -d addr show;
+      echo '=== STATS ===';
+      ip -s link;
+      echo '=== ETHTOOL ===';
+      for iface in $(ip -o link show | awk -F': ' '{print $2}' | grep -v lo); do
+        echo "--- $iface ---";
+        ethtool $iface 2>/dev/null | head -10;
+      done
+    method: GET
+    read_only: true
+    risk_level: low
+
+  # ── IP 地址 ──
+  - action_type: get_ip_addresses
+    path: "ip -4 addr show; echo '=== IPv6 ==='; ip -6 addr show"
+    method: GET
+    read_only: true
+    risk_level: low
+
+  # ── 路由 ──
+  - action_type: get_routes
+    path: "ip route show; echo '=== IPv6 ==='; ip -6 route show"
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_routing_table
+    path: "ip route show table all | head -200"
+    method: GET
+    read_only: true
+    risk_level: low
+
+  # ── 防火墙 ──
+  - action_type: get_firewall_rules
+    path: >-
+      echo '=== IPTABLES ===';
+      iptables -L -n -v 2>/dev/null;
+      echo '=== NFT ===';
+      nft list ruleset 2>/dev/null;
+      echo '=== FIREWALLD ===';
+      firewall-cmd --list-all 2>/dev/null
+    method: GET
+    read_only: true
+    risk_level: low
+
+  # ── DNS ──
+  - action_type: get_dns
+    path: >-
+      echo '=== RESOLV ===';
+      cat /etc/resolv.conf;
+      echo '=== SYSTEMD-RESOLVE ===';
+      resolvectl status 2>/dev/null || systemd-resolve --status 2>/dev/null;
+      echo '=== HOSTS ===';
+      cat /etc/hosts
+    method: GET
+    read_only: true
+    risk_level: low
+
+  # ── 磁盘 ──
+  - action_type: get_disk_usage
+    path: >-
+      echo '=== DISK USAGE ===';
+      df -h;
+      echo '=== INODES ===';
+      df -i;
+      echo '=== BLOCK DEVICES ===';
+      lsblk 2>/dev/null
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_disk_io
+    path: "iostat -x 1 1 2>/dev/null || cat /proc/diskstats"
+    method: GET
+    read_only: true
+    risk_level: low
+
+  # ── 进程 ──
+  - action_type: get_processes
+    path: "ps aux --sort=-%cpu | head -30"
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_top_memory
+    path: "ps aux --sort=-%mem | head -20"
+    method: GET
+    read_only: true
+    risk_level: low
+
+  # ── 连接 / 端口 ──
+  - action_type: get_connections
+    path: "ss -tunap 2>/dev/null || netstat -tunap 2>/dev/null"
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_listening_ports
+    path: "ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null"
+    method: GET
+    read_only: true
+    risk_level: low
+
+  # ── 服务 ──
+  - action_type: get_services
+    path: "systemctl list-units --type=service --state=running 2>/dev/null || service --status-all 2>/dev/null"
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_failed_services
+    path: "systemctl list-units --type=service --state=failed 2>/dev/null"
+    method: GET
+    read_only: true
+    risk_level: low
+
+  # ── 日志 ──
+  - action_type: get_syslog
+    path: "journalctl -n 100 --no-pager 2>/dev/null || tail -100 /var/log/syslog 2>/dev/null || tail -100 /var/log/messages"
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_auth_log
+    path: "journalctl -u sshd -n 50 --no-pager 2>/dev/null || tail -50 /var/log/auth.log 2>/dev/null || tail -50 /var/log/secure"
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_kernel_log
+    path: "dmesg | tail -50"
+    method: GET
+    read_only: true
+    risk_level: low
+
+  # ── 用户 / 安全 ──
+  - action_type: get_users
+    path: >-
+      echo '=== LOGGED IN ===';
+      who;
+      echo '=== LAST LOGINS ===';
+      last -10;
+      echo '=== FAILED LOGINS ===';
+      lastb -10 2>/dev/null
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_crontabs
+    path: >-
+      echo '=== SYSTEM CRON ===';
+      cat /etc/crontab 2>/dev/null;
+      echo '=== CRON.D ===';
+      ls -la /etc/cron.d/ 2>/dev/null;
+      echo '=== USER CRON ===';
+      crontab -l 2>/dev/null
+    method: GET
+    read_only: true
+    risk_level: low
+
+  # ── 软件包 ──
+  - action_type: get_packages
+    path: >-
+      if command -v dpkg >/dev/null 2>&1; then dpkg -l | tail -50;
+      elif command -v rpm >/dev/null 2>&1; then rpm -qa | sort | tail -50;
+      elif command -v apk >/dev/null 2>&1; then apk list --installed | tail -50;
+      else echo 'unknown package manager'; fi
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_security_updates
+    path: >-
+      if command -v apt >/dev/null 2>&1; then apt list --upgradable 2>/dev/null;
+      elif command -v yum >/dev/null 2>&1; then yum check-update --security 2>/dev/null | head -30;
+      elif command -v dnf >/dev/null 2>&1; then dnf check-update --security 2>/dev/null | head -30;
+      else echo 'N/A'; fi
+    method: GET
+    read_only: true
+    risk_level: low
+
+  # ── Docker（如果有）──
+  - action_type: get_docker_containers
+    path: "docker ps -a --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}\t{{.Image}}' 2>/dev/null || echo 'docker not installed'"
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_docker_stats
+    path: "docker stats --no-stream --format 'table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}' 2>/dev/null || echo 'docker not installed'"
+    method: GET
+    read_only: true
+    risk_level: low
+
+  # ── 配置导出 ──
+  - action_type: export_config
+    path: >-
+      echo '=== NETWORK ===';
+      cat /etc/network/interfaces 2>/dev/null;
+      cat /etc/netplan/*.yaml 2>/dev/null;
+      echo '=== SYSCTL ===';
+      sysctl -a 2>/dev/null | grep -E 'net\.(ipv4|ipv6)\.(ip_forward|conf)' | head -30;
+      echo '=== RESOLV ===';
+      cat /etc/resolv.conf
+    method: GET
+    read_only: true
+    risk_level: medium
+
+  # ── 写操作 ──
+  - action_type: restart_service
+    path: "systemctl restart {service_name}"
+    method: POST
+    read_only: false
+    risk_level: high
+  - action_type: restart_networking
+    path: "systemctl restart networking 2>/dev/null || systemctl restart NetworkManager 2>/dev/null"
+    method: POST
+    read_only: false
+    risk_level: high
+  - action_type: reboot
+    path: "reboot"
+    method: POST
+    read_only: false
+    risk_level: critical
 
 metrics_endpoints:
-  cpu_usage: "top -bn1 | head -5"
-  memory_usage: "free -m"
-  interfaces: "ip -s link"
+  cpu_usage: get_system_resource
+  memory_usage: get_system_resource
+  interfaces: get_interfaces
+  disk: get_disk_usage
 
 data_capabilities:
   - topology
   - routes
   - interfaces
+  - firewall
+  - dns
+  - disk
+  - processes
+  - services
+  - connections
+  - syslog
+  - packages
+  - docker
+  - users
 
-config_paths: []
+config_paths:
+  - get_interfaces
+  - get_firewall_rules
+  - get_dns
+  - get_routes
+  - get_ip_addresses
+  - export_config
 
 severity_mapping:
   critical:
@@ -37,6 +312,22 @@ remediation_templates:
   interface_down: |
     ip link set {interface_name} up
   high_cpu: |
-    kill -9 $(ps aux --sort=-%cpu | head -2 | tail -1 | awk '{print $2}')
+    kill -9 $(ps aux --sort=-%cpu | awk 'NR==2 {print $2}')
+  high_memory: |
+    sync; echo 3 > /proc/sys/vm/drop_caches
+  disk_full: |
+    journalctl --vacuum-size=100M 2>/dev/null;
+    find /tmp -type f -mtime +7 -delete;
+    find /var/log -name '*.gz' -mtime +30 -delete
+  service_down: |
+    systemctl restart {service_name}
+  dns_not_resolving: |
+    systemctl restart systemd-resolved 2>/dev/null || systemctl restart named 2>/dev/null
+  docker_container_down: |
+    docker restart {container_name}
+  too_many_connections: |
+    ss -K dst {remote_ip}
+  zombie_processes: |
+    ps -eo pid,ppid,stat,cmd | awk '$3~/Z/ {print $2}' | sort -u | xargs -r kill -9
 
 script_language: bash

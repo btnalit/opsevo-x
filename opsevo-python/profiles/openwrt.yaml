@@ -9,12 +9,27 @@ timeout: 30000
 endpoints:
   # ── 系统信息 ──
   - action_type: get_system_resource
-    path: "ubus call system board; echo '---'; cat /proc/uptime; echo '---'; top -bn1 | head -5; echo '---'; free"
+    path: >-
+      echo '=== BOARD ===';
+      ubus call system board;
+      echo '=== UPTIME ===';
+      cat /proc/uptime;
+      echo '=== CPU ===';
+      top -bn1 | head -5;
+      echo '=== MEMORY ===';
+      free;
+      echo '=== LOAD ===';
+      cat /proc/loadavg
     method: GET
     read_only: true
     risk_level: low
   - action_type: get_system_info
     path: "ubus call system info"
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_system_board
+    path: "ubus call system board"
     method: GET
     read_only: true
     risk_level: low
@@ -26,7 +41,37 @@ endpoints:
     read_only: true
     risk_level: low
   - action_type: get_interface_status
-    path: "ifconfig; echo '---'; ip -s link"
+    path: >-
+      echo '=== IP LINK ===';
+      ip -s link;
+      echo '=== IP ADDR ===';
+      ip addr show
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_interface_detail
+    path: >-
+      for iface in $(uci show network | grep '=interface' | cut -d. -f2 | cut -d= -f1); do
+        echo "=== $iface ===";
+        ubus call network.interface.$iface status 2>/dev/null;
+      done
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_switch_config
+    path: "swconfig list 2>/dev/null; swconfig dev switch0 show 2>/dev/null"
+    method: GET
+    read_only: true
+    risk_level: low
+
+  # ── IP 地址 ──
+  - action_type: get_ip_addresses
+    path: "ip -4 addr show; echo '=== IPv6 ==='; ip -6 addr show"
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_arp_table
+    path: "ip neigh show"
     method: GET
     read_only: true
     risk_level: low
@@ -42,6 +87,11 @@ endpoints:
     method: GET
     read_only: true
     risk_level: low
+  - action_type: get_routing_table
+    path: "ip route show table all | head -200"
+    method: GET
+    read_only: true
+    risk_level: low
 
   # ── 防火墙 ──
   - action_type: get_firewall_rules
@@ -54,39 +104,111 @@ endpoints:
     method: GET
     read_only: true
     risk_level: low
+  - action_type: get_firewall_redirects
+    path: "uci show firewall | grep 'firewall.@redirect'"
+    method: GET
+    read_only: true
+    risk_level: low
   - action_type: get_iptables
-    path: "iptables -L -n -v 2>/dev/null; echo '---'; nft list ruleset 2>/dev/null"
+    path: >-
+      echo '=== IPTABLES ===';
+      iptables -L -n -v 2>/dev/null;
+      echo '=== NAT ===';
+      iptables -t nat -L -n -v 2>/dev/null;
+      echo '=== NFT ===';
+      nft list ruleset 2>/dev/null
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_firewall_connections
+    path: "cat /proc/net/nf_conntrack 2>/dev/null | wc -l; echo 'active connections'; head -20 /proc/net/nf_conntrack 2>/dev/null"
     method: GET
     read_only: true
     risk_level: low
 
   # ── DNS / DHCP ──
   - action_type: get_dns
-    path: "uci show dhcp; echo '---'; cat /tmp/resolv.conf.d/resolv.conf.auto 2>/dev/null"
+    path: >-
+      echo '=== DHCP/DNS CONFIG ===';
+      uci show dhcp;
+      echo '=== RESOLV ===';
+      cat /tmp/resolv.conf.d/resolv.conf.auto 2>/dev/null;
+      echo '=== DNSMASQ ===';
+      cat /etc/dnsmasq.conf 2>/dev/null
     method: GET
     read_only: true
     risk_level: low
   - action_type: get_dhcp_leases
-    path: "cat /tmp/dhcp.leases 2>/dev/null"
+    path: >-
+      echo '=== ACTIVE LEASES ===';
+      cat /tmp/dhcp.leases 2>/dev/null;
+      echo '=== STATIC LEASES ===';
+      uci show dhcp | grep 'host'
     method: GET
     read_only: true
     risk_level: low
 
   # ── 无线 ──
   - action_type: get_wireless
-    path: "uci show wireless; echo '---'; iwinfo"
+    path: >-
+      echo '=== UCI CONFIG ===';
+      uci show wireless;
+      echo '=== IWINFO ===';
+      iwinfo
     method: GET
     read_only: true
     risk_level: low
   - action_type: get_wireless_clients
-    path: "for iface in $(iwinfo | grep ESSID | awk '{print $1}'); do echo \"=== $iface ===\"; iwinfo $iface assoclist; done"
+    path: >-
+      for iface in $(iwinfo | grep ESSID | awk '{print $1}'); do
+        echo "=== $iface ===";
+        iwinfo $iface assoclist;
+      done
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_wireless_survey
+    path: >-
+      for iface in $(iwinfo | grep ESSID | awk '{print $1}'); do
+        echo "=== $iface scan ===";
+        iwinfo $iface scan 2>/dev/null | head -50;
+      done
     method: GET
     read_only: true
     risk_level: low
 
-  # ── IP 地址 ──
-  - action_type: get_ip_addresses
-    path: "ip addr show"
+  # ── VPN ──
+  - action_type: get_vpn_status
+    path: >-
+      echo '=== WIREGUARD ===';
+      wg show 2>/dev/null || echo 'wireguard not installed';
+      echo '=== OPENVPN ===';
+      uci show openvpn 2>/dev/null || echo 'openvpn not configured'
+    method: GET
+    read_only: true
+    risk_level: low
+
+  # ── 磁盘 / 存储 ──
+  - action_type: get_disk_usage
+    path: >-
+      echo '=== DISK ===';
+      df -h;
+      echo '=== OVERLAY ===';
+      df -h /overlay 2>/dev/null;
+      echo '=== TMP ===';
+      df -h /tmp
+    method: GET
+    read_only: true
+    risk_level: low
+
+  # ── 连接 / 端口 ──
+  - action_type: get_connections
+    path: "netstat -tunap 2>/dev/null || ss -tunap 2>/dev/null"
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_listening_ports
+    path: "netstat -tlnp 2>/dev/null || ss -tlnp 2>/dev/null"
     method: GET
     read_only: true
     risk_level: low
@@ -102,6 +224,23 @@ endpoints:
     method: GET
     read_only: true
     risk_level: low
+  - action_type: get_firewall_log
+    path: "logread | grep -i 'drop\\|reject\\|fw' | tail -50"
+    method: GET
+    read_only: true
+    risk_level: low
+
+  # ── 服务 ──
+  - action_type: get_services
+    path: >-
+      for svc in /etc/init.d/*; do
+        name=$(basename $svc);
+        enabled=$($svc enabled 2>/dev/null && echo 'enabled' || echo 'disabled');
+        echo "$name: $enabled";
+      done
+    method: GET
+    read_only: true
+    risk_level: low
 
   # ── 软件包 ──
   - action_type: get_packages
@@ -109,15 +248,32 @@ endpoints:
     method: GET
     read_only: true
     risk_level: low
+  - action_type: get_upgradable_packages
+    path: "opkg list-upgradable 2>/dev/null"
+    method: GET
+    read_only: true
+    risk_level: low
 
-  # ── 配置导出/导入 ──
+  # ── UCI 全量配置 ──
+  - action_type: get_uci_network
+    path: "uci show network"
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_uci_system
+    path: "uci show system"
+    method: GET
+    read_only: true
+    risk_level: low
+
+  # ── 配置导出 ──
   - action_type: export_config
     path: "sysupgrade -b - | base64"
     method: GET
     read_only: true
     risk_level: medium
 
-  # ── 写操作（风险较高）──
+  # ── 写操作 ──
   - action_type: restart_network
     path: "/etc/init.d/network restart"
     method: POST
@@ -133,6 +289,21 @@ endpoints:
     method: POST
     read_only: false
     risk_level: medium
+  - action_type: restart_dnsmasq
+    path: "/etc/init.d/dnsmasq restart"
+    method: POST
+    read_only: false
+    risk_level: medium
+  - action_type: restart_service
+    path: "/etc/init.d/{service_name} restart"
+    method: POST
+    read_only: false
+    risk_level: high
+  - action_type: uci_commit
+    path: "uci commit"
+    method: POST
+    read_only: false
+    risk_level: high
   - action_type: reboot
     path: "reboot"
     method: POST
@@ -143,6 +314,8 @@ metrics_endpoints:
   cpu_usage: get_system_resource
   memory_usage: get_system_info
   interfaces: get_interface_status
+  disk: get_disk_usage
+  wireless: get_wireless_clients
 
 data_capabilities:
   - topology
@@ -152,16 +325,25 @@ data_capabilities:
   - dns
   - dhcp
   - wireless
+  - vpn
   - packages
   - syslog
+  - services
+  - connections
+  - disk
 
 config_paths:
   - get_interfaces
   - get_firewall_rules
+  - get_firewall_redirects
   - get_dns
   - get_wireless
   - get_routes
   - get_ip_addresses
+  - get_uci_network
+  - get_uci_system
+  - get_vpn_status
+  - export_config
 
 severity_mapping:
   critical:
@@ -181,13 +363,23 @@ remediation_templates:
     ifup {interface_name}
   high_cpu: |
     for pid in $(top -bn1 | awk 'NR>4 && $7+0>80 {print $1}' | head -3); do kill -9 $pid; done
+  high_memory: |
+    sync; echo 3 > /proc/sys/vm/drop_caches
   dns_not_resolving: |
     /etc/init.d/dnsmasq restart
   wireless_down: |
     wifi reload
+  wireless_interference: |
+    uci set wireless.radio0.channel=auto; uci commit wireless; wifi reload
   firewall_lockout: |
     /etc/init.d/firewall restart
   disk_full: |
     rm -rf /tmp/opkg-lists/*; opkg clean
+  service_down: |
+    /etc/init.d/{service_name} restart
+  dhcp_pool_exhausted: |
+    uci set dhcp.lan.limit=200; uci commit dhcp; /etc/init.d/dnsmasq restart
+  vpn_tunnel_down: |
+    /etc/init.d/wireguard restart 2>/dev/null; /etc/init.d/openvpn restart 2>/dev/null
 
 script_language: ash

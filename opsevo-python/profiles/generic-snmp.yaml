@@ -6,22 +6,109 @@ auth:
   type: community
 timeout: 30000
 
-endpoints: []
+endpoints:
+  # ── 系统 ──
+  - action_type: get_system_info
+    path: "1.3.6.1.2.1.1"
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_system_description
+    path: "1.3.6.1.2.1.1.1.0"
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_system_uptime
+    path: "1.3.6.1.2.1.1.3.0"
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_system_name
+    path: "1.3.6.1.2.1.1.5.0"
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_system_location
+    path: "1.3.6.1.2.1.1.6.0"
+    method: GET
+    read_only: true
+    risk_level: low
+
+  # ── 接口 ──
+  - action_type: get_interfaces
+    path: "1.3.6.1.2.1.2.2"
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_interface_count
+    path: "1.3.6.1.2.1.2.1.0"
+    method: GET
+    read_only: true
+    risk_level: low
+
+  # ── IP ──
+  - action_type: get_ip_addresses
+    path: "1.3.6.1.2.1.4.20"
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_ip_routes
+    path: "1.3.6.1.2.1.4.21"
+    method: GET
+    read_only: true
+    risk_level: low
+  - action_type: get_arp_table
+    path: "1.3.6.1.2.1.4.22"
+    method: GET
+    read_only: true
+    risk_level: low
+
+  # ── TCP/UDP ──
+  - action_type: get_tcp_connections
+    path: "1.3.6.1.2.1.6.13"
+    method: GET
+    read_only: true
+    risk_level: low
+
+  # ── 存储 ──
+  - action_type: get_storage
+    path: "1.3.6.1.2.1.25.2.3"
+    method: GET
+    read_only: true
+    risk_level: low
+
+  # ── 进程 ──
+  - action_type: get_processes
+    path: "1.3.6.1.2.1.25.4.2"
+    method: GET
+    read_only: true
+    risk_level: low
 
 metrics_endpoints:
   cpu_usage: "1.3.6.1.4.1.2021.11.9.0"
   memory_usage: "1.3.6.1.4.1.2021.4.6.0"
+  memory_total: "1.3.6.1.4.1.2021.4.5.0"
   interfaces: "1.3.6.1.2.1.2.2"
+  disk: "1.3.6.1.4.1.2021.9.1"
+  uptime: "1.3.6.1.2.1.1.3.0"
 
 data_capabilities:
   - interfaces
   - routes
+  - topology
+  - storage
+  - processes
 
-config_paths: []
+config_paths:
+  - get_interfaces
+  - get_ip_addresses
+  - get_ip_routes
+  - get_system_info
 
 severity_mapping:
   critical:
     - critical
+    - emergency
   warning:
     - major
     - minor
