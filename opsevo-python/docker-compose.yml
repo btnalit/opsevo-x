@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   postgres:
     image: pgvector/pgvector:pg15
@@ -27,7 +25,7 @@ services:
       context: ..
       dockerfile: opsevo-python/Dockerfile
     image: ghcr.io/btnalit/opsevo-x:latest
-    container_name: opsevo-python
+    container_name: opsevo
     restart: unless-stopped
     ports:
       - "${PORT:-8080}:3099"
