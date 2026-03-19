@@ -78,8 +78,8 @@ class BrainTools:
         if self._datastore:
             try:
                 await self._datastore.insert("audit_log", entry)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.error("audit_log_insert_failed", action=action, target=target, error=str(exc))
         logger.info("audit_log", **entry)
 
     # ------------------------------------------------------------------
@@ -164,10 +164,10 @@ class BrainTools:
             return {"error": "notification_service not available"}
         try:
             await self._notification_service.send(
-                channel=params.get("channel", "default"),
                 title=params.get("title", "Brain Notification"),
                 message=params.get("message", ""),
                 severity=params.get("severity", "info"),
+                metadata={"channel": params.get("channel", "default")},
             )
             return {"success": True}
         except Exception as exc:
@@ -177,10 +177,26 @@ class BrainTools:
         if not self._scheduler:
             return {"error": "scheduler not available"}
         try:
+            action = params.get("action", {})
+            tool_name = action.get("tool", "")
+            tool_params = action.get("params", {})
+
+            async def _action_callback() -> None:
+                """Execute the scheduled action via brain_tools.execute."""
+                if not tool_name:
+                    return
+                try:
+                    await self.execute(tool_name, tool_params)
+                    logger.info("scheduled_action_executed", tool=tool_name)
+                except Exception as exc:
+                    logger.warning("scheduled_action_failed", tool=tool_name, error=str(exc))
+
             task_id = await self._scheduler.add_task(
                 name=params.get("name", "brain_task"),
                 cron=params.get("cron", ""),
-                action=params.get("action", {}),
+                callback=_action_callback,
+                metadata={"action": action},
+                persist=True,
             )
             return {"success": True, "task_id": task_id}
         except Exception as exc:
@@ -210,6 +226,9 @@ class BrainTools:
             metadata = {**definition}
             if params.get("capsule_dir"):
                 metadata["capsule_dir"] = params["capsule_dir"]
+            # Create in factory first (validates definition); persist only on success
+            if self._skill_factory:
+                self._skill_factory.create(name, metadata)
             self._skill_registry.register(name, metadata)
             self._skill_creates_this_tick += 1
             await self._write_audit_log("create_skill", name, params, True)
@@ -239,8 +258,8 @@ class BrainTools:
             if len(status_list) >= self._max_mcp_connections:
                 await self._write_audit_log("configure_mcp_server", server_id, params, False, "connection_limit")
                 return {"error": "connection_limit", "detail": f"Max {self._max_mcp_connections} MCP connections reached"}
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("mcp_connection_status_check_failed", server_id=server_id, error=str(exc))
 
         try:
             from opsevo.services.mcp.client_manager import McpServerConfig

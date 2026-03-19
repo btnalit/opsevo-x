@@ -84,29 +84,42 @@ class ToolSearchMeta:
     # Public API
     # ------------------------------------------------------------------
 
-    def should_use_search(self) -> bool:
+    def should_use_search(self, tools: list[dict[str, Any]] | None = None) -> bool:
         """Return True when total tool count exceeds the threshold.
+
+        Parameters
+        ----------
+        tools:
+            Pre-merged tool list.  When *None* falls back to registry.
 
         Requirements: 4.1, 4.4
         """
-        all_tools = self._registry.get_all_tool_definitions()
-        return len(all_tools) > self._threshold
+        if tools is None:
+            tools = self._registry.get_all_tool_definitions()
+        return len(tools) > self._threshold
 
-    def get_exposed_tools(self) -> list[dict[str, Any]]:
+    def get_exposed_tools(self, tools: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
         """Return tools to expose to the LLM.
 
         Below threshold  → all tools.
         Above threshold  → core tools + search_tools meta-tool.
 
+        Parameters
+        ----------
+        tools:
+            Pre-merged tool list (e.g. brain_tools + registry).
+            When *None* falls back to registry only (backward compat).
+
         Requirements: 4.1, 4.4, 4.7
         """
-        all_tools = self._registry.get_all_tool_definitions()
+        if tools is None:
+            tools = self._registry.get_all_tool_definitions()
 
-        if not self.should_use_search():
-            return all_tools
+        if len(tools) <= self._threshold:
+            return tools
 
         # Filter to core tools only
-        core = [t for t in all_tools if t.get("function", {}).get("name") in self._core_tools]
+        core = [t for t in tools if t.get("function", {}).get("name") in self._core_tools]
 
         # Append the search_tools meta-tool definition
         core.append(SEARCH_TOOLS_DEFINITION)

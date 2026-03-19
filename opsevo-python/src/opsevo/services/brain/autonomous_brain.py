@@ -111,6 +111,7 @@ class AutonomousBrainService:
         self._notes: list[str] = []
         self._thinking_listeners: list[Callable[..., Any]] = []
         self._skill_factory: Any = None
+        self._tick_lock = asyncio.Lock()
 
         logger.info("AutonomousBrainService initialized", config=self._config)
 
@@ -158,6 +159,10 @@ class AutonomousBrainService:
                 logger.exception("Brain tick loop error")
 
     async def _tick(self, trigger: str) -> None:
+        async with self._tick_lock:
+            await self._tick_inner(trigger)
+
+    async def _tick_inner(self, trigger: str) -> None:
         tick_id = str(uuid.uuid4())[:8]
         self._tick_count += 1
 
@@ -377,8 +382,8 @@ class AutonomousBrainService:
                 tool_schemas = merged
 
             # Apply ToolSearchMeta if available (Req 4.1, 4.4)
-            if self._tool_search is not None and self._tool_search.should_use_search():
-                tool_schemas = self._tool_search.get_exposed_tools()
+            if self._tool_search is not None and self._tool_search.should_use_search(merged):
+                tool_schemas = self._tool_search.get_exposed_tools(merged)
 
             result = await adapter.chat(
                 messages=[{"role": "user", "content": prompt}],

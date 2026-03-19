@@ -439,7 +439,7 @@ async def create_scheduler_task(device_id: str = Query(None, alias="deviceId"), 
     async def _noop():
         pass
 
-    task_id = sched.add_task(
+    task_id = await sched.add_task(
         name=body.get("name", "Unnamed"),
         cron=body.get("cron", "*/5 * * * *"),
         callback=_noop,
@@ -453,37 +453,25 @@ async def create_scheduler_task(device_id: str = Query(None, alias="deviceId"), 
 async def update_scheduler_task(device_id: str = Query(None, alias="deviceId"), task_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     body = await request.json()
     sched = _c(request).scheduler()
-    # 先获取旧任务信息，以便 add 失败时恢复
-    old_tasks = sched.get_tasks()
-    old_task = next((t for t in old_tasks if t["id"] == task_id), None)
-    sched.remove_task(task_id)
-
-    async def _noop():
-        pass
-
     try:
-        new_id = sched.add_task(
-            name=body.get("name", "Unnamed"),
-            cron=body.get("cron", "*/5 * * * *"),
-            callback=_noop,
-            enabled=body.get("enabled", True),
-            metadata={"device_id": device_id, **body},
+        result = await sched.update_task(
+            task_id,
+            name=body.get("name"),
+            cron=body.get("cron"),
+            enabled=body.get("enabled"),
+            metadata={"device_id": device_id, **body} if body else None,
         )
-    except Exception:
-        # add 失败时恢复旧任务，防止任务丢失
-        if old_task:
-            sched.add_task(
-                name=old_task["name"], cron=old_task["cron"],
-                callback=_noop, enabled=old_task["enabled"],
-            )
-        raise
-    return {"success": True, "data": {"id": new_id, "name": body.get("name"), "cron": body.get("cron")}}
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    if not result:
+        raise HTTPException(404, "Scheduler task not found")
+    return {"success": True, "data": result}
 
 
 @router.delete("/scheduler/tasks/{task_id}")
 async def delete_scheduler_task(device_id: str = Query(None, alias="deviceId"), task_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     sched = _c(request).scheduler()
-    sched.remove_task(task_id)
+    await sched.remove_task(task_id)
     return {"success": True, "message": "Task deleted"}
 
 

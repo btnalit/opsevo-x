@@ -135,7 +135,7 @@ class ToolRegistry:
     def get_all_tools(self) -> list[UnifiedTool]:
         """获取所有可用工具（本地 + 健康的外部）。"""
         tools: list[UnifiedTool] = list(self._local_tools.values())
-        for sid, tool_map in self._external_tools.items():
+        for sid, tool_map in list(self._external_tools.items()):
             if self._server_health.get(sid, False):
                 tools.extend(tool_map.values())
         return tools
@@ -163,7 +163,7 @@ class ToolRegistry:
             definitions.append(self._unified_tool_to_definition(tool))
 
         # External tools from healthy servers (dedup by name)
-        for sid, tool_map in self._external_tools.items():
+        for sid, tool_map in list(self._external_tools.items()):
             if not self._server_health.get(sid, False):
                 continue
             for tool in tool_map.values():
@@ -203,8 +203,8 @@ class ToolRegistry:
                 return await handler(params)
             raise RuntimeError(f"No handler for local tool: {tool_name}")
 
-        # 外部工具
-        for sid, tool_map in self._external_tools.items():
+        # 外部工具 (snapshot to avoid RuntimeError if dict mutates concurrently)
+        for sid, tool_map in list(self._external_tools.items()):
             if tool_name in tool_map and self._server_health.get(sid, False):
                 if not self._forwarder:
                     raise RuntimeError("No tool forwarder configured")

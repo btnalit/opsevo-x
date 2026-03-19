@@ -155,6 +155,7 @@ class Container(containers.DeclarativeContainer):
 
     skill_registry = providers.Singleton(
         "opsevo.services.skill.skill_registry.SkillRegistry",
+        data_dir=providers.Object("data/skills"),
     )
 
     # ── MCP ───────────────────────────────────────────────────────────────
@@ -198,6 +199,18 @@ class Container(containers.DeclarativeContainer):
     tool_search = providers.Singleton(
         "opsevo.services.tools.tool_search.ToolSearchMeta",
         tool_registry=tool_registry,
+        embedding_service=embedding_service,
+    )
+
+    # ── Notification ─────────────────────────────────────────────────────
+    notification_service = providers.Singleton(
+        "opsevo.services.ai_ops.notification.NotificationService",
+    )
+
+    # ── Skill Factory ─────────────────────────────────────────────────────
+    skill_factory = providers.Singleton(
+        "opsevo.services.skill.skill_factory.SkillFactory",
+        skill_manager=skill_manager,
     )
 
     # ── Brain ─────────────────────────────────────────────────────────────
@@ -207,6 +220,9 @@ class Container(containers.DeclarativeContainer):
         datastore=datastore,
         event_bus=event_bus,
         knowledge_base=knowledge_base,
+        notification_service=notification_service,
+        scheduler=scheduler,
+        skill_factory=skill_factory,
         skill_registry=skill_registry,
         mcp_client_manager=mcp_client_manager,
     )

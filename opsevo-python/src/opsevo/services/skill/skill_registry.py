@@ -21,9 +21,9 @@ class SkillRegistry:
         When *None* the registry is purely in-memory (backward-compatible).
     """
 
-    def __init__(self, data_dir: Path | None = None) -> None:
+    def __init__(self, data_dir: Path | str | None = None) -> None:
         self._registry: dict[str, dict[str, Any]] = {}
-        self._data_dir = data_dir
+        self._data_dir = Path(data_dir) if data_dir is not None else None
         if self._data_dir is not None:
             self.load()
 
@@ -78,7 +78,7 @@ class SkillRegistry:
             data = json.loads(raw)
             self._registry = data.get("skills", {})
         except (json.JSONDecodeError, ValueError):
-            logger.warning("skill_registry.load_corrupt_json", path=str(path))
+            logger.error("skill_registry.load_corrupt_json", path=str(path))
         except Exception:
             logger.warning("skill_registry.load_failed", exc_info=True)
 

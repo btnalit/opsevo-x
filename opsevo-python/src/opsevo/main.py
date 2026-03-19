@@ -151,8 +151,9 @@ async def lifespan(app: FastAPI):
     akm = container.api_key_manager()
     akm.set_datastore(ds)
 
-    # 5f — Scheduler start
+    # 5f — Scheduler start (wire action executor before start so persisted tasks get callbacks)
     sched = container.scheduler()
+    sched.set_action_executor(container.brain_tools().execute)
     await _safe_start("scheduler", sched.start())
 
     # 5g — SyslogReceiver start

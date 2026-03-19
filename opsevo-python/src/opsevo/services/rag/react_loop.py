@@ -104,8 +104,8 @@ class ReactLoopController:
                                reason="Failed to get tool definitions from tool_registry")
 
         # Apply ToolSearchMeta if available (Req 4.1, 4.4)
-        if self._tool_search is not None and self._tool_search.should_use_search():
-            openai_tool_schemas = self._tool_search.get_exposed_tools()
+        if self._tool_search is not None and self._tool_search.should_use_search(openai_tool_schemas):
+            openai_tool_schemas = self._tool_search.get_exposed_tools(openai_tool_schemas)
             tool_names = [
                 s.get("function", {}).get("name", "") for s in openai_tool_schemas
             ]
@@ -371,6 +371,8 @@ class ReactLoopController:
             if failure_info.get("retry") and iteration < self._max_iterations - 1:
                 logger.info("react_retry", tool=action, iteration=iteration)
                 observation = await self._tools.execute(action, action_input)
+                if not observation.get("success", True):
+                    logger.warning("react_retry_also_failed", tool=action, iteration=iteration)
         return observation
 
     def _is_stuck(self, action_sig: str, recent: list[tuple[str, str]]) -> bool:
