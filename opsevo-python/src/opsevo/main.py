@@ -269,6 +269,7 @@ def create_app() -> FastAPI:
     from opsevo.api.prompt_templates import router as prompt_templates_router
     from opsevo.api.bff import router as bff_router
     from opsevo.api.connection import router as connection_router
+    from opsevo.api.drivers import router as drivers_router
 
     app.include_router(auth_router)
     app.include_router(devices_router)
@@ -288,6 +289,7 @@ def create_app() -> FastAPI:
     app.include_router(prompt_templates_router)
     app.include_router(bff_router)
     app.include_router(connection_router)
+    app.include_router(drivers_router)
 
     # ── Static files & SPA fallback ──────────────────────────────────────
     from fastapi.responses import FileResponse

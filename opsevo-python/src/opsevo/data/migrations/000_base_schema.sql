@@ -516,9 +516,14 @@ CREATE TABLE IF NOT EXISTS snmp_v3_credentials (
 -- ============================================================
 CREATE TABLE IF NOT EXISTS api_profiles (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  profile_id VARCHAR(100) NOT NULL UNIQUE,
+  profile_id VARCHAR(100) NOT NULL DEFAULT '',
   display_name VARCHAR(255) NOT NULL DEFAULT '',
+  name VARCHAR(255) NOT NULL DEFAULT '',
+  target_system VARCHAR(255) NOT NULL DEFAULT '',
+  version VARCHAR(50) NOT NULL DEFAULT '1.0',
   config JSONB NOT NULL DEFAULT '{}',
+  endpoints JSONB NOT NULL DEFAULT '{}',
+  auth JSONB NOT NULL DEFAULT '{}',
   capability_manifest JSONB NOT NULL DEFAULT '{}',
   is_builtin BOOLEAN NOT NULL DEFAULT false,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),

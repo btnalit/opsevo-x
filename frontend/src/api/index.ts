@@ -49,6 +49,8 @@ const NON_DEVICE_PREFIXES = [
   '/auth',
   '/connection',
   '/devices',
+  '/drivers',
+  '/profiles',
   '/ai-ops',
   '/prompt-templates',
   '/skills',

@@ -6,6 +6,12 @@ GET    /api/devices/{device_id}
 PUT    /api/devices/{device_id}
 DELETE /api/devices/{device_id}
 POST   /api/devices/{device_id}/test
+POST   /api/devices/{device_id}/connect
+POST   /api/devices/{device_id}/disconnect
+POST   /api/devices/{device_id}/test-connection
+GET    /api/devices/{device_id}/metrics
+GET    /api/devices/{device_id}/health
+POST   /api/devices/{device_id}/execute
 
 Requirements: 3.1
 """
@@ -154,5 +160,56 @@ async def test_device_connection(
         driver = await pool.get_driver(device_id)
         result = await driver.health_check()
         return SuccessResponse(data=result.model_dump()).model_dump()
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+
+@router.get("/{device_id}/metrics")
+async def get_device_metrics(
+    device_id: str,
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    """GET /api/devices/{device_id}/metrics — frontend deviceApi.getMetrics()."""
+    pool = _get_device_pool(request)
+    try:
+        driver = await pool.get_driver(device_id)
+        metrics = await driver.collect_metrics()
+        return SuccessResponse(data=metrics.model_dump()).model_dump()
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+
+@router.get("/{device_id}/health")
+async def get_device_health(
+    device_id: str,
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    """GET /api/devices/{device_id}/health — frontend deviceApi.getHealth()."""
+    pool = _get_device_pool(request)
+    try:
+        driver = await pool.get_driver(device_id)
+        result = await driver.health_check()
+        return SuccessResponse(data=result.model_dump()).model_dump()
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+
+@router.post("/{device_id}/execute")
+async def execute_device_command(
+    device_id: str,
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    """POST /api/devices/{device_id}/execute — frontend deviceApi.execute()."""
+    pool = _get_device_pool(request)
+    body = await request.json()
+    command = body.get("command", "")
+    params = body.get("params", {})
+    try:
+        driver = await pool.get_driver(device_id)
+        result = await driver.execute(command, params)
+        return SuccessResponse(data=result.data if hasattr(result, "data") else result).model_dump()
     except Exception as exc:
         return {"success": False, "error": str(exc)}
