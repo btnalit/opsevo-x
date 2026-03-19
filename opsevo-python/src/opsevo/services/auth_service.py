@@ -60,7 +60,12 @@ class AuthService:
 
     @staticmethod
     def verify_password(password: str, hashed: str) -> bool:
-        return bcrypt.checkpw(password.encode("utf-8"), hashed.encode("utf-8"))
+        if not hashed:
+            return False
+        try:
+            return bcrypt.checkpw(password.encode("utf-8"), hashed.encode("utf-8"))
+        except (ValueError, TypeError):
+            return False
 
     async def authenticate(self, username: str, password: str) -> dict | None:
         user = await self._ds.query_one(
@@ -68,7 +73,7 @@ class AuthService:
         )
         if not user:
             return None
-        if not self.verify_password(password, user.get("password_hash", "")):
+        if not self.verify_password(password, user.get("password_hash") or ""):
             return None
         return user
 

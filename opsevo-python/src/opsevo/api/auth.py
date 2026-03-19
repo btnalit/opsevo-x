@@ -27,6 +27,9 @@ from opsevo.models.auth import (
 )
 from opsevo.models.common import ErrorResponse, SuccessResponse
 from opsevo.services.auth_service import AuthService
+from opsevo.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -41,12 +44,21 @@ async def login(
     if not body.username or not body.password:
         return ErrorResponse(error="请输入用户名和密码", code="MISSING_FIELDS").model_dump()
 
-    user = await auth.authenticate(body.username, body.password)
+    try:
+        user = await auth.authenticate(body.username, body.password)
+    except Exception as exc:
+        logger.error("login_authenticate_error", username=body.username, error=str(exc), exc_info=True)
+        return ErrorResponse(error="登录服务异常，请稍后重试", code="LOGIN_ERROR").model_dump()
+
     if user is None:
         return ErrorResponse(error="用户名或密码错误", code="INVALID_CREDENTIALS").model_dump()
 
-    access = auth.generate_access_token(str(user["id"]), user["username"])
-    refresh = auth.generate_refresh_token(str(user["id"]))
+    try:
+        access = auth.generate_access_token(str(user["id"]), user["username"])
+        refresh = auth.generate_refresh_token(str(user["id"]))
+    except Exception as exc:
+        logger.error("login_token_generation_error", user_id=str(user["id"]), error=str(exc), exc_info=True)
+        return ErrorResponse(error="登录服务异常，请稍后重试", code="LOGIN_ERROR").model_dump()
 
     return LoginResponse(
         data=LoginResponseData(
@@ -55,7 +67,7 @@ async def login(
             user=UserInfo(
                 id=str(user["id"]),
                 username=user["username"],
-                email=user.get("email", ""),
+                email=user.get("email") or "",
                 tenantId=str(user["id"]),
             ),
         ),
@@ -82,7 +94,7 @@ async def register(
             user=UserInfo(
                 id=str(user["id"]),
                 username=user["username"],
-                email=user.get("email", ""),
+                email=user.get("email") or "",
             ),
         ),
     ).model_dump(by_alias=True)
@@ -120,8 +132,8 @@ async def me(user: dict = Depends(get_current_user)):
         data=UserInfo(
             id=str(user["id"]),
             username=user["username"],
-            email=user.get("email", ""),
-            role=user.get("role", "user"),
+            email=user.get("email") or "",
+            role=user.get("role") or "user",
             tenantId=str(user["id"]),
         ).model_dump(by_alias=True),
     ).model_dump()
