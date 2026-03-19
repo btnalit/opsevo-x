@@ -8,12 +8,11 @@
 *.swp
 *.swo
 
-# Node modules (will be installed in container)
+# Node modules
 node_modules
 **/node_modules
 
-# Build outputs (will be built in container)
-backend/dist
+# Frontend build outputs
 frontend/dist
 
 # Logs
@@ -21,7 +20,7 @@ frontend/dist
 logs
 **/logs
 
-# Environment files (use docker-compose environment instead)
+# Environment files
 .env
 .env.local
 .env.*.local
@@ -29,16 +28,17 @@ logs
 # Test files
 **/*.test.ts
 **/*.spec.ts
+**/*.test.py
 **/test
 **/tests
 **/__tests__
 coverage
 **/coverage
 
-# Documentation (exclude docs folder but keep SKILL.md files)
+# Documentation
 docs
 *.md
-!backend/data/ai-ops/skills/**/SKILL.md
+!opsevo-python/src/opsevo/data/ai-ops/skills/**/SKILL.md
 CHANGELOG.md
 CONTRIBUTING.md
 LICENSE.md
@@ -64,34 +64,7 @@ temp
 *.tmp
 *.temp
 
-# Data files (will be mounted as volume, except skills)
-backend/data/ai-agent.json
-backend/data/connection.json
-backend/data/prompt-templates.json
-backend/data/ai-ops/alerts
-backend/data/ai-ops/analysis
-backend/data/ai-ops/audit
-backend/data/ai-ops/channels.json
-backend/data/ai-ops/decisions
-backend/data/ai-ops/enhancement
-# Keep evolution-config.json for Docker build (needed as initial template)
-# backend/data/ai-ops/evolution-config.json
-backend/data/ai-ops/feedback
-backend/data/ai-ops/filters
-backend/data/ai-ops/health
-backend/data/ai-ops/metrics
-backend/data/ai-ops/metrics-config.json
-backend/data/ai-ops/notifications
-backend/data/ai-ops/patterns
-backend/data/ai-ops/rag
-backend/data/ai-ops/remediations
-backend/data/ai-ops/reports
-backend/data/ai-ops/scheduler
-backend/data/ai-ops/snapshots
-backend/data/ai-ops/prompt-templates.json
-# Keep skills directory for Docker build (do NOT exclude)
-
-# Certificates (will be mounted as volume)
+# Certificates (mounted as volume)
 certs
 
 # Development config
@@ -108,10 +81,10 @@ tsconfig.node.json
 *.pyo
 .pytest_cache
 .hypothesis
-python-core/.venv
-python-core/.env
-opsevo-python/.pytest_cache
-opsevo-python/.hypothesis
+
+# Legacy backends (kept locally, not needed in Docker)
+backend/
+python-core/
 
 # Backup files
 *-bk

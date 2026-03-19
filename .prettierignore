@@ -14,15 +14,12 @@ docker/
 certs/
 *.sql
 
-# Python Core (not managed by Prettier)
-python-core/
+# Python backend (not managed by Prettier)
+opsevo-python/
 
 # Plugin build artifacts
 plugins/**/dist/
 plugins/**/node_modules/
-
-# Data files
-backend/data/
 
 # Generated / spec files
 .kiro/
