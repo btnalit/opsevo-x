@@ -17,9 +17,6 @@ certs/
 # Python backend (not managed by Prettier)
 opsevo-python/
 
-# Plugin build artifacts
-plugins/**/dist/
-plugins/**/node_modules/
 
 # Generated / spec files
 .kiro/

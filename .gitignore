@@ -130,9 +130,6 @@ docs/
 python-core/.venv/
 python-core/.env
 
-# Plugin runtime artifacts
-plugins/**/node_modules/
-plugins/**/dist/
 
 # Backup files
 *-bk
