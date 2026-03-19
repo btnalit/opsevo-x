@@ -11,6 +11,7 @@ AutonomousBrainService — OODA 循环（Observe-Orient-Decide-Act-Learn）
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -68,6 +69,19 @@ class BrainConfig:
 class AutonomousBrainService:
     """OODA 循环自主大脑服务。"""
 
+    # Progressive Disclosure: tools available per OODA phase
+    OBSERVE_TOOLS: frozenset[str] = frozenset({
+        "query_device", "search_knowledge", "analyze_alert",
+        "list_skills", "list_mcp_servers", "collect_metrics",
+    })
+    ACT_TOOLS: frozenset[str] = frozenset({
+        "query_device", "search_knowledge", "analyze_alert",
+        "list_skills", "list_mcp_servers", "collect_metrics",
+        "execute_command", "update_config", "create_remediation",
+        "invoke_skill", "send_notification", "schedule_task",
+        "create_skill", "configure_mcp_server",
+    })
+
     def __init__(
         self,
         config: BrainConfig | None = None,
@@ -76,6 +90,8 @@ class AutonomousBrainService:
         brain_tools: Any = None,
         adapter_pool: Any = None,
         perception_cache: Any = None,
+        tool_registry: Any = None,
+        tool_search: Any = None,
     ) -> None:
         self._config = config or BrainConfig()
         self._event_bus = event_bus
@@ -83,6 +99,8 @@ class AutonomousBrainService:
         self._brain_tools = brain_tools
         self._adapter_pool = adapter_pool
         self._perception_cache = perception_cache
+        self._tool_registry = tool_registry
+        self._tool_search = tool_search
 
         self._running = False
         self._tick_task: asyncio.Task[None] | None = None
@@ -152,13 +170,17 @@ class AutonomousBrainService:
             logger.warning("Token budget exhausted, skipping tick", used=self._total_tokens_used)
             return
 
+        # Reset per-tick rate limiters on brain_tools
+        if self._brain_tools is not None and hasattr(self._brain_tools, "reset_tick_counters"):
+            self._brain_tools.reset_tick_counters()
+
         try:
             # OODA phases
             self._emit_thinking(OODAPhase.OBSERVE, "Gathering context...")
             ctx = await self._gather_context(tick_id, trigger)
 
             self._emit_thinking(OODAPhase.ORIENT, "Analyzing situation...")
-            prompt = self._build_prompt(ctx)
+            prompt = self._build_prompt(ctx, ooda_phase=OODAPhase.DECIDE)
 
             self._emit_thinking(OODAPhase.DECIDE, "Making decisions...")
             response = await self._call_ai(prompt, ctx)
@@ -212,7 +234,7 @@ class AutonomousBrainService:
     # ------------------------------------------------------------------
     # AI interaction
     # ------------------------------------------------------------------
-    def _build_prompt(self, ctx: BrainTickContext) -> str:
+    def _build_prompt(self, ctx: BrainTickContext, *, ooda_phase: OODAPhase = OODAPhase.DECIDE) -> str:
         parts = [
             "You are the autonomous brain of an AIOps system.",
             f"Tick trigger: {ctx.trigger}",
@@ -226,22 +248,228 @@ class AutonomousBrainService:
         if self._episodes:
             recent = self._episodes[-5:]
             parts.append("Recent memory: " + "; ".join(e.content[:100] for e in recent))
-        parts.append("Decide what actions to take. Respond in JSON with 'actions' array and 'reasoning' string.")
+
+        # Tool injection with Progressive Disclosure
+        tools_section = self._format_tools_for_prompt(ooda_phase)
+        if tools_section:
+            parts.append(tools_section)
+
+        parts.append(
+            "Decide what actions to take. Respond in JSON with 'actions' array "
+            "(each action has 'tool' and 'params') and 'reasoning' string."
+        )
         return "\n\n".join(parts)
+
+    def _get_tools_for_phase(self, ooda_phase: OODAPhase) -> list[dict[str, Any]]:
+        """Return tool definitions filtered by OODA phase (Progressive Disclosure).
+
+        Merges brain_tools with external tools from tool_registry.
+        Deduplicates by name — brain_tools (local) take priority.
+        Requirements: 5.1, 5.2
+        """
+        if ooda_phase in (OODAPhase.OBSERVE, OODAPhase.ORIENT):
+            allowed = self.OBSERVE_TOOLS
+        else:
+            allowed = self.ACT_TOOLS
+
+        # Collect local brain tools
+        local_tools: list[dict[str, Any]] = []
+        if self._brain_tools is not None:
+            try:
+                all_brain = self._brain_tools.get_tool_definitions()
+            except Exception:
+                logger.warning("Failed to get tool definitions from brain_tools")
+                all_brain = []
+            local_tools = [t for t in all_brain if t.get("name") in allowed]
+
+        # Merge external tools from registry (dedup by name, local priority)
+        seen_names = {t.get("name") for t in local_tools}
+        if self._tool_registry is not None:
+            try:
+                registry_defs = self._tool_registry.get_all_tool_definitions()
+            except Exception:
+                logger.warning("Failed to get tool definitions from tool_registry")
+                registry_defs = []
+            for td in registry_defs:
+                fn = td.get("function", {})
+                name = fn.get("name", "")
+                source = td.get("source", "external")
+                # Skip local tools from registry (already have brain_tools)
+                if source == "local":
+                    continue
+                if name and name not in seen_names:
+                    seen_names.add(name)
+                    # Convert registry format to brain-tools-like dict for prompt
+                    local_tools.append({
+                        "name": name,
+                        "description": fn.get("description", ""),
+                        "parameters": fn.get("parameters", {}),
+                        "source": source,
+                    })
+
+        return local_tools
+
+    def _format_tools_for_prompt(self, ooda_phase: OODAPhase) -> str:
+        """Format filtered tool definitions into prompt text."""
+        tools = self._get_tools_for_phase(ooda_phase)
+        if not tools:
+            return ""
+
+        lines = ["Available tools:"]
+        for tool in tools:
+            name = tool.get("name", "")
+            desc = tool.get("description", "")
+            params = tool.get("parameters", {})
+            negative = tool.get("negative_constraint", "")
+            examples = tool.get("input_examples", [])
+
+            lines.append(f"- {name}: {desc}")
+            if params:
+                params_str = ", ".join(
+                    f"{k}: {v}" for k, v in params.items()
+                )
+                lines.append(f"  Parameters: {params_str}")
+            if negative:
+                lines.append(f"  ⚠️ Not for: {negative}")
+            for ex in examples[:2]:
+                lines.append(f"  Example: {json.dumps(ex, ensure_ascii=False)}")
+
+        return "\n".join(lines)
 
     async def _call_ai(self, prompt: str, ctx: BrainTickContext) -> dict[str, Any]:
         if self._adapter_pool is None:
             return {"actions": [], "reasoning": "No AI adapter available"}
         try:
             adapter = await self._adapter_pool.get_adapter()
+
+            # Build merged tool schemas: brain_tools + registry external tools
+            tool_schemas: list[dict] | None = None
+            brain_schemas: list[dict] = []
+            if self._brain_tools is not None:
+                try:
+                    brain_schemas = self._brain_tools.get_openai_tool_schemas()
+                except Exception:
+                    logger.warning("Failed to get OpenAI tool schemas from brain_tools")
+
+            registry_schemas: list[dict] = []
+            if self._tool_registry is not None:
+                try:
+                    registry_defs = self._tool_registry.get_all_tool_definitions()
+                    # Only include non-local (external/skill) tools from registry
+                    registry_schemas = [
+                        td for td in registry_defs if td.get("source") != "local"
+                    ]
+                except Exception:
+                    logger.warning("Failed to get tool definitions from tool_registry")
+
+            # Merge and dedup by name (brain_tools take priority)
+            merged = list(brain_schemas)
+            seen_names = {
+                s.get("function", {}).get("name", "") for s in merged
+            }
+            for rs in registry_schemas:
+                name = rs.get("function", {}).get("name", "")
+                if name and name not in seen_names:
+                    seen_names.add(name)
+                    merged.append(rs)
+
+            if merged:
+                tool_schemas = merged
+
+            # Apply ToolSearchMeta if available (Req 4.1, 4.4)
+            if self._tool_search is not None and self._tool_search.should_use_search():
+                tool_schemas = self._tool_search.get_exposed_tools()
+
             result = await adapter.chat(
                 messages=[{"role": "user", "content": prompt}],
+                tools=tool_schemas,
             )
             self._track_token_usage(result)
+
+            # Handle native tool_calls in response
+            tool_calls = self._extract_tool_calls(result)
+            if tool_calls:
+                await self._handle_tool_calls(tool_calls, ctx)
+
             return result
         except Exception:
             logger.exception("Brain AI call failed")
             return {"actions": [], "reasoning": "AI call failed"}
+
+    @staticmethod
+    def _extract_tool_calls(result: dict[str, Any]) -> list[dict[str, Any]]:
+        """Extract tool_calls from AI response (OpenAI format)."""
+        # Direct tool_calls at top level
+        if "tool_calls" in result:
+            return result["tool_calls"]
+        # Nested in choices[0].message.tool_calls (OpenAI response format)
+        choices = result.get("choices", [])
+        if choices:
+            message = choices[0].get("message", {}) if isinstance(choices[0], dict) else {}
+            tc = message.get("tool_calls")
+            if tc:
+                return tc
+        return []
+
+    async def _handle_tool_calls(
+        self, tool_calls: list[dict[str, Any]], ctx: BrainTickContext
+    ) -> None:
+        """Execute tool_calls extracted from AI native tool_use response.
+
+        Routes to brain_tools first; falls back to tool_registry for
+        external/skill tools.
+        """
+        for tc in tool_calls[:10]:  # cap at 10
+            func = tc.get("function", tc)
+            tool_name = func.get("name", "")
+            raw_args = func.get("arguments", "{}")
+            if isinstance(raw_args, str):
+                try:
+                    params = json.loads(raw_args)
+                except (json.JSONDecodeError, TypeError):
+                    logger.warning("Failed to parse tool_call arguments", tool=tool_name)
+                    continue
+            else:
+                params = raw_args if isinstance(raw_args, dict) else {}
+
+            if not tool_name:
+                continue
+
+            # Handle search_tools meta-tool (Req 4.5)
+            if tool_name == "search_tools":
+                if self._tool_search is not None:
+                    query = params.get("query", "")
+                    top_k = params.get("top_k", 5)
+                    try:
+                        results = await self._tool_search.search(query, top_k)
+                        self._add_episode(
+                            f"Tool search: {query}",
+                            f"{len(results)} results",
+                            "action",
+                        )
+                    except Exception:
+                        logger.warning("search_tools execution failed", query=query)
+                continue
+
+            try:
+                # Try brain_tools first
+                if self._brain_tools is not None:
+                    try:
+                        await self._brain_tools.execute(tool_name, params, device_id=ctx.device_id)
+                        self._add_episode(f"Tool call: {tool_name}", str(params)[:200], "action")
+                        continue
+                    except ValueError:
+                        # Unknown brain tool — fall through to registry
+                        pass
+
+                # Fallback to tool_registry for external/skill tools
+                if self._tool_registry is not None:
+                    result = await self._tool_registry.execute_tool(tool_name, params)
+                    self._add_episode(f"Tool call (registry): {tool_name}", str(result)[:200], "action")
+                else:
+                    logger.warning(f"Brain tool_call not found: {tool_name}")
+            except Exception:
+                logger.warning(f"Brain tool_call execution failed: {tool_name}")
 
     async def _execute_actions(self, response: dict, ctx: BrainTickContext) -> None:
         actions = response.get("actions", [])

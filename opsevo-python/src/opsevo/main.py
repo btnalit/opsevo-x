@@ -1,10 +1,12 @@
 """FastAPI application entry point with lifespan management.
 
-Requirements: 2.5, 19.1, 19.2, 19.3
+Requirements: 1.1, 1.2, 1.3, 1.5, 1.6, 2.5, 19.1, 19.2, 19.3
 """
 
 from __future__ import annotations
 
+import os
+import pathlib
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -16,6 +18,48 @@ from opsevo.middleware.timeout import TimeoutMiddleware
 from opsevo.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def _resolve_public_dir() -> pathlib.Path | None:
+    """Resolve the frontend static files directory by priority.
+
+    Candidates (first match wins):
+      1. ``PUBLIC_DIR`` environment variable
+      2. Relative to ``__file__`` (works in local dev)
+      3. ``/app/public`` (Docker default)
+
+    Each candidate must be an existing directory **and** contain
+    ``index.html`` to be accepted.  Returns ``None`` when no candidate
+    qualifies (a warning is logged in that case).
+
+    Requirements: 1.1, 1.2, 1.3, 1.5, 1.6
+    """
+    candidates: list[pathlib.Path] = []
+
+    # Priority 1: environment variable override
+    env_dir = os.environ.get("PUBLIC_DIR")
+    if env_dir:
+        candidates.append(pathlib.Path(env_dir))
+
+    # Priority 2: __file__-relative path (local development)
+    candidates.append(
+        pathlib.Path(__file__).resolve().parent.parent.parent / "public"
+    )
+
+    # Priority 3: Docker default path
+    candidates.append(pathlib.Path("/app/public"))
+
+    for p in candidates:
+        if p.is_dir() and (p / "index.html").is_file():
+            logger.info("public_dir_resolved", path=str(p))
+            return p
+
+    logger.warning(
+        "public_dir_not_found",
+        candidates=[str(c) for c in candidates],
+        msg="No valid public directory found; SPA fallback will be disabled",
+    )
+    return None
 
 
 @asynccontextmanager
@@ -91,7 +135,9 @@ async def lifespan(app: FastAPI):
     kb = container.knowledge_base()
     agent_svc.set_knowledge_base(kb)
     agent_svc.set_device_pool(pool)
-    logger.info("startup_unified_agent_wired", msg="knowledge_base and device_pool injected")
+    agent_svc.set_tool_registry(container.tool_registry())
+    agent_svc.set_tool_search(container.tool_search())
+    logger.info("startup_unified_agent_wired", msg="knowledge_base, device_pool, tool_registry, tool_search injected")
 
     # 5c — AlertEngine init
     ae = container.alert_engine()
@@ -243,13 +289,14 @@ def create_app() -> FastAPI:
     app.include_router(connection_router)
 
     # ── Static files & SPA fallback ──────────────────────────────────────
-    import pathlib
     from fastapi.responses import FileResponse
 
-    public_dir = pathlib.Path(__file__).resolve().parent.parent.parent / "public"
-    if public_dir.is_dir():
+    public_dir = _resolve_public_dir()
+    if public_dir is not None:
         # Mount static assets (js/css/img etc.)
-        app.mount("/assets", StaticFiles(directory=str(public_dir / "assets")), name="assets")
+        assets_dir = public_dir / "assets"
+        if assets_dir.is_dir():
+            app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
 
         # SPA fallback: non-API routes serve index.html
         @app.get("/{full_path:path}")
@@ -259,10 +306,7 @@ def create_app() -> FastAPI:
             if full_path and file_path.is_file():
                 return FileResponse(str(file_path))
             # Fallback to index.html for SPA routing
-            index = public_dir / "index.html"
-            if index.is_file():
-                return FileResponse(str(index))
-            return {"detail": "Not found"}
+            return FileResponse(str(public_dir / "index.html"))
 
     return app
 

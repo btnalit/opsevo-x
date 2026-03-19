@@ -6,9 +6,12 @@ SkillFactory — 技能实例工厂
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import structlog
+
+from .capsule_runner import CapsuleRunner
 
 logger = structlog.get_logger(__name__)
 
@@ -21,9 +24,30 @@ class SkillInstance:
         self.definition = definition
         self._context = context or {}
 
+        raw = definition.get("capsule_dir")
+        self.capsule_dir: Path | None = Path(raw) if raw else None
+
     async def execute(self, input_data: dict[str, Any], device_id: str | None = None) -> dict[str, Any]:
         logger.info("Skill executing", name=self.name, device_id=device_id)
-        return {"skill": self.name, "status": "executed", "input": input_data}
+
+        # If no capsule_dir or directory doesn't exist, fall back to stub
+        if self.capsule_dir is None or not self.capsule_dir.is_dir():
+            return {"skill": self.name, "status": "executed", "input": input_data}
+
+        # Build capsule input, include device_id when present
+        capsule_input: dict[str, Any] = {**input_data}
+        if device_id:
+            capsule_input["device_id"] = device_id
+
+        runtime = self.definition.get("runtime", "python")
+        timeout = self.definition.get("timeout", 30.0)
+
+        return await CapsuleRunner().run(
+            capsule_dir=self.capsule_dir,
+            input_data=capsule_input,
+            runtime=runtime,
+            timeout=timeout,
+        )
 
     @property
     def tools(self) -> list[dict[str, Any]]:

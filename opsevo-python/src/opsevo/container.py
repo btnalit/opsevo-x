@@ -153,6 +153,10 @@ class Container(containers.DeclarativeContainer):
         "opsevo.services.skill.skill_loader.SkillLoader",
     )
 
+    skill_registry = providers.Singleton(
+        "opsevo.services.skill.skill_registry.SkillRegistry",
+    )
+
     # ── MCP ───────────────────────────────────────────────────────────────
     tool_registry = providers.Singleton(
         "opsevo.services.mcp.tool_registry.ToolRegistry",
@@ -190,6 +194,12 @@ class Container(containers.DeclarativeContainer):
         alert_engine=alert_engine,
     )
 
+    # ── Tools ────────────────────────────────────────────────────────────
+    tool_search = providers.Singleton(
+        "opsevo.services.tools.tool_search.ToolSearchMeta",
+        tool_registry=tool_registry,
+    )
+
     # ── Brain ─────────────────────────────────────────────────────────────
     brain_tools = providers.Singleton(
         "opsevo.services.brain.brain_tools.BrainTools",
@@ -197,6 +207,8 @@ class Container(containers.DeclarativeContainer):
         datastore=datastore,
         event_bus=event_bus,
         knowledge_base=knowledge_base,
+        skill_registry=skill_registry,
+        mcp_client_manager=mcp_client_manager,
     )
 
     perception_cache = providers.Singleton(
@@ -213,6 +225,8 @@ class Container(containers.DeclarativeContainer):
         brain_tools=brain_tools,
         adapter_pool=adapter_pool,
         perception_cache=perception_cache,
+        tool_registry=tool_registry,
+        tool_search=tool_search,
     )
 
     # ── Topology ──────────────────────────────────────────────────────────

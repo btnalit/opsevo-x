@@ -2,14 +2,14 @@
 ToolRegistry — 统一工具注册表
 
 合并本地 brainTools 和远程 MCP 工具到统一接口。
-支持工具缓存、健康状态跟踪、工具转发。
+支持工具缓存、健康状态跟踪、工具转发、回调通知。
 """
 
 from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 import structlog
 
@@ -48,12 +48,25 @@ class ToolRegistry:
         self._local_handlers: dict[str, Any] = {}
         self._cache_timestamp: float = 0.0
         self._on_cache_invalidated: Any = None
+        self._on_tools_changed_callbacks: list[Callable[[], None]] = []
 
     def set_tool_forwarder(self, forwarder: IToolForwarder) -> None:
         self._forwarder = forwarder
 
     def set_on_cache_invalidated(self, callback: Any) -> None:
         self._on_cache_invalidated = callback
+
+    def register_on_tools_changed(self, callback: Callable[[], None]) -> None:
+        """Register a callback to be notified when tools change."""
+        self._on_tools_changed_callbacks.append(callback)
+
+    def _notify_tools_changed(self) -> None:
+        """Invoke all registered on_tools_changed callbacks."""
+        for cb in self._on_tools_changed_callbacks:
+            try:
+                cb()
+            except Exception:
+                logger.warning("on_tools_changed callback failed")
 
     # ------------------------------------------------------------------
     # 本地工具注册
@@ -101,14 +114,19 @@ class ToolRegistry:
         self._server_health[server_id] = True
         self._cache_timestamp = time.time()
         logger.info("External tools registered", server_id=server_id, count=len(tools))
+        self._notify_tools_changed()
 
     def unregister_external_tools(self, server_id: str) -> None:
         self._external_tools.pop(server_id, None)
         self._server_health.pop(server_id, None)
         self._cache_timestamp = time.time()
+        self._notify_tools_changed()
 
     def set_server_health(self, server_id: str, healthy: bool) -> None:
+        prev = self._server_health.get(server_id)
         self._server_health[server_id] = healthy
+        if prev != healthy:
+            self._notify_tools_changed()
 
     # ------------------------------------------------------------------
     # 查询
@@ -127,6 +145,48 @@ class ToolRegistry:
 
     def get_external_tools_by_server(self, server_id: str) -> list[UnifiedTool]:
         return list(self._external_tools.get(server_id, {}).values())
+
+    def get_all_tool_definitions(self) -> list[dict[str, Any]]:
+        """Return unified tool definitions in OpenAI schema format with source annotation.
+
+        Deduplicates by name — local tools take priority over external.
+        Only includes tools from healthy external servers.
+
+        Requirements: 5.2, 5.3, 5.5, 5.6, 5.7
+        """
+        seen_names: set[str] = set()
+        definitions: list[dict[str, Any]] = []
+
+        # Local tools first (higher priority)
+        for tool in self._local_tools.values():
+            seen_names.add(tool.name)
+            definitions.append(self._unified_tool_to_definition(tool))
+
+        # External tools from healthy servers (dedup by name)
+        for sid, tool_map in self._external_tools.items():
+            if not self._server_health.get(sid, False):
+                continue
+            for tool in tool_map.values():
+                if tool.name not in seen_names:
+                    seen_names.add(tool.name)
+                    definitions.append(self._unified_tool_to_definition(tool))
+
+        return definitions
+
+    @staticmethod
+    def _unified_tool_to_definition(tool: UnifiedTool) -> dict[str, Any]:
+        """Convert a UnifiedTool to an OpenAI function calling schema dict with source."""
+        desc = tool.description
+        return {
+            "type": "function",
+            "function": {
+                "name": tool.name,
+                "description": desc,
+                "parameters": tool.input_schema if tool.input_schema else {"type": "object", "properties": {}},
+            },
+            "source": tool.source,
+            "server_id": tool.server_id,
+        }
 
     # ------------------------------------------------------------------
     # 执行

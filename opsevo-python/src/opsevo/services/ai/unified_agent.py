@@ -41,6 +41,8 @@ class UnifiedAgentService:
         # Optional integrations (set after container wiring)
         self._knowledge_base: Any = None
         self._device_pool: Any = None
+        self._tool_registry: Any = None
+        self._tool_search: Any = None
 
     async def initialize(self) -> None:
         logger.info("unified_agent_initialized")
@@ -54,6 +56,12 @@ class UnifiedAgentService:
 
     def set_device_pool(self, pool: Any) -> None:
         self._device_pool = pool
+
+    def set_tool_registry(self, registry: Any) -> None:
+        self._tool_registry = registry
+
+    def set_tool_search(self, ts: Any) -> None:
+        self._tool_search = ts
 
     # ------------------------------------------------------------------
     # Non-streaming chat
@@ -333,6 +341,8 @@ class UnifiedAgentService:
             executor,
             script_language=manifest.script_language,
             knowledge_entries=knowledge_entries,
+            tool_registry=self._tool_registry,
+            tool_search=self._tool_search,
         )
 
         reasoning.append("正在执行 ReAct 工具调用循环...")
