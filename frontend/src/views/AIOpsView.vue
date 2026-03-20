@@ -314,13 +314,13 @@
             </template>
             <div class="list-content">
               <el-empty
-                v-if="!dashboardData?.alerts.list?.length"
+                v-if="!dashboardData?.alerts?.list?.length"
                 description="暂无告警"
                 :image-size="60"
               />
               <div v-else class="alert-list">
                 <div
-                  v-for="alert in dashboardData.alerts.list.slice(0, 5)"
+                  v-for="alert in dashboardData?.alerts?.list?.slice(0, 5)"
                   :key="alert.id"
                   class="alert-item"
                   @click="viewAlertDetail(alert)"
@@ -364,13 +364,13 @@
             </template>
             <div class="list-content">
               <el-empty
-                v-if="!dashboardData?.remediations.list?.length"
+                v-if="!dashboardData?.remediations?.list?.length"
                 description="暂无修复记录"
                 :image-size="60"
               />
               <div v-else class="remediation-list">
                 <div
-                  v-for="remediation in dashboardData.remediations.list.slice(0, 5)"
+                  v-for="remediation in dashboardData?.remediations?.list?.slice(0, 5)"
                   :key="remediation.id"
                   class="remediation-item"
                 >
@@ -410,11 +410,11 @@
               <div class="scheduler-summary">
                 <div class="summary-item">
                   <span class="summary-label">总任务数</span>
-                  <span class="summary-value">{{ dashboardData?.scheduler.total || 0 }}</span>
+                  <span class="summary-value">{{ dashboardData?.scheduler?.total || 0 }}</span>
                 </div>
                 <div class="summary-item">
                   <span class="summary-label">已启用</span>
-                  <span class="summary-value success">{{ dashboardData?.scheduler.enabled || 0 }}</span>
+                  <span class="summary-value success">{{ dashboardData?.scheduler?.enabled || 0 }}</span>
                 </div>
               </div>
               <el-divider />

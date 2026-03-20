@@ -41,12 +41,21 @@ async def get_current_user(
     request: Request,
     creds: HTTPAuthorizationCredentials | None = Depends(_bearer),
 ) -> dict[str, Any]:
-    """Decode JWT and return user dict. Raises 401 on failure."""
-    if creds is None:
+    """Decode JWT and return user dict. Raises 401 on failure.
+
+    Supports two token sources:
+    1. Authorization: Bearer <token> header (standard REST calls)
+    2. ?token=<token> query param (EventSource/SSE, which cannot set headers)
+    """
+    token: str | None = creds.credentials if creds else None
+    # Fallback: SSE EventSource passes token as query param
+    if token is None:
+        token = request.query_params.get("token")
+    if token is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing token")
     auth_svc: AuthService = get_auth_service(request)
     try:
-        payload = auth_svc.verify_token(creds.credentials)
+        payload = auth_svc.verify_token(token)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc))
     user = await auth_svc.get_user_by_id(payload["sub"])
