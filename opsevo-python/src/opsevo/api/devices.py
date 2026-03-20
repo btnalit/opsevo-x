@@ -64,7 +64,8 @@ async def _resolve_driver(request: Request, device_id: str):
         profile_name=profile_name,
     )
 
-    return await pool.get_driver(device_id, config, profile_name)
+    driver = await pool.get_driver(device_id, config, profile_name)
+    return driver, config
 
 
 @router.get("")
@@ -138,8 +139,8 @@ async def connect_device(
     user: dict = Depends(get_current_user),
 ):
     try:
-        driver = await _resolve_driver(request, device_id)
-        await driver.connect()
+        driver, config = await _resolve_driver(request, device_id)
+        await driver.connect(config)
         dm = _get_device_manager(request)
         await dm.update_device(device_id, {"status": "online"})
         return SuccessResponse(data={"connected": True}).model_dump()
@@ -156,7 +157,7 @@ async def disconnect_device(
     user: dict = Depends(get_current_user),
 ):
     try:
-        driver = await _resolve_driver(request, device_id)
+        driver, _ = await _resolve_driver(request, device_id)
         await driver.disconnect()
         dm = _get_device_manager(request)
         await dm.update_device(device_id, {"status": "offline"})
@@ -175,7 +176,7 @@ async def test_device_connection_alias(
 ):
     """Alias for /test to match frontend deviceApi.testConnection()."""
     try:
-        driver = await _resolve_driver(request, device_id)
+        driver, _ = await _resolve_driver(request, device_id)
         result = await driver.health_check()
         return SuccessResponse(data=result.model_dump()).model_dump()
     except HTTPException:
@@ -191,7 +192,7 @@ async def test_device_connection(
     user: dict = Depends(get_current_user),
 ):
     try:
-        driver = await _resolve_driver(request, device_id)
+        driver, _ = await _resolve_driver(request, device_id)
         result = await driver.health_check()
         return SuccessResponse(data=result.model_dump()).model_dump()
     except HTTPException:
@@ -208,7 +209,7 @@ async def get_device_metrics(
 ):
     """GET /api/devices/{device_id}/metrics — frontend deviceApi.getMetrics()."""
     try:
-        driver = await _resolve_driver(request, device_id)
+        driver, _ = await _resolve_driver(request, device_id)
         metrics = await driver.collect_metrics()
         return SuccessResponse(data=metrics.model_dump()).model_dump()
     except HTTPException:
@@ -225,7 +226,7 @@ async def get_device_health(
 ):
     """GET /api/devices/{device_id}/health — frontend deviceApi.getHealth()."""
     try:
-        driver = await _resolve_driver(request, device_id)
+        driver, _ = await _resolve_driver(request, device_id)
         result = await driver.health_check()
         return SuccessResponse(data=result.model_dump()).model_dump()
     except HTTPException:
@@ -245,7 +246,7 @@ async def execute_device_command(
     command = body.get("command", "")
     params = body.get("params", {})
     try:
-        driver = await _resolve_driver(request, device_id)
+        driver, _ = await _resolve_driver(request, device_id)
         result = await driver.execute(command, params)
         return SuccessResponse(data=result.data if hasattr(result, "data") else result).model_dump()
     except HTTPException:
