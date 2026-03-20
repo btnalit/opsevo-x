@@ -19,10 +19,13 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from fastapi.responses import StreamingResponse
 
-from .deps import get_current_user, get_datastore
+from .deps import get_current_user, get_datastore, get_feature_flag_manager, get_tracing_service
 from .dependencies import get_device_orchestrator
 
 router = APIRouter(prefix="/api/ai-ops", tags=["ai-ops"])
+
+# 用于保护 feature flag 的 DB 写入 + 内存更新原子性
+_feature_flag_lock = asyncio.Lock()
 
 
 def _c(request: Request):
@@ -249,7 +252,7 @@ async def get_alert_events(
     device_id: str = Query(None, alias="deviceId"), request: Request = None,
     severity: str = Query(None), status: str = Query(None),
     source: str = Query(None),
-    page: int = Query(1), limit: int = Query(50),
+    page: int = Query(1, ge=1), limit: int = Query(50, ge=1, le=1000),
     ds=Depends(get_datastore), user=Depends(get_current_user),
 ) -> dict:
     ae = _c(request).alert_engine()
@@ -272,7 +275,7 @@ async def get_active_alerts(device_id: str = Query(None, alias="deviceId"), requ
 @router.get("/alerts/events/unified")
 async def get_unified_events(
     device_id: str = Query(None, alias="deviceId"), request: Request = None,
-    page: int = Query(1), limit: int = Query(50),
+    page: int = Query(1, ge=1), limit: int = Query(50, ge=1, le=1000),
     ds=Depends(get_datastore), user=Depends(get_current_user),
 ) -> dict:
     ae = _c(request).alert_engine()
@@ -810,8 +813,24 @@ async def get_pending_notifications(device_id: str = Query(None, alias="deviceId
 
 
 @router.get("/notifications/history")
-async def get_notification_history(device_id: str = Query(None, alias="deviceId"), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    rows = await ds.query("SELECT * FROM notifications WHERE device_id=$1 ORDER BY created_at DESC LIMIT 100", [device_id])
+async def get_notification_history(device_id: str = Query(None, alias="deviceId"), channel_id: str = Query(None, alias="channelId"), limit: int = Query(100, le=1000, ge=1), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+    conditions = []
+    params: list = []
+    idx = 1
+    if device_id:
+        conditions.append(f"device_id=${idx}")
+        params.append(device_id)
+        idx += 1
+    if channel_id:
+        conditions.append(f"channel_id=${idx}")
+        params.append(channel_id)
+        idx += 1
+    sql = "SELECT * FROM notifications"
+    if conditions:
+        sql += " WHERE " + " AND ".join(conditions)
+    sql += f" ORDER BY created_at DESC LIMIT ${idx}"
+    params.append(limit)
+    rows = await ds.query(sql, params)
     return {"success": True, "data": rows}
 
 
@@ -820,7 +839,7 @@ async def get_notification_history(device_id: str = Query(None, alias="deviceId"
 # ---------------------------------------------------------------------------
 @router.get("/audit")
 async def get_audit_logs(
-    device_id: str = Query(None, alias="deviceId"), page: int = Query(1), limit: int = Query(50),
+    device_id: str = Query(None, alias="deviceId"), page: int = Query(1, ge=1), limit: int = Query(50, ge=1, le=1000),
     ds=Depends(get_datastore), user=Depends(get_current_user),
 ) -> dict:
     offset = (page - 1) * limit
@@ -903,7 +922,7 @@ async def get_syslog_status(device_id: str = Query(None, alias="deviceId"), requ
 @router.get("/syslog/events")
 async def get_syslog_events(
     device_id: str = Query(None, alias="deviceId"), severity: str = Query(None),
-    page: int = Query(1), limit: int = Query(50),
+    page: int = Query(1, ge=1), limit: int = Query(50, ge=1, le=1000),
     ds=Depends(get_datastore), user=Depends(get_current_user),
 ) -> dict:
     # 使用 SQL LIMIT/OFFSET 替代内存分页
@@ -1098,7 +1117,7 @@ async def delete_decision_rule(device_id: str = Query(None, alias="deviceId"), r
 
 @router.get("/decisions/history")
 async def get_decision_history(
-    device_id: str = Query(None, alias="deviceId"), page: int = Query(1), limit: int = Query(50),
+    device_id: str = Query(None, alias="deviceId"), page: int = Query(1, ge=1), limit: int = Query(50, ge=1, le=1000),
     ds=Depends(get_datastore), user=Depends(get_current_user),
 ) -> dict:
     offset = (page - 1) * limit
@@ -1307,7 +1326,13 @@ async def get_health_current(device_id: str = Query(None, alias="deviceId"), req
 
 
 @router.get("/health/trend")
-async def get_health_trend(device_id: str = Query(None, alias="deviceId"), hours: int = Query(24), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_health_trend(device_id: str = Query(None, alias="deviceId"), hours: int = Query(24, gt=0), range_: str = Query(None, alias="range"), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+    # range 优先于 hours
+    if range_:
+        mapping = {"1h": 1, "6h": 6, "24h": 24, "7d": 168}
+        if range_ not in mapping:
+            raise HTTPException(400, f"Invalid range value: {range_}. Valid: {list(mapping.keys())}")
+        hours = mapping[range_]
     rows = await ds.query(
         f"SELECT * FROM health_checks WHERE device_id=$1 AND timestamp > NOW() - INTERVAL '{int(hours)} hours' ORDER BY timestamp",
         [device_id],
@@ -1390,7 +1415,7 @@ async def get_evaluation_report(device_id: str = Query(None, alias="deviceId"), 
 @router.get("/learning")
 async def query_learning(
     device_id: str = Query(None, alias="deviceId"), category: str = Query(None),
-    page: int = Query(1), limit: int = Query(50),
+    page: int = Query(1, ge=1), limit: int = Query(50, ge=1, le=1000),
     ds=Depends(get_datastore), user=Depends(get_current_user),
 ) -> dict:
     # 使用 SQL LIMIT/OFFSET 替代内存分页
@@ -1550,15 +1575,18 @@ async def stream_learning_events(device_id: str = Query(None, alias="deviceId"),
     async def _generate():
         ds = _c(request).datastore()
         last_id = 0
-        while True:
-            rows = await ds.query(
-                "SELECT * FROM learning_entries WHERE device_id=$1 AND id > $2 ORDER BY id ASC LIMIT 10",
-                [device_id, last_id],
-            )
-            for row in rows:
-                last_id = row.get("id", last_id)
-                yield f"data: {json.dumps(row, default=str)}\n\n"
-            await asyncio.sleep(2)
+        try:
+            while True:
+                rows = await ds.query(
+                    "SELECT * FROM learning_entries WHERE device_id=$1 AND id > $2 ORDER BY id ASC LIMIT 10",
+                    [device_id, last_id],
+                )
+                for row in rows:
+                    last_id = row.get("id", last_id)
+                    yield f"data: {json.dumps(row, default=str)}\n\n"
+                await asyncio.sleep(2)
+        except asyncio.CancelledError:
+            pass
 
     return StreamingResponse(_generate(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
@@ -1569,13 +1597,16 @@ async def stream_iteration_events(device_id: str = Query(None, alias="deviceId")
     """SSE stream for iteration progress."""
     async def _generate():
         ds = _c(request).datastore()
-        while True:
-            row = await ds.query_one("SELECT * FROM iterations WHERE id=$1 AND device_id=$2", [iteration_id, device_id])
-            if row:
-                yield f"data: {json.dumps(row, default=str)}\n\n"
-                if row.get("status") in ("completed", "failed", "aborted"):
-                    break
-            await asyncio.sleep(2)
+        try:
+            while True:
+                row = await ds.query_one("SELECT * FROM iterations WHERE id=$1 AND device_id=$2", [iteration_id, device_id])
+                if row:
+                    yield f"data: {json.dumps(row, default=str)}\n\n"
+                    if row.get("status") in ("completed", "failed", "aborted"):
+                        break
+                await asyncio.sleep(2)
+        except asyncio.CancelledError:
+            pass
 
     return StreamingResponse(_generate(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
@@ -1796,19 +1827,67 @@ async def delete_syslog_rule(rule_id: str = Path(...), ds=Depends(get_datastore)
     return {"success": True, "message": "Syslog rule deleted"}
 
 
+def _regex_worker(pattern: str, text: str, queue) -> None:
+    """在独立进程中执行正则匹配。必须定义在模块顶层。"""
+    import re
+    try:
+        matched = bool(re.search(pattern, text)) if pattern else False
+        queue.put({"success": True, "matched": matched})
+    except re.error as e:
+        queue.put({"success": False, "error": f"正则语法错误: {e}"})
+    except Exception:
+        queue.put({"success": False, "error": "内部执行错误"})
+
+
 @router.post("/syslog/rules/{rule_id}/test")
 async def test_syslog_rule(rule_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    import re as _re
     row = await ds.query_one("SELECT * FROM syslog_rules WHERE id=$1", [rule_id])
     if not row:
         raise HTTPException(404, "Syslog rule not found")
     body = await request.json()
     pattern = row.get("pattern", "")
     test_message = body.get("message", "")
+
+    # 限制输入长度，减少回溯攻击面
+    if len(pattern) > 500:
+        raise HTTPException(400, "正则表达式过长（最大 500 字符）")
+    if len(test_message) > 10000:
+        raise HTTPException(400, "测试消息过长（最大 10000 字符）")
+
+    # 使用独立进程执行正则：超时后可 terminate() 强制终止，不阻塞事件循环
+    import multiprocessing
+    ctx = multiprocessing.get_context("spawn")
+    q = ctx.Queue()
+    p = ctx.Process(target=_regex_worker, args=(pattern, test_message, q))
+    p.start()
+
+    async def _wait_for_process():
+        while p.is_alive():
+            await asyncio.sleep(0.05)
+        return q.get_nowait() if not q.empty() else {"success": True, "matched": False}
+
     try:
-        matched = bool(_re.search(pattern, test_message)) if pattern else False
-    except _re.error:
-        matched = False
+        result = await asyncio.wait_for(_wait_for_process(), timeout=1.0)
+    except asyncio.TimeoutError:
+        p.terminate()
+        # 异步等待进程退出，不使用同步 join() 避免阻塞事件循环
+        for _ in range(20):
+            if not p.is_alive():
+                break
+            await asyncio.sleep(0.05)
+        if p.is_alive():
+            p.kill()
+        raise HTTPException(400, "正则表达式执行超时（可能存在性能问题）")
+    finally:
+        if p.is_alive():
+            p.terminate()
+        q.close()
+        q.join_thread()
+
+    # 解析 worker 返回结果
+    if isinstance(result, dict) and not result.get("success"):
+        raise HTTPException(400, result.get("error", "正则执行失败"))
+    matched = result.get("matched", False) if isinstance(result, dict) else False
     return {"success": True, "data": {"matched": matched, "pattern": pattern}}
 
 
@@ -2272,3 +2351,286 @@ async def test_notification_channel_alias(
     if not row:
         raise HTTPException(404, "Channel not found")
     return {"success": True, "data": {"sent": True, "message": "Test notification sent"}}
+
+
+
+# ===========================================================================
+# Feature Flags (Bug 1.2)
+# ===========================================================================
+
+@router.get("/feature-flags")
+async def get_feature_flags(
+    ds=Depends(get_datastore),
+    ffm=Depends(get_feature_flag_manager),
+    user=Depends(get_current_user),
+) -> dict:
+    """以 DB 为 Source of Truth，内存覆盖运行时 value。"""
+    db_rows = await ds.query("SELECT * FROM feature_flags ORDER BY created_at")
+    memory = ffm.get_all()
+    result = []
+    for row in db_rows:
+        key = row.get("key") or row.get("flag_key", "")
+        entry = dict(row)
+        if key in memory:
+            entry["runtime_value"] = memory[key]
+        result.append(entry)
+    # 内存中有但 DB 没有的 flag 也返回
+    db_keys = {(r.get("key") or r.get("flag_key", "")) for r in db_rows}
+    for k, v in memory.items():
+        if k not in db_keys:
+            result.append({"key": k, "value": "true" if v else "false", "runtime_value": v, "source": "memory"})
+    return {"success": True, "data": result}
+
+
+@router.get("/feature-flags/history")
+async def get_feature_flag_history(
+    flag_name: str = Query(None),
+    limit: int = Query(100, le=1000, ge=1),
+    offset: int = Query(0, ge=0),
+    ds=Depends(get_datastore),
+    user=Depends(get_current_user),
+) -> dict:
+    if flag_name:
+        rows = await ds.query(
+            "SELECT * FROM feature_flag_history WHERE flag_name=$1 ORDER BY changed_at DESC LIMIT $2 OFFSET $3",
+            [flag_name, limit, offset],
+        )
+    else:
+        rows = await ds.query(
+            "SELECT * FROM feature_flag_history ORDER BY changed_at DESC LIMIT $1 OFFSET $2",
+            [limit, offset],
+        )
+    return {"success": True, "data": rows}
+
+
+@router.put("/feature-flags/{name}")
+async def update_feature_flag(
+    name: str,
+    request: Request,
+    ds=Depends(get_datastore),
+    ffm=Depends(get_feature_flag_manager),
+    user=Depends(get_current_user),
+) -> dict:
+    body = await request.json()
+    new_value = body.get("value", body.get("enabled"))
+    if new_value is None:
+        raise HTTPException(400, "value or enabled is required")
+    enabled = new_value if isinstance(new_value, bool) else str(new_value).lower() == "true"
+    new_val_str = "true" if enabled else "false"
+
+    async def _tx(tx):
+        # 读取旧值（加锁防止并发写入导致历史记录断层）
+        old_row = await tx.query_one("SELECT value FROM feature_flags WHERE key=$1 FOR UPDATE", [name])
+        old_val = old_row["value"] if old_row else None
+        # UPSERT 主表
+        await tx.execute(
+            "INSERT INTO feature_flags (key, value, flag_key) VALUES ($1, $2, $1) "
+            "ON CONFLICT (key) DO UPDATE SET value=$2, updated_at=NOW()",
+            [name, new_val_str],
+        )
+        # 记录历史
+        await tx.execute(
+            "INSERT INTO feature_flag_history (flag_name, old_value, new_value, changed_by) VALUES ($1,$2,$3,$4)",
+            [name, old_val, new_val_str, str(user["id"])],
+        )
+
+    # asyncio.Lock 保护 DB 写入 + 内存更新的原子性，防止并发交错覆盖
+    async with _feature_flag_lock:
+        await ds.transaction(_tx)
+        ffm._flags[name] = enabled
+    return {"success": True, "data": {"name": name, "value": new_val_str, "enabled": enabled}}
+
+
+# ===========================================================================
+# Traces (Bug 1.3)
+# ===========================================================================
+
+def _format_trace(trace_id: str, spans: list[dict]) -> dict:
+    """将 TracingService 内部格式转换为前端期望格式。"""
+    if not spans:
+        return {"traceId": trace_id, "name": trace_id, "status": "unknown", "duration": 0, "startTime": 0, "spans": []}
+    start_ts = spans[0].get("timestamp", 0) if spans else 0
+    end_ts = spans[-1].get("timestamp", 0) if spans else 0
+    last_stage = spans[-1].get("stage", "") if spans else ""
+    status = "completed" if last_stage == "end" else "active"
+    return {
+        "traceId": trace_id,
+        "name": trace_id,
+        "status": status,
+        "duration": end_ts - start_ts,
+        "startTime": start_ts,
+        "spans": spans,
+    }
+
+
+@router.get("/traces")
+async def get_traces(
+    search: str = Query(None),
+    status: str = Query(None),
+    limit: int = Query(100, le=1000, ge=1),
+    offset: int = Query(0, ge=0),
+    ts=Depends(get_tracing_service),
+    user=Depends(get_current_user),
+) -> dict:
+    all_traces = ts.get_all_traces()
+    result = [_format_trace(tid, spans) for tid, spans in all_traces.items()]
+    if search:
+        result = [t for t in result if search.lower() in t["name"].lower()]
+    if status:
+        result = [t for t in result if t["status"] == status]
+    total = len(result)
+    return {"success": True, "data": result[offset:offset + limit], "total": total}
+
+
+@router.get("/traces/slow")
+async def get_slow_traces(
+    limit: int = Query(20, le=1000, ge=1),
+    ts=Depends(get_tracing_service),
+    user=Depends(get_current_user),
+) -> dict:
+    all_traces = ts.get_all_traces()
+    result = [_format_trace(tid, spans) for tid, spans in all_traces.items()]
+    result.sort(key=lambda t: t["duration"], reverse=True)
+    return {"success": True, "data": result[:limit]}
+
+
+@router.get("/traces/{trace_id}")
+async def get_trace_detail(
+    trace_id: str,
+    ts=Depends(get_tracing_service),
+    user=Depends(get_current_user),
+) -> dict:
+    spans = ts.get_trace(trace_id)
+    if not spans:
+        raise HTTPException(404, "Trace not found")
+    return {"success": True, "data": _format_trace(trace_id, spans)}
+
+
+# ===========================================================================
+# System Config (Bug 1.4)
+# ===========================================================================
+
+_SAFE_ENV_PREFIXES = ("OPSEVO_", "APP_", "NODE_ENV", "LOG_LEVEL")
+
+
+@router.get("/system/config")
+async def get_system_config(
+    ds=Depends(get_datastore),
+    user=Depends(get_current_user),
+) -> dict:
+    import os
+    configs = await ds.query("SELECT * FROM system_config ORDER BY key")
+    env_vars = [
+        {"key": k, "value": v}
+        for k, v in os.environ.items()
+        if any(k.startswith(p) for p in _SAFE_ENV_PREFIXES)
+    ]
+    return {"success": True, "data": {"configs": configs, "envVars": env_vars}}
+
+
+@router.get("/system/config/history")
+async def get_system_config_history(
+    key: str = Query(None),
+    limit: int = Query(100, le=1000, ge=1),
+    offset: int = Query(0, ge=0),
+    ds=Depends(get_datastore),
+    user=Depends(get_current_user),
+) -> dict:
+    if key:
+        rows = await ds.query(
+            "SELECT * FROM system_config_history WHERE config_key=$1 ORDER BY changed_at DESC LIMIT $2 OFFSET $3",
+            [key, limit, offset],
+        )
+    else:
+        rows = await ds.query(
+            "SELECT * FROM system_config_history ORDER BY changed_at DESC LIMIT $1 OFFSET $2",
+            [limit, offset],
+        )
+    return {"success": True, "data": rows}
+
+
+@router.put("/system/config")
+async def update_system_config(
+    request: Request,
+    ds=Depends(get_datastore),
+    user=Depends(get_current_user),
+) -> dict:
+    body = await request.json()
+    items = body.get("items", [body] if "key" in body else [])
+    if not items:
+        raise HTTPException(400, "No config items provided")
+
+    async def _tx(tx):
+        # 按 key 排序以防止并发事务死锁
+        sorted_items = sorted(items, key=lambda x: x.get("key", ""))
+        for item in sorted_items:
+            k = item.get("key")
+            v = item.get("value")
+            desc = item.get("description")
+            if not k:
+                continue
+            # SELECT FOR UPDATE 锁定
+            old = await tx.query_one("SELECT value FROM system_config WHERE key=$1 FOR UPDATE", [k])
+            old_val = old["value"] if old else None
+            # UPSERT
+            await tx.execute(
+                "INSERT INTO system_config (key, value, description, updated_at) VALUES ($1,$2,$3,NOW()) "
+                "ON CONFLICT (key) DO UPDATE SET value=$2, description=COALESCE($3, system_config.description), updated_at=NOW()",
+                [k, v, desc],
+            )
+            # 历史记录
+            await tx.execute(
+                "INSERT INTO system_config_history (config_key, old_value, new_value, changed_by) VALUES ($1,$2,$3,$4)",
+                [k, old_val, v, str(user["id"])],
+            )
+
+    await ds.transaction(_tx)
+    configs = await ds.query("SELECT * FROM system_config ORDER BY key")
+    return {"success": True, "data": configs}
+
+
+# ===========================================================================
+# Knowledge / Prompts (Bug 1.7)
+# ===========================================================================
+
+@router.get("/knowledge/prompts")
+async def get_knowledge_prompts(
+    search: str = Query(None),
+    limit: int = Query(100, le=1000, ge=1),
+    offset: int = Query(0, ge=0),
+    ds=Depends(get_datastore),
+    user=Depends(get_current_user),
+) -> dict:
+    """查询 knowledge_embeddings 中 metadata->>'type' = 'prompt' 的条目。"""
+    base = "SELECT * FROM knowledge_embeddings WHERE metadata->>'type' = 'prompt'"
+    params: list = []
+    idx = 1
+    if search:
+        base += f" AND (content ILIKE ${idx})"
+        params.append(f"%{search}%")
+        idx += 1
+    base += f" ORDER BY created_at DESC LIMIT ${idx} OFFSET ${idx + 1}"
+    params.extend([limit, offset])
+    rows = await ds.query(base, params)
+    return {"success": True, "data": rows}
+
+
+@router.post("/knowledge/prompts")
+async def create_knowledge_prompt(
+    request: Request,
+    ds=Depends(get_datastore),
+    user=Depends(get_current_user),
+) -> dict:
+    body = await request.json()
+    content = body.get("content", "")
+    if not content:
+        raise HTTPException(400, "content is required")
+    metadata = body.get("metadata", {})
+    metadata["type"] = "prompt"
+    kid = str(uuid.uuid4())
+    await ds.execute(
+        "INSERT INTO knowledge_embeddings (id, content, metadata, created_at) VALUES ($1,$2,$3,NOW())",
+        [kid, content, json.dumps(metadata)],
+    )
+    row = await ds.query_one("SELECT * FROM knowledge_embeddings WHERE id=$1", [kid])
+    return {"success": True, "data": row}
