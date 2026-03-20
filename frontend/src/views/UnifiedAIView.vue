@@ -198,7 +198,6 @@ import { Collection, Delete, Download } from '@element-plus/icons-vue'
 import { ref, computed, onMounted, onActivated, nextTick, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox, ElLoading } from 'element-plus'
-import { useDeviceStore } from '@/stores/device'
 import { useAuthStore } from '@/stores/auth'
 
 // 定义组件名称，用于 keep-alive
@@ -327,9 +326,7 @@ const isIndeterminate = computed(() => {
 // 路由实例
 const route = useRoute()
 const router = useRouter()
-const deviceStore = useDeviceStore()
 const authStore = useAuthStore()
-const currentDeviceId = computed(() => deviceStore.currentDeviceId)
 
 onMounted(async () => {
   // 先加载配置，让页面快速显示

@@ -126,7 +126,7 @@ export const useDeviceStore = defineStore('device', () => {
   async function addDevice(data: CreateDeviceRequest): Promise<Device | undefined> {
     const response = await deviceApi.create(data)
     if (response.data.success && response.data.data) {
-      devices.value.push(response.data.data)
+      // 不做乐观推入，由 SSE device_added 事件触发 fetchDevices() 刷新列表
       return response.data.data
     }
     throw new Error(response.data.error || '添加设备失败')

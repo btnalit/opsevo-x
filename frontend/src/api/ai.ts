@@ -12,7 +12,6 @@
  */
 
 import { useAuthStore } from '@/stores/auth'
-import { useDeviceStore } from '@/stores/device'
 import api from './index'
 
 // ==================== 类型定义 ====================
@@ -952,7 +951,6 @@ export const unifiedAgentApi = {
     const doFetch = async () => {
       try {
         const authStore = useAuthStore()
-        const deviceStore = useDeviceStore()
 
         // 构造全局 URL（AI 模块已全局化，不需要设备前缀）
         let url = '/api/ai/unified/chat/stream'
@@ -1156,7 +1154,6 @@ export const unifiedAgentApi = {
     const doFetch = async () => {
       try {
         const authStore = useAuthStore()
-        const deviceStore = useDeviceStore()
 
         let url = '/api/ai/unified/scripts/execute/stream'
 

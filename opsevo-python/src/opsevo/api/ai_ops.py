@@ -34,6 +34,12 @@ def _c(request: Request):
     return request.app.state.container
 
 
+def _resolve_device_id(query_device_id: str | None, body: dict) -> str | None:
+    """Resolve device_id: prefer query param, fallback to body, normalize empty → None."""
+    did = query_device_id or body.pop("deviceId", None) or body.pop("device_id", None)
+    return did.strip() if did and isinstance(did, str) and did.strip() else None
+
+
 # ---------------------------------------------------------------------------
 # Metrics
 # ---------------------------------------------------------------------------
@@ -60,10 +66,15 @@ async def get_metrics_history(
     device_id: str | None = Depends(get_device_id), hours: int = Query(24),
     ds=Depends(get_datastore), user=Depends(get_current_user),
 ) -> dict:
-    rows = await ds.query(
-        f"SELECT * FROM system_metrics WHERE device_id=$1 AND timestamp > NOW() - INTERVAL '{int(hours)} hours' ORDER BY timestamp",
-        [device_id],
-    )
+    if device_id:
+        rows = await ds.query(
+            f"SELECT * FROM system_metrics WHERE device_id=$1 AND timestamp > NOW() - INTERVAL '{int(hours)} hours' ORDER BY timestamp",
+            [device_id],
+        )
+    else:
+        rows = await ds.query(
+            f"SELECT * FROM system_metrics WHERE timestamp > NOW() - INTERVAL '{int(hours)} hours' ORDER BY timestamp",
+        )
     return {"success": True, "data": snake_to_camel_list(rows)}
 
 
@@ -103,25 +114,39 @@ async def get_traffic_history(
     device_id: str | None = Depends(get_device_id), interface: str = Query(None), hours: int = Query(24),
     ds=Depends(get_datastore), user=Depends(get_current_user),
 ) -> dict:
-    if interface:
+    if device_id and interface:
         rows = await ds.query(
             f"SELECT * FROM traffic_metrics WHERE device_id=$1 AND interface=$2 AND timestamp > NOW() - INTERVAL '{int(hours)} hours' ORDER BY timestamp",
             [device_id, interface],
         )
-    else:
+    elif device_id:
         rows = await ds.query(
             f"SELECT * FROM traffic_metrics WHERE device_id=$1 AND timestamp > NOW() - INTERVAL '{int(hours)} hours' ORDER BY timestamp",
             [device_id],
+        )
+    elif interface:
+        rows = await ds.query(
+            f"SELECT * FROM traffic_metrics WHERE interface=$1 AND timestamp > NOW() - INTERVAL '{int(hours)} hours' ORDER BY timestamp",
+            [interface],
+        )
+    else:
+        rows = await ds.query(
+            f"SELECT * FROM traffic_metrics WHERE timestamp > NOW() - INTERVAL '{int(hours)} hours' ORDER BY timestamp",
         )
     return {"success": True, "data": snake_to_camel_list(rows)}
 
 
 @router.get("/metrics/traffic/interfaces")
 async def get_traffic_interfaces(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    rows = await ds.query(
-        "SELECT DISTINCT interface, MAX(timestamp) as last_seen FROM traffic_metrics WHERE device_id=$1 GROUP BY interface",
-        [device_id],
-    )
+    if device_id:
+        rows = await ds.query(
+            "SELECT DISTINCT interface, MAX(timestamp) as last_seen FROM traffic_metrics WHERE device_id=$1 GROUP BY interface",
+            [device_id],
+        )
+    else:
+        rows = await ds.query(
+            "SELECT DISTINCT interface, MAX(timestamp) as last_seen FROM traffic_metrics GROUP BY interface",
+        )
     return {"success": True, "data": snake_to_camel_list(rows)}
 
 
@@ -150,10 +175,15 @@ async def update_rate_calculation_config(device_id: str | None = Depends(get_dev
 
 @router.get("/metrics/traffic/rate-stats")
 async def get_rate_statistics(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    row = await ds.query_one(
-        "SELECT COUNT(*) as samples, AVG(rx_rate) as avg_rx, AVG(tx_rate) as avg_tx FROM traffic_metrics WHERE device_id=$1 AND timestamp > NOW() - INTERVAL '1 hour'",
-        [device_id],
-    )
+    if device_id:
+        row = await ds.query_one(
+            "SELECT COUNT(*) as samples, AVG(rx_rate) as avg_rx, AVG(tx_rate) as avg_tx FROM traffic_metrics WHERE device_id=$1 AND timestamp > NOW() - INTERVAL '1 hour'",
+            [device_id],
+        )
+    else:
+        row = await ds.query_one(
+            "SELECT COUNT(*) as samples, AVG(rx_rate) as avg_rx, AVG(tx_rate) as avg_tx FROM traffic_metrics WHERE timestamp > NOW() - INTERVAL '1 hour'",
+        )
     return {"success": True, "data": snake_to_camel(row) or {}}
 
 
@@ -162,10 +192,15 @@ async def get_traffic_history_with_status(
     device_id: str | None = Depends(get_device_id), interface: str = Query(None), hours: int = Query(24),
     request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user),
 ) -> dict:
-    base = "SELECT * FROM traffic_metrics WHERE device_id=$1"
-    params: list = [device_id]
+    if device_id:
+        base = "SELECT * FROM traffic_metrics WHERE device_id=$1"
+        params: list = [device_id]
+    else:
+        base = "SELECT * FROM traffic_metrics WHERE 1=1"
+        params: list = []
     if interface:
-        base += " AND interface=$2"
+        idx = len(params) + 1
+        base += f" AND interface=${idx}"
         params.append(interface)
     base += f" AND timestamp > NOW() - INTERVAL '{int(hours)} hours' ORDER BY timestamp"
     rows = await ds.query(base, params)
@@ -201,6 +236,7 @@ async def get_alert_rule_by_id(device_id: str | None = Depends(get_device_id), r
 @router.post("/alerts/rules")
 async def create_alert_rule(device_id: str | None = Depends(get_device_id), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     body = await request.json()
+    device_id = _resolve_device_id(device_id, body)
     body["device_id"] = device_id
     ae = _c(request).alert_engine()
     rule = await ae.create_rule(body)
@@ -380,10 +416,16 @@ async def get_related_alerts(device_id: str | None = Depends(get_device_id), ale
     if not alert:
         return {"success": True, "data": []}
     rule_id = alert.get("rule_id", "")
-    rows = await ds.query(
-        "SELECT * FROM alert_events WHERE rule_id=$1 AND id!=$2 AND device_id=$3 ORDER BY timestamp DESC LIMIT 10",
-        [rule_id, alert_id, device_id],
-    )
+    if device_id:
+        rows = await ds.query(
+            "SELECT * FROM alert_events WHERE rule_id=$1 AND id!=$2 AND device_id=$3 ORDER BY timestamp DESC LIMIT 10",
+            [rule_id, alert_id, device_id],
+        )
+    else:
+        rows = await ds.query(
+            "SELECT * FROM alert_events WHERE rule_id=$1 AND id!=$2 ORDER BY timestamp DESC LIMIT 10",
+            [rule_id, alert_id],
+        )
     return {"success": True, "data": snake_to_camel_list(rows)}
 
 
@@ -451,6 +493,7 @@ async def get_scheduler_task_by_id(device_id: str | None = Depends(get_device_id
 @router.post("/scheduler/tasks")
 async def create_scheduler_task(device_id: str | None = Depends(get_device_id), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     body = await request.json()
+    device_id = _resolve_device_id(device_id, body)
     sched = _c(request).scheduler()
 
     async def _noop():
@@ -504,9 +547,14 @@ async def run_scheduler_task_now(device_id: str | None = Depends(get_device_id),
 
 @router.get("/scheduler/executions")
 async def get_scheduler_executions(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    rows = await ds.query(
-        "SELECT * FROM scheduler_executions WHERE device_id=$1 ORDER BY timestamp DESC LIMIT 50", [device_id]
-    )
+    if device_id:
+        rows = await ds.query(
+            "SELECT * FROM scheduler_executions WHERE device_id=$1 ORDER BY timestamp DESC LIMIT 50", [device_id]
+        )
+    else:
+        rows = await ds.query(
+            "SELECT * FROM scheduler_executions ORDER BY timestamp DESC LIMIT 50"
+        )
     return {"success": True, "data": snake_to_camel_list(rows)}
 
 
@@ -515,7 +563,10 @@ async def get_scheduler_executions(device_id: str | None = Depends(get_device_id
 # ---------------------------------------------------------------------------
 @router.get("/snapshots")
 async def get_snapshots(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    rows = await ds.query("SELECT * FROM config_snapshots WHERE device_id=$1 ORDER BY created_at DESC", [device_id])
+    if device_id:
+        rows = await ds.query("SELECT * FROM config_snapshots WHERE device_id=$1 ORDER BY created_at DESC", [device_id])
+    else:
+        rows = await ds.query("SELECT * FROM config_snapshots ORDER BY created_at DESC")
     return {"success": True, "data": snake_to_camel_list(rows)}
 
 
@@ -530,7 +581,10 @@ async def compare_snapshots(device_id: str | None = Depends(get_device_id), id1:
 
 @router.get("/snapshots/diff/latest")
 async def get_latest_diff(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    rows = await ds.query("SELECT * FROM config_snapshots WHERE device_id=$1 ORDER BY created_at DESC LIMIT 2", [device_id])
+    if device_id:
+        rows = await ds.query("SELECT * FROM config_snapshots WHERE device_id=$1 ORDER BY created_at DESC LIMIT 2", [device_id])
+    else:
+        rows = await ds.query("SELECT * FROM config_snapshots ORDER BY created_at DESC LIMIT 2")
     if len(rows) < 2:
         return {"success": True, "data": None}
     return {"success": True, "data": {"older": snake_to_camel(rows[1]), "newer": snake_to_camel(rows[0])}}
@@ -538,15 +592,20 @@ async def get_latest_diff(device_id: str | None = Depends(get_device_id), ds=Dep
 
 @router.get("/snapshots/timeline")
 async def get_change_timeline(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    rows = await ds.query(
-        "SELECT id, name, created_at FROM config_snapshots WHERE device_id=$1 ORDER BY created_at DESC LIMIT 50", [device_id]
-    )
+    if device_id:
+        rows = await ds.query(
+            "SELECT id, name, created_at FROM config_snapshots WHERE device_id=$1 ORDER BY created_at DESC LIMIT 50", [device_id]
+        )
+    else:
+        rows = await ds.query(
+            "SELECT id, name, created_at FROM config_snapshots ORDER BY created_at DESC LIMIT 50"
+        )
     return {"success": True, "data": snake_to_camel_list(rows)}
 
 
 @router.get("/snapshots/{snapshot_id}")
 async def get_snapshot_by_id(device_id: str | None = Depends(get_device_id), snapshot_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    row = await ds.query_one("SELECT * FROM config_snapshots WHERE id=$1 AND device_id=$2", [snapshot_id, device_id])
+    row = await ds.query_one("SELECT * FROM config_snapshots WHERE id=$1", [snapshot_id])
     if not row:
         raise HTTPException(404, "Snapshot not found")
     return {"success": True, "data": snake_to_camel(row)}
@@ -555,6 +614,9 @@ async def get_snapshot_by_id(device_id: str | None = Depends(get_device_id), sna
 @router.post("/snapshots")
 async def create_snapshot(device_id: str | None = Depends(get_device_id), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     body = await request.json()
+    device_id = _resolve_device_id(device_id, body)
+    if not device_id:
+        raise HTTPException(400, "deviceId is required for snapshot creation")
     pool = _c(request).device_pool()
     try:
         driver = await pool.get_driver(device_id)
@@ -572,13 +634,13 @@ async def create_snapshot(device_id: str | None = Depends(get_device_id), reques
 
 @router.delete("/snapshots/{snapshot_id}")
 async def delete_snapshot(device_id: str | None = Depends(get_device_id), snapshot_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    await ds.execute("DELETE FROM config_snapshots WHERE id=$1 AND device_id=$2", [snapshot_id, device_id])
+    await ds.execute("DELETE FROM config_snapshots WHERE id=$1", [snapshot_id])
     return {"success": True, "message": "Snapshot deleted"}
 
 
 @router.get("/snapshots/{snapshot_id}/download")
 async def download_snapshot(device_id: str | None = Depends(get_device_id), snapshot_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    row = await ds.query_one("SELECT config_data FROM config_snapshots WHERE id=$1 AND device_id=$2", [snapshot_id, device_id])
+    row = await ds.query_one("SELECT config_data FROM config_snapshots WHERE id=$1", [snapshot_id])
     if not row:
         raise HTTPException(404, "Snapshot not found")
     return {"success": True, "data": row.get("config_data", "")}
@@ -586,12 +648,15 @@ async def download_snapshot(device_id: str | None = Depends(get_device_id), snap
 
 @router.post("/snapshots/{snapshot_id}/restore")
 async def restore_snapshot(device_id: str | None = Depends(get_device_id), snapshot_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    row = await ds.query_one("SELECT config_data FROM config_snapshots WHERE id=$1 AND device_id=$2", [snapshot_id, device_id])
+    row = await ds.query_one("SELECT * FROM config_snapshots WHERE id=$1", [snapshot_id])
     if not row:
         raise HTTPException(404, "Snapshot not found")
     pool = _c(request).device_pool()
     try:
-        driver = await pool.get_driver(device_id)
+        restore_device_id = device_id or row.get("device_id")
+        if not restore_device_id:
+            raise HTTPException(400, "No device_id for restore")
+        driver = await pool.get_driver(restore_device_id)
         await driver.execute("import_config", {"config": row["config_data"]})
         return {"success": True, "message": "Restore completed"}
     except Exception as exc:
@@ -603,13 +668,16 @@ async def restore_snapshot(device_id: str | None = Depends(get_device_id), snaps
 # ---------------------------------------------------------------------------
 @router.get("/reports")
 async def get_reports(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    rows = await ds.query("SELECT * FROM reports WHERE device_id=$1 ORDER BY created_at DESC", [device_id])
+    if device_id:
+        rows = await ds.query("SELECT * FROM reports WHERE device_id=$1 ORDER BY created_at DESC", [device_id])
+    else:
+        rows = await ds.query("SELECT * FROM reports ORDER BY created_at DESC")
     return {"success": True, "data": snake_to_camel_list(rows)}
 
 
 @router.get("/reports/{report_id}")
 async def get_report_by_id(device_id: str | None = Depends(get_device_id), report_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    row = await ds.query_one("SELECT * FROM reports WHERE id=$1 AND device_id=$2", [report_id, device_id])
+    row = await ds.query_one("SELECT * FROM reports WHERE id=$1", [report_id])
     if not row:
         raise HTTPException(404, "Report not found")
     return {"success": True, "data": snake_to_camel(row)}
@@ -618,6 +686,7 @@ async def get_report_by_id(device_id: str | None = Depends(get_device_id), repor
 @router.post("/reports/generate")
 async def generate_report(device_id: str | None = Depends(get_device_id), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     body = await request.json()
+    device_id = _resolve_device_id(device_id, body)
     report_id = str(uuid.uuid4())
     report_type = body.get("type", "summary")
     # Gather data for report
@@ -644,7 +713,7 @@ async def generate_report(device_id: str | None = Depends(get_device_id), reques
 
 @router.get("/reports/{report_id}/export")
 async def export_report(device_id: str | None = Depends(get_device_id), report_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    row = await ds.query_one("SELECT * FROM reports WHERE id=$1 AND device_id=$2", [report_id, device_id])
+    row = await ds.query_one("SELECT * FROM reports WHERE id=$1", [report_id])
     if not row:
         raise HTTPException(404, "Report not found")
     return {"success": True, "data": snake_to_camel(row)}
@@ -652,7 +721,7 @@ async def export_report(device_id: str | None = Depends(get_device_id), report_i
 
 @router.delete("/reports/{report_id}")
 async def delete_report(device_id: str | None = Depends(get_device_id), report_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    await ds.execute("DELETE FROM reports WHERE id=$1 AND device_id=$2", [report_id, device_id])
+    await ds.execute("DELETE FROM reports WHERE id=$1", [report_id])
     return {"success": True, "message": "Report deleted"}
 
 
@@ -661,13 +730,16 @@ async def delete_report(device_id: str | None = Depends(get_device_id), report_i
 # ---------------------------------------------------------------------------
 @router.get("/patterns")
 async def get_fault_patterns(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    rows = await ds.query("SELECT * FROM fault_patterns WHERE device_id=$1 ORDER BY created_at DESC", [device_id])
+    if device_id:
+        rows = await ds.query("SELECT * FROM fault_patterns WHERE device_id=$1 ORDER BY created_at DESC", [device_id])
+    else:
+        rows = await ds.query("SELECT * FROM fault_patterns ORDER BY created_at DESC")
     return {"success": True, "data": snake_to_camel_list(rows)}
 
 
 @router.get("/patterns/{pattern_id}")
 async def get_fault_pattern_by_id(device_id: str | None = Depends(get_device_id), pattern_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    row = await ds.query_one("SELECT * FROM fault_patterns WHERE id=$1 AND device_id=$2", [pattern_id, device_id])
+    row = await ds.query_one("SELECT * FROM fault_patterns WHERE id=$1", [pattern_id])
     if not row:
         raise HTTPException(404, "Fault pattern not found")
     return {"success": True, "data": snake_to_camel(row)}
@@ -676,6 +748,7 @@ async def get_fault_pattern_by_id(device_id: str | None = Depends(get_device_id)
 @router.post("/patterns")
 async def create_fault_pattern(device_id: str | None = Depends(get_device_id), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     body = camel_to_snake_keys(await request.json())
+    device_id = _resolve_device_id(device_id, body)
     pid = str(uuid.uuid4())
     await ds.execute(
         "INSERT INTO fault_patterns (id, device_id, name, pattern, severity, auto_heal, created_at) VALUES ($1,$2,$3,$4,$5,$6,NOW())",
@@ -705,7 +778,7 @@ async def update_fault_pattern(device_id: str | None = Depends(get_device_id), p
 
 @router.delete("/patterns/{pattern_id}")
 async def delete_fault_pattern(device_id: str | None = Depends(get_device_id), pattern_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    await ds.execute("DELETE FROM fault_patterns WHERE id=$1 AND device_id=$2", [pattern_id, device_id])
+    await ds.execute("DELETE FROM fault_patterns WHERE id=$1", [pattern_id])
     return {"success": True, "message": "Fault pattern deleted"}
 
 
@@ -726,7 +799,10 @@ async def disable_auto_heal(device_id: str | None = Depends(get_device_id), patt
 # ---------------------------------------------------------------------------
 @router.get("/remediations")
 async def get_remediations(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    rows = await ds.query("SELECT * FROM remediation_executions WHERE device_id=$1 ORDER BY timestamp DESC", [device_id])
+    if device_id:
+        rows = await ds.query("SELECT * FROM remediation_executions WHERE device_id=$1 ORDER BY timestamp DESC", [device_id])
+    else:
+        rows = await ds.query("SELECT * FROM remediation_executions ORDER BY timestamp DESC")
     return {"success": True, "data": snake_to_camel_list(rows)}
 
 
@@ -751,13 +827,16 @@ async def execute_fault_remediation(device_id: str | None = Depends(get_device_i
 # ---------------------------------------------------------------------------
 @router.get("/channels")
 async def get_notification_channels(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    rows = await ds.query("SELECT * FROM notification_channels WHERE device_id=$1 ORDER BY created_at DESC", [device_id])
+    if device_id:
+        rows = await ds.query("SELECT * FROM notification_channels WHERE device_id=$1 ORDER BY created_at DESC", [device_id])
+    else:
+        rows = await ds.query("SELECT * FROM notification_channels ORDER BY created_at DESC")
     return {"success": True, "data": snake_to_camel_list(rows)}
 
 
 @router.get("/channels/{channel_id}")
 async def get_notification_channel_by_id(device_id: str | None = Depends(get_device_id), channel_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    row = await ds.query_one("SELECT * FROM notification_channels WHERE id=$1 AND device_id=$2", [channel_id, device_id])
+    row = await ds.query_one("SELECT * FROM notification_channels WHERE id=$1", [channel_id])
     if not row:
         raise HTTPException(404, "Channel not found")
     return {"success": True, "data": snake_to_camel(row)}
@@ -766,6 +845,7 @@ async def get_notification_channel_by_id(device_id: str | None = Depends(get_dev
 @router.post("/channels")
 async def create_notification_channel(device_id: str | None = Depends(get_device_id), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     body = await request.json()
+    device_id = _resolve_device_id(device_id, body)
     cid = str(uuid.uuid4())
     await ds.execute(
         "INSERT INTO notification_channels (id, device_id, name, type, config, enabled, created_at) VALUES ($1,$2,$3,$4,$5,$6,NOW())",
@@ -797,13 +877,13 @@ async def update_notification_channel(device_id: str | None = Depends(get_device
 
 @router.delete("/channels/{channel_id}")
 async def delete_notification_channel(device_id: str | None = Depends(get_device_id), channel_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    await ds.execute("DELETE FROM notification_channels WHERE id=$1 AND device_id=$2", [channel_id, device_id])
+    await ds.execute("DELETE FROM notification_channels WHERE id=$1", [channel_id])
     return {"success": True, "message": "Channel deleted"}
 
 
 @router.post("/channels/{channel_id}/test")
 async def test_notification_channel(device_id: str | None = Depends(get_device_id), channel_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    row = await ds.query_one("SELECT * FROM notification_channels WHERE id=$1 AND device_id=$2", [channel_id, device_id])
+    row = await ds.query_one("SELECT * FROM notification_channels WHERE id=$1", [channel_id])
     if not row:
         raise HTTPException(404, "Channel not found")
     return {"success": True, "message": "Test notification sent"}
@@ -811,7 +891,10 @@ async def test_notification_channel(device_id: str | None = Depends(get_device_i
 
 @router.get("/channels/{channel_id}/pending")
 async def get_pending_notifications(device_id: str | None = Depends(get_device_id), channel_id: str = "", ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    rows = await ds.query("SELECT * FROM notifications WHERE device_id=$1 AND channel_id=$2 AND status='pending' ORDER BY created_at DESC", [device_id, channel_id])
+    if device_id:
+        rows = await ds.query("SELECT * FROM notifications WHERE device_id=$1 AND channel_id=$2 AND status='pending' ORDER BY created_at DESC", [device_id, channel_id])
+    else:
+        rows = await ds.query("SELECT * FROM notifications WHERE channel_id=$1 AND status='pending' ORDER BY created_at DESC", [channel_id])
     return {"success": True, "data": snake_to_camel_list(rows)}
 
 
@@ -846,11 +929,18 @@ async def get_audit_logs(
     ds=Depends(get_datastore), user=Depends(get_current_user),
 ) -> dict:
     offset = (page - 1) * limit
-    rows = await ds.query(
-        "SELECT * FROM audit_logs WHERE device_id=$1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
-        [device_id, limit, offset],
-    )
-    count_row = await ds.query_one("SELECT COUNT(*) as total FROM audit_logs WHERE device_id=$1", [device_id])
+    if device_id:
+        rows = await ds.query(
+            "SELECT * FROM audit_logs WHERE device_id=$1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
+            [device_id, limit, offset],
+        )
+        count_row = await ds.query_one("SELECT COUNT(*) as total FROM audit_logs WHERE device_id=$1", [device_id])
+    else:
+        rows = await ds.query(
+            "SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT $1 OFFSET $2",
+            [limit, offset],
+        )
+        count_row = await ds.query_one("SELECT COUNT(*) as total FROM audit_logs")
     return {"success": True, "data": snake_to_camel_list(rows), "total": count_row["total"] if count_row else 0}
 
 
@@ -929,12 +1019,18 @@ async def get_syslog_events(
     ds=Depends(get_datastore), user=Depends(get_current_user),
 ) -> dict:
     # 使用 SQL LIMIT/OFFSET 替代内存分页
-    count_base = "SELECT COUNT(*) as total FROM syslog_events WHERE device_id=$1"
-    base = "SELECT * FROM syslog_events WHERE device_id=$1"
-    params: list = [device_id]
+    if device_id:
+        count_base = "SELECT COUNT(*) as total FROM syslog_events WHERE device_id=$1"
+        base = "SELECT * FROM syslog_events WHERE device_id=$1"
+        params: list = [device_id]
+    else:
+        count_base = "SELECT COUNT(*) as total FROM syslog_events WHERE 1=1"
+        base = "SELECT * FROM syslog_events WHERE 1=1"
+        params: list = []
     if severity:
-        count_base += " AND severity=$2"
-        base += " AND severity=$2"
+        idx = len(params) + 1
+        count_base += f" AND severity=${idx}"
+        base += f" AND severity=${idx}"
         params.append(severity)
     count_row = await ds.query_one(count_base, params)
     total = count_row["total"] if count_row else 0
@@ -947,10 +1043,16 @@ async def get_syslog_events(
 @router.get("/syslog/stats")
 async def get_syslog_stats(device_id: str | None = Depends(get_device_id), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     sr = _c(request).syslog_receiver()
-    count_row = await ds.query_one("SELECT COUNT(*) as total FROM syslog_events WHERE device_id=$1", [device_id])
-    sev_rows = await ds.query(
-        "SELECT severity, COUNT(*) as cnt FROM syslog_events WHERE device_id=$1 GROUP BY severity", [device_id]
-    )
+    if device_id:
+        count_row = await ds.query_one("SELECT COUNT(*) as total FROM syslog_events WHERE device_id=$1", [device_id])
+        sev_rows = await ds.query(
+            "SELECT severity, COUNT(*) as cnt FROM syslog_events WHERE device_id=$1 GROUP BY severity", [device_id]
+        )
+    else:
+        count_row = await ds.query_one("SELECT COUNT(*) as total FROM syslog_events")
+        sev_rows = await ds.query(
+            "SELECT severity, COUNT(*) as cnt FROM syslog_events GROUP BY severity"
+        )
     return {
         "success": True,
         "data": {
@@ -973,13 +1075,17 @@ async def reset_syslog_stats(device_id: str | None = Depends(get_device_id), req
 # ---------------------------------------------------------------------------
 @router.get("/filters/maintenance")
 async def get_maintenance_windows(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    rows = await ds.query("SELECT * FROM maintenance_windows WHERE device_id=$1 ORDER BY start_time DESC", [device_id])
+    if device_id:
+        rows = await ds.query("SELECT * FROM maintenance_windows WHERE device_id=$1 ORDER BY start_time DESC", [device_id])
+    else:
+        rows = await ds.query("SELECT * FROM maintenance_windows ORDER BY start_time DESC")
     return {"success": True, "data": snake_to_camel_list(rows)}
 
 
 @router.post("/filters/maintenance")
 async def create_maintenance_window(device_id: str | None = Depends(get_device_id), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     body = camel_to_snake_keys(await request.json())
+    device_id = _resolve_device_id(device_id, body)
     mid = str(uuid.uuid4())
     await ds.execute(
         "INSERT INTO maintenance_windows (id, device_id, name, start_time, end_time, filters, created_at) VALUES ($1,$2,$3,$4,$5,$6,NOW())",
@@ -1011,7 +1117,7 @@ async def update_maintenance_window(device_id: str | None = Depends(get_device_i
 
 @router.delete("/filters/maintenance/{window_id}")
 async def delete_maintenance_window(device_id: str | None = Depends(get_device_id), window_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    await ds.execute("DELETE FROM maintenance_windows WHERE id=$1 AND device_id=$2", [window_id, device_id])
+    await ds.execute("DELETE FROM maintenance_windows WHERE id=$1", [window_id])
     return {"success": True, "message": "Maintenance window deleted"}
 
 
@@ -1020,13 +1126,17 @@ async def delete_maintenance_window(device_id: str | None = Depends(get_device_i
 # ---------------------------------------------------------------------------
 @router.get("/filters/known-issues")
 async def get_known_issues(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    rows = await ds.query("SELECT * FROM known_issues WHERE device_id=$1 ORDER BY created_at DESC", [device_id])
+    if device_id:
+        rows = await ds.query("SELECT * FROM known_issues WHERE device_id=$1 ORDER BY created_at DESC", [device_id])
+    else:
+        rows = await ds.query("SELECT * FROM known_issues ORDER BY created_at DESC")
     return {"success": True, "data": snake_to_camel_list(rows)}
 
 
 @router.post("/filters/known-issues")
 async def create_known_issue(device_id: str | None = Depends(get_device_id), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     body = camel_to_snake_keys(await request.json())
+    device_id = _resolve_device_id(device_id, body)
     kid = str(uuid.uuid4())
     await ds.execute(
         "INSERT INTO known_issues (id, device_id, title, description, pattern, auto_resolve, created_at) VALUES ($1,$2,$3,$4,$5,$6,NOW())",
@@ -1058,7 +1168,7 @@ async def update_known_issue(device_id: str | None = Depends(get_device_id), iss
 
 @router.delete("/filters/known-issues/{issue_id}")
 async def delete_known_issue(device_id: str | None = Depends(get_device_id), issue_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    await ds.execute("DELETE FROM known_issues WHERE id=$1 AND device_id=$2", [issue_id, device_id])
+    await ds.execute("DELETE FROM known_issues WHERE id=$1", [issue_id])
     return {"success": True, "message": "Known issue deleted"}
 
 
@@ -1067,13 +1177,16 @@ async def delete_known_issue(device_id: str | None = Depends(get_device_id), iss
 # ---------------------------------------------------------------------------
 @router.get("/decisions/rules")
 async def get_decision_rules(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    rows = await ds.query("SELECT * FROM decision_rules WHERE device_id=$1 ORDER BY created_at DESC", [device_id])
+    if device_id:
+        rows = await ds.query("SELECT * FROM decision_rules WHERE device_id=$1 ORDER BY created_at DESC", [device_id])
+    else:
+        rows = await ds.query("SELECT * FROM decision_rules ORDER BY created_at DESC")
     return {"success": True, "data": snake_to_camel_list(rows)}
 
 
 @router.get("/decisions/rules/{rule_id}")
 async def get_decision_rule_by_id(device_id: str | None = Depends(get_device_id), rule_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    row = await ds.query_one("SELECT * FROM decision_rules WHERE id=$1 AND device_id=$2", [rule_id, device_id])
+    row = await ds.query_one("SELECT * FROM decision_rules WHERE id=$1", [rule_id])
     if not row:
         raise HTTPException(404, "Decision rule not found")
     return {"success": True, "data": snake_to_camel(row)}
@@ -1082,6 +1195,7 @@ async def get_decision_rule_by_id(device_id: str | None = Depends(get_device_id)
 @router.post("/decisions/rules")
 async def create_decision_rule(device_id: str | None = Depends(get_device_id), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     body = await request.json()
+    device_id = _resolve_device_id(device_id, body)
     rid = str(uuid.uuid4())
     await ds.execute(
         "INSERT INTO decision_rules (id, device_id, name, condition, action, priority, enabled, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,NOW())",
@@ -1114,7 +1228,7 @@ async def update_decision_rule(device_id: str | None = Depends(get_device_id), r
 
 @router.delete("/decisions/rules/{rule_id}")
 async def delete_decision_rule(device_id: str | None = Depends(get_device_id), rule_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    await ds.execute("DELETE FROM decision_rules WHERE id=$1 AND device_id=$2", [rule_id, device_id])
+    await ds.execute("DELETE FROM decision_rules WHERE id=$1", [rule_id])
     return {"success": True, "message": "Decision rule deleted"}
 
 
@@ -1124,10 +1238,16 @@ async def get_decision_history(
     ds=Depends(get_datastore), user=Depends(get_current_user),
 ) -> dict:
     offset = (page - 1) * limit
-    rows = await ds.query(
-        "SELECT * FROM decision_history WHERE device_id=$1 ORDER BY timestamp DESC LIMIT $2 OFFSET $3",
-        [device_id, limit, offset],
-    )
+    if device_id:
+        rows = await ds.query(
+            "SELECT * FROM decision_history WHERE device_id=$1 ORDER BY timestamp DESC LIMIT $2 OFFSET $3",
+            [device_id, limit, offset],
+        )
+    else:
+        rows = await ds.query(
+            "SELECT * FROM decision_history ORDER BY timestamp DESC LIMIT $1 OFFSET $2",
+            [limit, offset],
+        )
     return {"success": True, "data": snake_to_camel_list(rows)}
 
 
@@ -1137,6 +1257,7 @@ async def get_decision_history(
 @router.post("/feedback")
 async def submit_feedback(device_id: str | None = Depends(get_device_id), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     body = await request.json()
+    device_id = _resolve_device_id(device_id, body)
     fid = str(uuid.uuid4())
     await ds.execute(
         "INSERT INTO feedback (id, device_id, alert_id, analysis_id, rating, comment, action_taken, created_at) "
@@ -1149,8 +1270,12 @@ async def submit_feedback(device_id: str | None = Depends(get_device_id), reques
 
 @router.get("/feedback/stats")
 async def get_feedback_stats(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    total = await ds.query_one("SELECT COUNT(*) as cnt FROM feedback WHERE device_id=$1", [device_id])
-    avg_row = await ds.query_one("SELECT AVG(rating) as avg_rating FROM feedback WHERE device_id=$1", [device_id])
+    if device_id:
+        total = await ds.query_one("SELECT COUNT(*) as cnt FROM feedback WHERE device_id=$1", [device_id])
+        avg_row = await ds.query_one("SELECT AVG(rating) as avg_rating FROM feedback WHERE device_id=$1", [device_id])
+    else:
+        total = await ds.query_one("SELECT COUNT(*) as cnt FROM feedback")
+        avg_row = await ds.query_one("SELECT AVG(rating) as avg_rating FROM feedback")
     return {
         "success": True,
         "data": {
@@ -1162,11 +1287,17 @@ async def get_feedback_stats(device_id: str | None = Depends(get_device_id), ds=
 
 @router.get("/feedback/review")
 async def get_rules_needing_review(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    rows = await ds.query(
-        "SELECT rule_id, COUNT(*) as negative_count FROM feedback "
-        "WHERE device_id=$1 AND rating <= 2 GROUP BY rule_id HAVING COUNT(*) >= 3 ORDER BY negative_count DESC",
-        [device_id],
-    )
+    if device_id:
+        rows = await ds.query(
+            "SELECT rule_id, COUNT(*) as negative_count FROM feedback "
+            "WHERE device_id=$1 AND rating <= 2 GROUP BY rule_id HAVING COUNT(*) >= 3 ORDER BY negative_count DESC",
+            [device_id],
+        )
+    else:
+        rows = await ds.query(
+            "SELECT rule_id, COUNT(*) as negative_count FROM feedback "
+            "WHERE rating <= 2 GROUP BY rule_id HAVING COUNT(*) >= 3 ORDER BY negative_count DESC",
+        )
     return {"success": True, "data": snake_to_camel_list(rows)}
 
 
@@ -1397,7 +1528,7 @@ async def list_iterations(device_id: str | None = Depends(get_device_id), ds=Dep
 
 @router.get("/iterations/{iteration_id}")
 async def get_iteration_state(device_id: str | None = Depends(get_device_id), iteration_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    row = await ds.query_one("SELECT * FROM iterations WHERE id=$1 AND device_id=$2", [iteration_id, device_id])
+    row = await ds.query_one("SELECT * FROM iterations WHERE id=$1", [iteration_id])
     if not row:
         raise HTTPException(404, "Iteration not found")
     return {"success": True, "data": snake_to_camel(row)}
@@ -1405,7 +1536,7 @@ async def get_iteration_state(device_id: str | None = Depends(get_device_id), it
 
 @router.post("/iterations/{iteration_id}/abort")
 async def abort_iteration(device_id: str | None = Depends(get_device_id), iteration_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    await ds.execute("UPDATE iterations SET status='aborted' WHERE id=$1 AND device_id=$2", [iteration_id, device_id])
+    await ds.execute("UPDATE iterations SET status='aborted' WHERE id=$1", [iteration_id])
     return {"success": True, "message": "Iteration aborted"}
 
 
@@ -1677,7 +1808,7 @@ async def stream_iteration_events(device_id: str | None = Depends(get_device_id)
             return
         try:
             while True:
-                row = await ds.query_one("SELECT * FROM iterations WHERE id=$1 AND device_id=$2", [iteration_id, device_id])
+                row = await ds.query_one("SELECT * FROM iterations WHERE id=$1", [iteration_id])
                 if row:
                     yield f"data: {json.dumps(row, default=str)}\n\n"
                     if row.get("status") in ("completed", "failed", "aborted"):
@@ -1786,7 +1917,7 @@ async def get_pending_intents(device_id: str | None = Depends(get_device_id), re
 
 @router.post("/intents/grant/{intent_id}")
 async def grant_intent(device_id: str | None = Depends(get_device_id), intent_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    await ds.execute("UPDATE brain_intents SET status='granted', resolved_at=NOW() WHERE id=$1 AND device_id=$2", [intent_id, device_id])
+    await ds.execute("UPDATE brain_intents SET status='granted', resolved_at=NOW() WHERE id=$1", [intent_id])
     brain = _c(request).autonomous_brain()
     await brain.trigger_tick(reason="intent_granted", payload={"intent_id": intent_id})
     return {"success": True, "message": "Intent granted"}
@@ -1797,8 +1928,8 @@ async def reject_intent(device_id: str | None = Depends(get_device_id), intent_i
     body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
     reason = body.get("reason", "Rejected by operator")
     await ds.execute(
-        "UPDATE brain_intents SET status='rejected', reason=$3, resolved_at=NOW() WHERE id=$1 AND device_id=$2",
-        [intent_id, device_id, reason],
+        "UPDATE brain_intents SET status='rejected', reason=$2, resolved_at=NOW() WHERE id=$1",
+        [intent_id, reason],
     )
     return {"success": True, "message": "Intent rejected"}
 
@@ -2144,14 +2275,14 @@ async def update_decision_rule_weights(
 ) -> dict:
     body = await request.json()
     row = await ds.query_one(
-        "SELECT * FROM decision_rules WHERE id=$1 AND device_id=$2", [rule_id, device_id]
+        "SELECT * FROM decision_rules WHERE id=$1", [rule_id]
     )
     if not row:
         raise HTTPException(404, "Decision rule not found")
     weights_json = json.dumps(body)
     await ds.execute(
-        "UPDATE decision_rules SET weights=$1 WHERE id=$2 AND device_id=$3",
-        [weights_json, rule_id, device_id],
+        "UPDATE decision_rules SET weights=$1 WHERE id=$2",
+        [weights_json, rule_id],
     )
     return {"success": True}
 
@@ -2439,7 +2570,7 @@ async def test_notification_channel_alias(
 ) -> dict:
     """Alias: frontend calls /notifications/channels/{id}/test."""
     row = await ds.query_one(
-        "SELECT * FROM notification_channels WHERE id=$1 AND device_id=$2", [channel_id, device_id]
+        "SELECT * FROM notification_channels WHERE id=$1", [channel_id]
     )
     if not row:
         raise HTTPException(404, "Channel not found")
