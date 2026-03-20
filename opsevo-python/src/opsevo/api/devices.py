@@ -142,8 +142,8 @@ async def connect_device(
         driver, config = await _resolve_driver(request, device_id)
         await driver.connect(config)
         dm = _get_device_manager(request)
-        await dm.update_device(device_id, {"status": "online"})
-        return SuccessResponse(data={"connected": True}).model_dump()
+        updated = await dm.update_device(device_id, {"status": "online"})
+        return SuccessResponse(data=updated).model_dump()
     except HTTPException:
         raise
     except Exception as exc:
@@ -160,8 +160,8 @@ async def disconnect_device(
         driver, _ = await _resolve_driver(request, device_id)
         await driver.disconnect()
         dm = _get_device_manager(request)
-        await dm.update_device(device_id, {"status": "offline"})
-        return SuccessResponse(data={"connected": False}).model_dump()
+        updated = await dm.update_device(device_id, {"status": "offline"})
+        return SuccessResponse(data=updated).model_dump()
     except HTTPException:
         raise
     except Exception as exc:

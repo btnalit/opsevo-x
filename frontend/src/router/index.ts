@@ -22,12 +22,12 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/',
     component: AppLayout,
-    redirect: '/devices',
+    redirect: '/ai-ops/cockpit',
     children: [
       ...deviceRoutes,
       {
         path: 'dashboard',
-        redirect: '/ai-ops'
+        redirect: '/ai-ops/cockpit'
       },
       {
         path: 'about',
@@ -74,8 +74,8 @@ router.beforeEach((to, _from, next) => {
 
   // Check if a device is selected for routes that require it
   const currentDeviceId = localStorage.getItem('current_device_id')
-  if (!currentDeviceId) {
-    next('/devices')
+  if (!currentDeviceId && to.path !== '/ai-ops/cockpit') {
+    next('/ai-ops/cockpit')
     return
   }
 

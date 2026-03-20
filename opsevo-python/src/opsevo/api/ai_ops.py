@@ -1235,10 +1235,51 @@ async def get_health_degradation(device_id: str = Query(None, alias="deviceId"),
 @router.get("/health/current")
 async def get_health_current(device_id: str = Query(None, alias="deviceId"), request: Request = None, user=Depends(get_current_user)) -> dict:
     hm = _c(request).health_monitor()
-    status = hm.get_device_status(device_id)
-    if not status:
-        return {"success": True, "data": {"healthy": True, "message": "No health data yet"}}
-    return {"success": True, "data": status}
+
+    # 单设备查询
+    if device_id:
+        status = hm.get_device_status(device_id)
+        if not status:
+            return {"success": True, "data": {"healthy": True, "message": "No health data yet"}}
+        return {"success": True, "data": status}
+
+    # 全局健康概览 — 聚合所有设备状态，供全息驾驶舱 VitalSigns 使用
+    all_status = hm.get_all_status()
+    total = len(all_status)
+    if total == 0:
+        return {"success": True, "data": {
+            "score": 0, "level": "unknown",
+            "dimensions": {"system": 0, "network": 0, "performance": 0, "reliability": 0},
+            "issues": [],
+        }}
+
+    healthy_count = sum(1 for s in all_status.values() if s.get("healthy"))
+    avg_latency = sum(s.get("latency_ms", 0) for s in all_status.values()) / total if total else 0
+    score = int((healthy_count / total) * 100) if total else 0
+
+    if score >= 80:
+        level = "healthy"
+    elif score >= 50:
+        level = "warning"
+    else:
+        level = "critical"
+
+    # 维度评分：基于设备健康比例和延迟
+    sys_score = min(100, score)
+    net_score = min(100, max(0, 100 - int(avg_latency / 10)))  # 延迟越高网络分越低
+    perf_score = min(100, max(0, 100 - int(avg_latency / 5)))
+    rel_score = int((healthy_count / total) * 100) if total else 0
+
+    issues = [
+        {"device_id": did, "error": s.get("error", "unhealthy")}
+        for did, s in all_status.items() if not s.get("healthy")
+    ]
+
+    return {"success": True, "data": {
+        "score": score, "level": level,
+        "dimensions": {"system": sys_score, "network": net_score, "performance": perf_score, "reliability": rel_score},
+        "issues": issues,
+    }}
 
 
 @router.get("/health/trend")
@@ -1524,16 +1565,28 @@ async def stream_autonomous_intents(device_id: str = Query(None, alias="deviceId
         q: asyncio.Queue[dict] = asyncio.Queue()
 
         def _on_thinking(phase, message, meta=None):
-            q.put_nowait({"phase": str(phase), "message": message, "meta": meta})
+            # 只转发 decide 阶段的事件作为 intent
+            if str(phase) == "decide":
+                q.put_nowait({"phase": str(phase), "message": message, "meta": meta})
 
         brain.on_thinking(_on_thinking)
         try:
+            yield f"data: {json.dumps({'type': 'connected'})}\n\n"
             while True:
                 try:
                     event = await asyncio.wait_for(q.get(), timeout=30)
-                    yield f"data: {json.dumps(event, default=str)}\n\n"
+                    # 包装为前端期望的 intent 格式
+                    intent_data = {
+                        "type": "intent",
+                        "data": {
+                            "action": event.get("message", ""),
+                            "target": event.get("meta", {}).get("target", "system") if event.get("meta") else "system",
+                            "riskLevel": event.get("meta", {}).get("risk_level", "MEDIUM") if event.get("meta") else "MEDIUM",
+                        },
+                    }
+                    yield f"data: {json.dumps(intent_data, default=str)}\n\n"
                 except asyncio.TimeoutError:
-                    yield ": keepalive\n\n"
+                    yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
         except asyncio.CancelledError:
             pass
         finally:
@@ -1555,10 +1608,11 @@ async def stream_brain_thinking(device_id: str = Query(None, alias="deviceId"), 
 
         brain.on_thinking(_on_thinking)
         try:
+            yield "data: {\"type\": \"connected\"}\n\n"
             while True:
                 try:
                     event = await asyncio.wait_for(q.get(), timeout=30)
-                    yield f"data: {json.dumps(event, default=str)}\n\n"
+                    yield f"event: brain-thinking\ndata: {json.dumps(event, default=str)}\n\n"
                 except asyncio.TimeoutError:
                     yield ": keepalive\n\n"
         except asyncio.CancelledError:

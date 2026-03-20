@@ -50,19 +50,23 @@ class AddServerRequest(BaseModel):
 # ------------------------------------------------------------------
 
 def _get_mcp_server(request: Request):
-    return getattr(request.app.state.container, "mcp_server_handler", None)
+    provider = getattr(request.app.state.container, "mcp_server_handler", None)
+    return provider() if provider is not None else None
 
 
 def _get_mcp_client(request: Request):
-    return getattr(request.app.state.container, "mcp_client_manager", None)
+    provider = getattr(request.app.state.container, "mcp_client_manager", None)
+    return provider() if provider is not None else None
 
 
 def _get_api_key_manager(request: Request):
-    return getattr(request.app.state.container, "api_key_manager", None)
+    provider = getattr(request.app.state.container, "api_key_manager", None)
+    return provider() if provider is not None else None
 
 
 def _get_tool_registry(request: Request):
-    return getattr(request.app.state.container, "tool_registry", None)
+    provider = getattr(request.app.state.container, "tool_registry", None)
+    return provider() if provider is not None else None
 
 
 # ------------------------------------------------------------------
@@ -219,6 +223,51 @@ async def remove_client_server(
         raise HTTPException(503, "McpClientManager not available")
     await client.disconnect_server(server_id)
     return {"success": True, "message": f"Server disconnected: {server_id}"}
+
+
+@router.put("/api/ai-ops/mcp/client/servers/{server_id}/toggle")
+async def toggle_client_server(
+    server_id: str,
+    request: Request,
+    _user: dict = Depends(get_current_user),
+):
+    """Toggle a client server enabled/disabled.
+
+    Disable disconnects the server.  Re-enable is not supported because
+    disconnect removes the connection config from memory.  The user must
+    re-add the server to enable it again.
+    """
+    client = _get_mcp_client(request)
+    if not client:
+        raise HTTPException(503, "McpClientManager not available")
+    body = await request.json()
+    enabled = body.get("enabled", True)
+    if not enabled:
+        await client.disconnect_server(server_id)
+        return {"success": True, "data": {"serverId": server_id, "enabled": False}}
+    # Re-enable: check if still connected
+    status = client.get_connection_status()
+    conn = next((s for s in status if s["serverId"] == server_id), None)
+    if conn:
+        return {"success": True, "data": {"serverId": server_id, "enabled": True, "status": conn["status"]}}
+    return {"success": False, "error": "Server was disconnected. Please re-add it to enable."}
+
+
+@router.get("/api/ai-ops/mcp/client/servers/{server_id}/tools")
+async def get_client_server_tools(
+    server_id: str,
+    request: Request,
+    _user: dict = Depends(get_current_user),
+):
+    """List tools discovered from a specific client server."""
+    client = _get_mcp_client(request)
+    if not client:
+        return {"success": True, "tools": []}
+    tools = client.get_server_tools(server_id)
+    return {
+        "success": True,
+        "tools": [{"name": t.name, "description": t.description} for t in tools],
+    }
 
 
 @router.get("/api/ai-ops/mcp/client/status")

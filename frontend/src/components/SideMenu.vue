@@ -36,7 +36,7 @@
         <template #title>全息思维座舱</template>
       </el-menu-item>
 
-      <el-sub-menu index="ai-ops" :disabled="isOffline">
+      <el-sub-menu index="ai-ops">
         <template #title>
           <el-icon><i-ep-data-analysis /></el-icon>
           <span>智能运维</span>
@@ -107,24 +107,19 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
-import { useConnectionStore } from '@/stores/connection'
-import { useDeviceStore } from '@/stores/device'
 
 defineProps<{
   collapsed?: boolean
 }>()
 
 const route = useRoute()
-const connectionStore = useConnectionStore()
-const deviceStore = useDeviceStore()
 
 const activeMenu = computed(() => route.path)
-const isOffline = computed(() => !connectionStore.isConnected)
 const shouldShowMenus = computed(() => {
-  // Hide menus if on device list, even if device is selected
-  // This keeps the "Device Management" focus without clearing state
+  // Always show menus — AI-ops/cockpit are global and don't require a device
+  // Only hide when explicitly on the device list page for a cleaner focus
   if (route.path === '/devices') return false
-  return deviceStore.hasSelectedDevice
+  return true
 })
 </script>
 

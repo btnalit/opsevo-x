@@ -251,15 +251,15 @@ const apiKeys = ref<any[]>([])
 
 async function fetchServerStatus() {
   try {
-    const { data } = await api.get('/mcp/server/status')
+    const { data } = await api.get('/ai-ops/mcp/server/status')
     if (data.success) serverStatus.value = data.status
   } catch (err) { console.warn('[McpPanel] fetchServerStatus failed:', err) }
 }
 
 async function fetchApiKeys() {
   try {
-    const { data } = await api.get('/mcp/keys')
-    if (data.success) apiKeys.value = data.keys
+    const { data } = await api.get('/ai-ops/mcp/keys')
+    if (data.success) apiKeys.value = data.data || []
   } catch (err) { console.warn('[McpPanel] fetchApiKeys failed:', err) }
 }
 
@@ -276,9 +276,9 @@ async function createApiKey() {
   }
   creating.value = true
   try {
-    const { data } = await api.post('/mcp/keys', newKeyForm.value)
+    const { data } = await api.post('/ai-ops/mcp/keys', newKeyForm.value)
     if (data.success) {
-      createdKeyPlaintext.value = data.key
+      createdKeyPlaintext.value = data.data?.key || data.data || ''
       await fetchApiKeys()
       ElMessage.success('API Key 已创建')
     }
@@ -299,7 +299,7 @@ function confirmRevokeKey(row: any) {
     type: 'warning',
   }).then(async () => {
     try {
-      await api.delete(`/mcp/keys/${row.id}`)
+      await api.delete(`/ai-ops/mcp/keys/${row.id}`)
       ElMessage.success('已撤销')
       await fetchApiKeys()
     } catch (err: any) {
@@ -314,21 +314,21 @@ const clientConnections = ref<any[]>([])
 
 async function fetchClientServers() {
   try {
-    const { data } = await api.get('/mcp/client/servers')
-    if (data.success) clientServers.value = data.servers
+    const { data } = await api.get('/ai-ops/mcp/client/servers')
+    if (data.success) clientServers.value = data.data || []
   } catch (err) { console.warn('[McpPanel] fetchClientServers failed:', err) }
 }
 
 async function fetchClientStatus() {
   try {
-    const { data } = await api.get('/mcp/client/status')
-    if (data.success) clientConnections.value = data.connections
+    const { data } = await api.get('/ai-ops/mcp/client/status')
+    if (data.success) clientConnections.value = data.data?.servers || []
   } catch (err) { console.warn('[McpPanel] fetchClientStatus failed:', err) }
 }
 
 async function toggleServer(serverId: string, enabled: boolean) {
   try {
-    await api.put(`/mcp/client/servers/${serverId}/toggle`, { enabled })
+    await api.put(`/ai-ops/mcp/client/servers/${serverId}/toggle`, { enabled })
     ElMessage.success(enabled ? '已启用' : '已禁用')
     await fetchClientServers()
   } catch (err: any) {
@@ -340,7 +340,7 @@ function confirmRemoveServer(row: any) {
   ElMessageBox.confirm(`确认删除 Server "${row.name}"？`, '删除确认', { type: 'warning' })
     .then(async () => {
       try {
-        await api.delete(`/mcp/client/servers/${row.serverId}`)
+        await api.delete(`/ai-ops/mcp/client/servers/${row.serverId}`)
         ElMessage.success('已删除')
         await fetchClientServers()
       } catch (err: any) {
@@ -385,7 +385,7 @@ async function addServer() {
     if (oauthForm.value.token_url) {
       payload.oauth = { ...oauthForm.value }
     }
-    const { data } = await api.post('/mcp/client/servers', payload)
+    const { data } = await api.post('/ai-ops/mcp/client/servers', payload)
     if (data.success) {
       ElMessage.success('Server 已添加')
       showAddServerDialog.value = false
@@ -414,7 +414,7 @@ const serverToolsList = ref<any[]>([])
 async function viewServerTools(row: any) {
   toolsDialogServer.value = row.name
   try {
-    const { data } = await api.get(`/mcp/client/servers/${row.serverId}/tools`)
+    const { data } = await api.get(`/ai-ops/mcp/client/servers/${row.serverId}/tools`)
     if (data.success) {
       serverToolsList.value = data.tools || []
       showToolsDialog.value = true

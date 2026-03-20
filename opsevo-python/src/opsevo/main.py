@@ -188,6 +188,13 @@ async def lifespan(app: FastAPI):
     mcp_cm = container.mcp_client_manager()
     await _safe_start("mcp_client_manager", mcp_cm.initialize([]))
 
+    # 5o — Skill system bootstrap (load builtin skills into SkillManager)
+    from opsevo.services.skill.bootstrap import BootstrapSkillSystem
+    skill_bootstrap = BootstrapSkillSystem(
+        container.skill_manager(), settings.skills_dir
+    )
+    await _safe_start("skill_bootstrap", skill_bootstrap.bootstrap())
+
     logger.info("startup_complete", port=settings.port)
     yield
 
