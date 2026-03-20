@@ -29,6 +29,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from opsevo.api.deps import get_current_user, get_datastore
+from opsevo.api.utils import snake_to_camel, snake_to_camel_list, camel_to_snake_keys
 
 router = APIRouter(tags=["system"])
 
@@ -87,7 +88,7 @@ async def get_scripts(
         "SELECT * FROM system_scripts WHERE device_id=$1 ORDER BY created_at DESC",
         [device_id],
     )
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows)}
 
 
 @router.post("/api/devices/{device_id}/system/scripts")
@@ -106,7 +107,7 @@ async def create_script(
          body.get("language", "cli")],
     )
     row = await ds.query_one("SELECT * FROM system_scripts WHERE id=$1", [sid])
-    return {"success": True, "data": row}
+    return {"success": True, "data": snake_to_camel(row)}
 
 
 @router.patch("/api/devices/{device_id}/system/scripts/{script_id}")
@@ -135,7 +136,7 @@ async def update_script(
     row = await ds.query_one("SELECT * FROM system_scripts WHERE id=$1", [script_id])
     if not row:
         raise HTTPException(404, "Script not found")
-    return {"success": True, "data": row}
+    return {"success": True, "data": snake_to_camel(row)}
 
 
 @router.delete("/api/devices/{device_id}/system/scripts/{script_id}")
@@ -221,7 +222,7 @@ async def get_system_schedulers(
         "SELECT * FROM system_schedulers WHERE device_id=$1 ORDER BY created_at DESC",
         [device_id],
     )
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows)}
 
 
 @router.post("/api/devices/{device_id}/system/scheduler")
@@ -237,10 +238,10 @@ async def create_system_scheduler(
         "INSERT INTO system_schedulers (id, device_id, name, cron, script_id, enabled, created_at) "
         "VALUES ($1,$2,$3,$4,$5,$6,NOW())",
         [tid, device_id, body.get("name", ""), body.get("cron", ""),
-         body.get("scriptId", ""), body.get("enabled", True)],
+         body.get("scriptId", body.get("script_id", "")), body.get("enabled", True)],
     )
     row = await ds.query_one("SELECT * FROM system_schedulers WHERE id=$1", [tid])
-    return {"success": True, "data": row}
+    return {"success": True, "data": snake_to_camel(row)}
 
 
 @router.patch("/api/devices/{device_id}/system/scheduler/{task_id}")
@@ -252,7 +253,7 @@ async def update_system_scheduler(
     user: dict = Depends(get_current_user),
 ):
     _ALLOWED = {"name", "cron", "script_id", "enabled", "description"}
-    body = await request.json()
+    body = camel_to_snake_keys(await request.json())
     sets, params, idx = [], [], 1
     for k, v in body.items():
         if k not in _ALLOWED:
@@ -269,7 +270,7 @@ async def update_system_scheduler(
     row = await ds.query_one("SELECT * FROM system_schedulers WHERE id=$1", [task_id])
     if not row:
         raise HTTPException(404, "Scheduler task not found")
-    return {"success": True, "data": row}
+    return {"success": True, "data": snake_to_camel(row)}
 
 
 @router.delete("/api/devices/{device_id}/system/scheduler/{task_id}")

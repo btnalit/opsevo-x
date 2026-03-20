@@ -10,6 +10,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from opsevo.api.deps import get_current_user, get_datastore
+from opsevo.api.utils import snake_to_camel, snake_to_camel_list
 from opsevo.data.datastore import DataStore
 from opsevo.utils.logger import get_logger
 
@@ -73,7 +74,7 @@ async def list_knowledge(
         f"SELECT * FROM knowledge_embeddings WHERE {where} ORDER BY created_at DESC LIMIT ${idx} OFFSET ${idx+1}",
         (*params, page_size, offset) if params else (page_size, offset),
     )
-    return {"success": True, "data": rows, "total": total, "page": page, "pageSize": page_size}
+    return {"success": True, "data": snake_to_camel_list(rows or []), "total": total, "page": page, "pageSize": page_size}
 
 
 @router.post("/knowledge")
@@ -137,7 +138,7 @@ async def get_knowledge_by_rule(
         "WHERE krl.rule_id = $1 ORDER BY ke.created_at DESC",
         (rule_id,),
     )
-    return {"success": True, "data": rows or []}
+    return {"success": True, "data": snake_to_camel_list(rows or [])}
 
 
 @router.get("/knowledge/suggest-for-rule/{rule_id}")
@@ -171,7 +172,7 @@ async def get_knowledge(
     row = await ds.query_one("SELECT * FROM knowledge_embeddings WHERE id = $1", (entry_id,))
     if not row:
         raise HTTPException(404, "Entry not found")
-    return {"success": True, "data": row}
+    return {"success": True, "data": snake_to_camel(row)}
 
 
 @router.put("/knowledge/{entry_id}")
@@ -312,7 +313,7 @@ async def export_knowledge(
 ):
     ds: DataStore = get_datastore(request)
     rows = await ds.query("SELECT * FROM knowledge_embeddings ORDER BY created_at DESC")
-    return {"success": True, "data": rows or []}
+    return {"success": True, "data": snake_to_camel_list(rows or [])}
 
 
 @router.post("/knowledge/import")
@@ -734,7 +735,7 @@ async def get_agent_sessions(
     rows = await ds.query(
         "SELECT id as session_id, title, message_count, created_at, updated_at FROM chat_sessions WHERE type='agent' ORDER BY updated_at DESC LIMIT 50"
     )
-    return {"success": True, "data": rows or []}
+    return {"success": True, "data": snake_to_camel_list(rows or [])}
 
 
 @router.get("/agent/sessions/{session_id}")
@@ -748,7 +749,7 @@ async def get_agent_session(
     if not session:
         raise HTTPException(404, "Agent session not found")
     messages = await ds.query("SELECT * FROM chat_messages WHERE session_id=$1 ORDER BY created_at ASC", (session_id,))
-    return {"success": True, "data": {"session": session, "messages": messages or []}}
+    return {"success": True, "data": {"session": snake_to_camel(session), "messages": snake_to_camel_list(messages or [])}}
 
 
 @router.post("/agent/sessions")

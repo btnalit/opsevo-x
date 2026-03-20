@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 from .deps import get_current_user, get_datastore
+from .utils import snake_to_camel, snake_to_camel_list
 
 router = APIRouter(prefix="/api/devices/{device_id}/ai", tags=["ai"])
 
@@ -23,39 +24,54 @@ def _get_container(request: Request):
     return request.app.state.container
 
 
+def _mask_api_key(key: str | None) -> str:
+    """Mask API key for display: show last 4 chars only."""
+    if not key:
+        return ""
+    if len(key) <= 4:
+        return "****"
+    return "*" * (len(key) - 4) + key[-4:]
+
+
+def _format_config_row(row: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Map DB snake_case fields to frontend camelCase fields."""
+    if not row:
+        return None
+    return {
+        "id": row.get("id"),
+        "provider": row.get("provider", ""),
+        "name": row.get("name", ""),
+        "model": row.get("model") or row.get("model_name") or "",
+        "endpoint": row.get("base_url") or "",
+        "apiKeyMasked": _mask_api_key(row.get("api_key") or ""),
+        "isDefault": bool(row.get("is_default", False)),
+        "createdAt": row.get("created_at"),
+        "updatedAt": row.get("updated_at"),
+    }
+
+
 # ==================== 提供商信息 ====================
 @router.get("/providers")
 async def get_providers(device_id: str, request: Request, user=Depends(get_current_user)) -> dict:
-    settings = _get_container(request).settings()
-    providers = []
-    for name in ["openai", "anthropic", "google", "ollama"]:
-        providers.append({
-            "id": name,
-            "name": name.capitalize(),
-            "models": _get_models_for_provider(name),
-        })
-    return {"success": True, "data": providers}
-
-
-def _get_models_for_provider(provider: str) -> list[dict]:
-    models_map = {
-        "openai": [
-            {"id": "gpt-4o", "name": "GPT-4o"},
-            {"id": "gpt-4o-mini", "name": "GPT-4o Mini"},
-        ],
-        "anthropic": [
-            {"id": "claude-sonnet-4-20250514", "name": "Claude Sonnet 4"},
-            {"id": "claude-3-5-haiku-20241022", "name": "Claude 3.5 Haiku"},
-        ],
-        "google": [
-            {"id": "gemini-2.0-flash", "name": "Gemini 2.0 Flash"},
-        ],
-        "ollama": [
-            {"id": "llama3", "name": "Llama 3"},
-            {"id": "qwen2.5", "name": "Qwen 2.5"},
-        ],
-    }
-    return models_map.get(provider, [])
+    provider_list = [
+        {"id": "openai", "name": "OpenAI", "defaultEndpoint": "https://api.openai.com/v1",
+         "defaultModels": ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo"]},
+        {"id": "gemini", "name": "Google Gemini", "defaultEndpoint": "https://generativelanguage.googleapis.com/v1beta",
+         "defaultModels": ["gemini-2.0-flash", "gemini-1.5-pro", "gemini-2.5-pro-preview-06-05"]},
+        {"id": "claude", "name": "Anthropic Claude", "defaultEndpoint": "https://api.anthropic.com/v1",
+         "defaultModels": ["claude-sonnet-4-20250514", "claude-3-5-haiku-20241022"]},
+        {"id": "deepseek", "name": "DeepSeek", "defaultEndpoint": "https://api.deepseek.com/v1",
+         "defaultModels": ["deepseek-chat", "deepseek-reasoner"]},
+        {"id": "qwen", "name": "Qwen", "defaultEndpoint": "https://dashscope.aliyuncs.com/api/v1",
+         "defaultModels": ["qwen-plus", "qwen-turbo", "qwen-max"]},
+        {"id": "zhipu", "name": "智谱AI", "defaultEndpoint": "https://open.bigmodel.cn/api/paas/v4",
+         "defaultModels": ["glm-4-plus", "glm-4-flash"]},
+        {"id": "ollama", "name": "Ollama (本地)", "defaultEndpoint": "http://localhost:11434/v1",
+         "defaultModels": ["llama3", "qwen2.5", "deepseek-r1"]},
+        {"id": "custom", "name": "自定义", "defaultEndpoint": "",
+         "defaultModels": []},
+    ]
+    return {"success": True, "data": provider_list}
 
 
 # ==================== API 配置管理 ====================
@@ -64,13 +80,13 @@ async def get_default_config(device_id: str, ds=Depends(get_datastore), user=Dep
     row = await ds.query_one(
         "SELECT * FROM ai_configs WHERE device_id=$1 AND is_default=true", [device_id]
     )
-    return {"success": True, "data": row}
+    return {"success": True, "data": _format_config_row(row)}
 
 
 @router.get("/configs")
 async def get_configs(device_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     rows = await ds.query("SELECT * FROM ai_configs WHERE device_id=$1 ORDER BY created_at DESC", [device_id])
-    return {"success": True, "data": rows}
+    return {"success": True, "data": [_format_config_row(r) for r in rows]}
 
 
 @router.get("/configs/{config_id}")
@@ -78,7 +94,7 @@ async def get_config_by_id(device_id: str, config_id: str, ds=Depends(get_datast
     row = await ds.query_one("SELECT * FROM ai_configs WHERE id=$1 AND device_id=$2", [config_id, device_id])
     if not row:
         raise HTTPException(404, "Config not found")
-    return {"success": True, "data": row}
+    return {"success": True, "data": _format_config_row(row)}
 
 
 @router.post("/configs")
@@ -88,15 +104,19 @@ async def create_config(device_id: str, request: Request, ds=Depends(get_datasto
     provider = body.get("provider", "openai")
     model = body.get("model", "")
     api_key = body.get("apiKey", "")
-    base_url = body.get("baseUrl", "")
+    base_url = body.get("endpoint") or body.get("baseUrl") or ""
     name = body.get("name", f"{provider} config")
+    is_default = bool(body.get("isDefault", False))
+    # 如果设为默认，先取消其他默认
+    if is_default:
+        await ds.execute("UPDATE ai_configs SET is_default=false WHERE device_id=$1", [device_id])
     await ds.execute(
         "INSERT INTO ai_configs (id, device_id, name, provider, model, api_key, base_url, is_default) "
         "VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
-        (config_id, device_id, name, provider, model, api_key, base_url, False),
+        (config_id, device_id, name, provider, model, api_key, base_url, is_default),
     )
     row = await ds.query_one("SELECT * FROM ai_configs WHERE id=$1", [config_id])
-    return {"success": True, "data": row}
+    return {"success": True, "data": _format_config_row(row)}
 
 
 @router.put("/configs/{config_id}")
@@ -108,11 +128,11 @@ async def update_config(device_id: str, config_id: str, request: Request, ds=Dep
     sets = []
     params: list[Any] = []
     idx = 1
-    allowed = {"name", "provider", "model", "api_key", "apiKey", "base_url", "baseUrl", "temperature", "max_tokens"}
-    col_map = {"apiKey": "api_key", "baseUrl": "base_url"}
+    allowed_cols = {"name", "provider", "model", "api_key", "base_url", "temperature", "max_tokens", "is_default"}
+    col_map = {"apiKey": "api_key", "baseUrl": "base_url", "endpoint": "base_url", "isDefault": "is_default"}
     for k, v in body.items():
         col = col_map.get(k, k)
-        if col in allowed or k in allowed:
+        if col in allowed_cols:
             sets.append(f"{col} = ${idx}")
             params.append(v)
             idx += 1
@@ -120,7 +140,7 @@ async def update_config(device_id: str, config_id: str, request: Request, ds=Dep
         params.append(config_id)
         await ds.execute(f"UPDATE ai_configs SET {', '.join(sets)} WHERE id = ${idx}", tuple(params))
     row = await ds.query_one("SELECT * FROM ai_configs WHERE id=$1", [config_id])
-    return {"success": True, "data": row}
+    return {"success": True, "data": _format_config_row(row)}
 
 
 @router.delete("/configs/{config_id}")
@@ -306,7 +326,7 @@ async def get_script_history(device_id: str, ds=Depends(get_datastore), user=Dep
     rows = await ds.query(
         "SELECT * FROM script_history WHERE device_id=$1 ORDER BY timestamp DESC LIMIT 100", [device_id]
     )
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows or [])}
 
 
 @router.delete("/scripts/history/session/{session_id}")
@@ -331,13 +351,13 @@ async def search_sessions(device_id: str, q: str = Query(""), ds=Depends(get_dat
         )
     else:
         rows = await ds.query("SELECT * FROM chat_sessions WHERE device_id=$1 ORDER BY updated_at DESC", [device_id])
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows or [])}
 
 
 @router.get("/sessions")
 async def get_sessions(device_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     rows = await ds.query("SELECT * FROM chat_sessions WHERE device_id=$1 ORDER BY updated_at DESC", [device_id])
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows or [])}
 
 
 @router.post("/sessions")
@@ -350,7 +370,7 @@ async def create_session(device_id: str, request: Request, ds=Depends(get_datast
         title=body.get("title", ""),
         mode=body.get("mode", "general"),
     )
-    return {"success": True, "data": session}
+    return {"success": True, "data": snake_to_camel(session)}
 
 
 @router.delete("/sessions")
@@ -375,8 +395,8 @@ async def get_session_by_id(device_id: str, session_id: str, ds=Depends(get_data
     messages = await ds.query(
         "SELECT * FROM chat_messages WHERE session_id=$1 ORDER BY created_at ASC", [session_id]
     )
-    row["messages"] = messages
-    return {"success": True, "data": row}
+    row["messages"] = snake_to_camel_list(messages or [])
+    return {"success": True, "data": snake_to_camel(row)}
 
 
 @router.put("/sessions/{session_id}")
@@ -387,7 +407,7 @@ async def update_session(device_id: str, session_id: str, request: Request, ds=D
     result = await svc.update_session(session_id, body)
     if not result:
         raise HTTPException(404, "Session not found")
-    return {"success": True, "data": result}
+    return {"success": True, "data": snake_to_camel(result)}
 
 
 @router.delete("/sessions/{session_id}")
@@ -411,7 +431,7 @@ async def rename_session(device_id: str, session_id: str, request: Request, ds=D
     result = await svc.update_session(session_id, {"title": title})
     if not result:
         raise HTTPException(404, "Session not found")
-    return {"success": True, "data": result}
+    return {"success": True, "data": snake_to_camel(result)}
 
 
 @router.post("/sessions/{session_id}/clear")
@@ -450,7 +470,7 @@ async def duplicate_session(device_id: str, session_id: str, ds=Depends(get_data
     messages = await ds.query("SELECT role, content FROM chat_messages WHERE session_id=$1 ORDER BY created_at ASC", [session_id])
     for msg in messages:
         await svc.add_message(new_session["id"], msg["role"], msg["content"])
-    return {"success": True, "data": new_session}
+    return {"success": True, "data": snake_to_camel(new_session)}
 
 
 # ==================== 会话配置管理 ====================
@@ -505,7 +525,7 @@ async def get_context_messages(device_id: str, session_id: str, ds=Depends(get_d
     messages = await ds.query(
         "SELECT * FROM chat_messages WHERE session_id=$1 ORDER BY created_at ASC", [session_id]
     )
-    return {"success": True, "data": messages}
+    return {"success": True, "data": snake_to_camel_list(messages or [])}
 
 
 # ==================== 对话收藏管理 ====================
@@ -521,7 +541,7 @@ async def get_sessions_with_collections(device_id: str, ds=Depends(get_datastore
            ORDER BY s.updated_at DESC""",
         [device_id],
     )
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows or [])}
 
 
 @router.post("/sessions/{session_id}/messages/{message_id}/collect")
@@ -549,7 +569,7 @@ async def get_collected_messages(device_id: str, session_id: str, ds=Depends(get
     rows = await ds.query(
         "SELECT * FROM chat_messages WHERE session_id=$1 AND collected=true ORDER BY created_at ASC", [session_id]
     )
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows or [])}
 
 
 @router.get("/sessions/{session_id}/collected/export")

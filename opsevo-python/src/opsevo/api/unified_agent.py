@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from opsevo.api.deps import get_current_user, get_datastore
+from opsevo.api.utils import snake_to_camel, snake_to_camel_list
 from opsevo.models.ai import ChatRequest
 
 router = APIRouter(
@@ -117,7 +118,7 @@ async def get_sessions(
             "SELECT * FROM chat_sessions WHERE device_id=$1 ORDER BY updated_at DESC",
             [device_id],
         )
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows or [])}
 
 
 @router.post("/sessions")
@@ -135,7 +136,7 @@ async def create_session(
         title=body.get("title", ""),
         mode=body.get("mode", "standard"),
     )
-    return {"success": True, "data": session}
+    return {"success": True, "data": snake_to_camel(session)}
 
 
 @router.get("/sessions-with-collections")
@@ -154,7 +155,7 @@ async def get_sessions_with_collections(
            ORDER BY s.updated_at DESC""",
         [device_id],
     )
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows or [])}
 
 
 @router.get("/sessions/{session_id}")
@@ -174,8 +175,8 @@ async def get_session(
         "SELECT * FROM chat_messages WHERE session_id=$1 ORDER BY created_at ASC",
         [session_id],
     )
-    row["messages"] = messages
-    return {"success": True, "data": row}
+    row["messages"] = snake_to_camel_list(messages or [])
+    return {"success": True, "data": snake_to_camel(row)}
 
 
 @router.put("/sessions/{session_id}")
@@ -192,7 +193,7 @@ async def update_session(
     result = await svc.update_session(session_id, body)
     if not result:
         raise HTTPException(404, "Session not found")
-    return {"success": True, "data": result}
+    return {"success": True, "data": snake_to_camel(result)}
 
 
 @router.delete("/sessions/{session_id}")
@@ -321,7 +322,7 @@ async def get_history(
     base += f" ORDER BY timestamp DESC LIMIT ${idx} OFFSET ${idx+1}"
     params.extend([limit, offset])
     rows = await ds.query(base, params)
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows or [])}
 
 
 @router.get("/history/stats")
@@ -418,7 +419,7 @@ async def get_collected_messages(
         "SELECT * FROM chat_messages WHERE session_id=$1 AND collected=true ORDER BY created_at ASC",
         [session_id],
     )
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows or [])}
 
 
 @router.get("/sessions/{session_id}/collected/export")

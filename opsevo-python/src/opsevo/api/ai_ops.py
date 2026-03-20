@@ -21,6 +21,7 @@ from fastapi.responses import StreamingResponse
 
 from .deps import get_current_user, get_datastore, get_device_id, get_feature_flag_manager, get_tracing_service
 from .dependencies import get_device_orchestrator
+from .utils import snake_to_camel, snake_to_camel_list, camel_to_snake_keys
 
 router = APIRouter(prefix="/api/ai-ops", tags=["ai-ops"])
 
@@ -42,7 +43,7 @@ async def get_latest_metrics(device_id: str | None = Depends(get_device_id), ds=
         rows = await ds.query(
             "SELECT * FROM system_metrics WHERE device_id=$1 ORDER BY timestamp DESC LIMIT 1", [device_id]
         )
-        return {"success": True, "data": rows[0] if rows else None}
+        return {"success": True, "data": snake_to_camel(rows[0]) if rows else None}
     # 全局模式：返回每台设备的最新指标（SQLite 兼容）
     rows = await ds.query(
         "SELECT m.* FROM system_metrics m "
@@ -51,7 +52,7 @@ async def get_latest_metrics(device_id: str | None = Depends(get_device_id), ds=
         "ON m.device_id = latest.device_id AND m.timestamp = latest.max_ts "
         "ORDER BY m.device_id"
     )
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows)}
 
 
 @router.get("/metrics/history")
@@ -63,7 +64,7 @@ async def get_metrics_history(
         f"SELECT * FROM system_metrics WHERE device_id=$1 AND timestamp > NOW() - INTERVAL '{int(hours)} hours' ORDER BY timestamp",
         [device_id],
     )
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows)}
 
 
 @router.get("/metrics/config")
@@ -112,7 +113,7 @@ async def get_traffic_history(
             f"SELECT * FROM traffic_metrics WHERE device_id=$1 AND timestamp > NOW() - INTERVAL '{int(hours)} hours' ORDER BY timestamp",
             [device_id],
         )
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows)}
 
 
 @router.get("/metrics/traffic/interfaces")
@@ -121,7 +122,7 @@ async def get_traffic_interfaces(device_id: str | None = Depends(get_device_id),
         "SELECT DISTINCT interface, MAX(timestamp) as last_seen FROM traffic_metrics WHERE device_id=$1 GROUP BY interface",
         [device_id],
     )
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows)}
 
 
 @router.get("/metrics/traffic/status")
@@ -153,7 +154,7 @@ async def get_rate_statistics(device_id: str | None = Depends(get_device_id), ds
         "SELECT COUNT(*) as samples, AVG(rx_rate) as avg_rx, AVG(tx_rate) as avg_tx FROM traffic_metrics WHERE device_id=$1 AND timestamp > NOW() - INTERVAL '1 hour'",
         [device_id],
     )
-    return {"success": True, "data": row or {}}
+    return {"success": True, "data": snake_to_camel(row) or {}}
 
 
 @router.get("/metrics/traffic/history-with-status")
@@ -169,7 +170,7 @@ async def get_traffic_history_with_status(
     base += f" AND timestamp > NOW() - INTERVAL '{int(hours)} hours' ORDER BY timestamp"
     rows = await ds.query(base, params)
     sched = _c(request).scheduler()
-    return {"success": True, "data": rows, "collectionActive": sched.is_running}
+    return {"success": True, "data": snake_to_camel_list(rows), "collectionActive": sched.is_running}
 
 
 @router.get("/parallel-execution/metrics")
@@ -240,7 +241,9 @@ def _rule_to_dict(rule) -> dict:
         "id": rule.id, "name": rule.name, "metric": rule.metric,
         "operator": rule.operator, "threshold": rule.threshold,
         "severity": rule.severity, "enabled": rule.enabled,
-        "device_id": rule.device_id, "cooldown_ms": rule.cooldown_ms,
+        "deviceId": rule.device_id, "cooldownMs": rule.cooldown_ms,
+        "autoResponse": rule.auto_response,
+        "createdAt": rule.created_at, "updatedAt": rule.updated_at,
     }
 
 
@@ -262,7 +265,7 @@ async def get_alert_events(
         severity=severity, status=status, source=source,
         page=page, limit=limit,
     )
-    return {"success": True, "data": result["data"], "total": result["total"], "page": page, "limit": limit}
+    return {"success": True, "data": snake_to_camel_list(result["data"]), "total": result["total"], "page": page, "limit": limit}
 
 
 @router.get("/alerts/events/active")
@@ -284,7 +287,7 @@ async def get_unified_events(
         now_ms - 86400_000 * 7, now_ms, device_id,
         page=page, limit=limit,
     )
-    return {"success": True, "data": result["data"], "total": result["total"]}
+    return {"success": True, "data": snake_to_camel_list(result["data"]), "total": result["total"]}
 
 
 @router.get("/alerts/events/unified/active")
@@ -299,7 +302,7 @@ async def get_alert_event_by_id(device_id: str | None = Depends(get_device_id), 
     row = await ds.query_one("SELECT * FROM alert_events WHERE id=$1", [alert_id])
     if not row:
         raise HTTPException(404, "Alert event not found")
-    return {"success": True, "data": row}
+    return {"success": True, "data": snake_to_camel(row)}
 
 
 @router.post("/alerts/events/{alert_id}/resolve")
@@ -345,7 +348,7 @@ async def get_alert_analysis(device_id: str | None = Depends(get_device_id), ale
     if cached:
         return {"success": True, "data": {"analysis": cached, "cached": True}}
     row = await ds.query_one("SELECT * FROM alert_analyses WHERE alert_id=$1", [alert_id])
-    return {"success": True, "data": row}
+    return {"success": True, "data": snake_to_camel(row)}
 
 
 @router.post("/analysis/{alert_id}/refresh")
@@ -368,7 +371,7 @@ async def get_alert_timeline(device_id: str | None = Depends(get_device_id), ale
     rows = await ds.query(
         "SELECT * FROM alert_timeline WHERE alert_id=$1 ORDER BY timestamp ASC", [alert_id]
     )
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows)}
 
 
 @router.get("/analysis/{alert_id}/related")
@@ -381,13 +384,13 @@ async def get_related_alerts(device_id: str | None = Depends(get_device_id), ale
         "SELECT * FROM alert_events WHERE rule_id=$1 AND id!=$2 AND device_id=$3 ORDER BY timestamp DESC LIMIT 10",
         [rule_id, alert_id, device_id],
     )
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows)}
 
 
 @router.get("/remediation/{alert_id}")
 async def get_remediation_plan(device_id: str | None = Depends(get_device_id), alert_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     row = await ds.query_one("SELECT * FROM remediation_executions WHERE alert_id=$1 ORDER BY timestamp DESC LIMIT 1", [alert_id])
-    return {"success": True, "data": row}
+    return {"success": True, "data": snake_to_camel(row)}
 
 
 async def _run_remediation(device_id: str, alert_id: str, request: Request, ds) -> dict:
@@ -432,7 +435,7 @@ async def execute_remediation_rollback(device_id: str | None = Depends(get_devic
 async def get_scheduler_tasks(device_id: str | None = Depends(get_device_id), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     sched = _c(request).scheduler()
     tasks = sched.get_tasks()
-    return {"success": True, "data": tasks}
+    return {"success": True, "data": snake_to_camel_list(tasks)}
 
 
 @router.get("/scheduler/tasks/{task_id}")
@@ -442,7 +445,7 @@ async def get_scheduler_task_by_id(device_id: str | None = Depends(get_device_id
     task = next((t for t in tasks if t["id"] == task_id), None)
     if not task:
         raise HTTPException(404, "Scheduler task not found")
-    return {"success": True, "data": task}
+    return {"success": True, "data": snake_to_camel(task)}
 
 
 @router.post("/scheduler/tasks")
@@ -504,7 +507,7 @@ async def get_scheduler_executions(device_id: str | None = Depends(get_device_id
     rows = await ds.query(
         "SELECT * FROM scheduler_executions WHERE device_id=$1 ORDER BY timestamp DESC LIMIT 50", [device_id]
     )
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows)}
 
 
 # ---------------------------------------------------------------------------
@@ -513,7 +516,7 @@ async def get_scheduler_executions(device_id: str | None = Depends(get_device_id
 @router.get("/snapshots")
 async def get_snapshots(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     rows = await ds.query("SELECT * FROM config_snapshots WHERE device_id=$1 ORDER BY created_at DESC", [device_id])
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows)}
 
 
 @router.get("/snapshots/diff")
@@ -530,7 +533,7 @@ async def get_latest_diff(device_id: str | None = Depends(get_device_id), ds=Dep
     rows = await ds.query("SELECT * FROM config_snapshots WHERE device_id=$1 ORDER BY created_at DESC LIMIT 2", [device_id])
     if len(rows) < 2:
         return {"success": True, "data": None}
-    return {"success": True, "data": {"older": rows[1], "newer": rows[0]}}
+    return {"success": True, "data": {"older": snake_to_camel(rows[1]), "newer": snake_to_camel(rows[0])}}
 
 
 @router.get("/snapshots/timeline")
@@ -538,7 +541,7 @@ async def get_change_timeline(device_id: str | None = Depends(get_device_id), ds
     rows = await ds.query(
         "SELECT id, name, created_at FROM config_snapshots WHERE device_id=$1 ORDER BY created_at DESC LIMIT 50", [device_id]
     )
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows)}
 
 
 @router.get("/snapshots/{snapshot_id}")
@@ -546,7 +549,7 @@ async def get_snapshot_by_id(device_id: str | None = Depends(get_device_id), sna
     row = await ds.query_one("SELECT * FROM config_snapshots WHERE id=$1 AND device_id=$2", [snapshot_id, device_id])
     if not row:
         raise HTTPException(404, "Snapshot not found")
-    return {"success": True, "data": row}
+    return {"success": True, "data": snake_to_camel(row)}
 
 
 @router.post("/snapshots")
@@ -601,7 +604,7 @@ async def restore_snapshot(device_id: str | None = Depends(get_device_id), snaps
 @router.get("/reports")
 async def get_reports(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     rows = await ds.query("SELECT * FROM reports WHERE device_id=$1 ORDER BY created_at DESC", [device_id])
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows)}
 
 
 @router.get("/reports/{report_id}")
@@ -609,7 +612,7 @@ async def get_report_by_id(device_id: str | None = Depends(get_device_id), repor
     row = await ds.query_one("SELECT * FROM reports WHERE id=$1 AND device_id=$2", [report_id, device_id])
     if not row:
         raise HTTPException(404, "Report not found")
-    return {"success": True, "data": row}
+    return {"success": True, "data": snake_to_camel(row)}
 
 
 @router.post("/reports/generate")
@@ -644,7 +647,7 @@ async def export_report(device_id: str | None = Depends(get_device_id), report_i
     row = await ds.query_one("SELECT * FROM reports WHERE id=$1 AND device_id=$2", [report_id, device_id])
     if not row:
         raise HTTPException(404, "Report not found")
-    return {"success": True, "data": row}
+    return {"success": True, "data": snake_to_camel(row)}
 
 
 @router.delete("/reports/{report_id}")
@@ -659,7 +662,7 @@ async def delete_report(device_id: str | None = Depends(get_device_id), report_i
 @router.get("/patterns")
 async def get_fault_patterns(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     rows = await ds.query("SELECT * FROM fault_patterns WHERE device_id=$1 ORDER BY created_at DESC", [device_id])
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows)}
 
 
 @router.get("/patterns/{pattern_id}")
@@ -667,25 +670,25 @@ async def get_fault_pattern_by_id(device_id: str | None = Depends(get_device_id)
     row = await ds.query_one("SELECT * FROM fault_patterns WHERE id=$1 AND device_id=$2", [pattern_id, device_id])
     if not row:
         raise HTTPException(404, "Fault pattern not found")
-    return {"success": True, "data": row}
+    return {"success": True, "data": snake_to_camel(row)}
 
 
 @router.post("/patterns")
 async def create_fault_pattern(device_id: str | None = Depends(get_device_id), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    body = await request.json()
+    body = camel_to_snake_keys(await request.json())
     pid = str(uuid.uuid4())
     await ds.execute(
         "INSERT INTO fault_patterns (id, device_id, name, pattern, severity, auto_heal, created_at) VALUES ($1,$2,$3,$4,$5,$6,NOW())",
-        [pid, device_id, body.get("name", ""), json.dumps(body.get("pattern", {})), body.get("severity", "warning"), body.get("autoHeal", False)],
+        [pid, device_id, body.get("name", ""), json.dumps(body.get("pattern", {})), body.get("severity", "warning"), body.get("auto_heal", False)],
     )
     row = await ds.query_one("SELECT * FROM fault_patterns WHERE id=$1", [pid])
-    return {"success": True, "data": row}
+    return {"success": True, "data": snake_to_camel(row)}
 
 
 @router.put("/patterns/{pattern_id}")
 async def update_fault_pattern(device_id: str | None = Depends(get_device_id), pattern_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     _ALLOWED = {"name", "description", "severity", "pattern", "enabled", "auto_heal"}
-    body = await request.json()
+    body = camel_to_snake_keys(await request.json())
     sets, params, idx = [], [], 1
     for k, v in body.items():
         if k not in _ALLOWED:
@@ -697,7 +700,7 @@ async def update_fault_pattern(device_id: str | None = Depends(get_device_id), p
         params.append(pattern_id)
         await ds.execute(f"UPDATE fault_patterns SET {', '.join(sets)} WHERE id = ${idx}", tuple(params))
     row = await ds.query_one("SELECT * FROM fault_patterns WHERE id=$1", [pattern_id])
-    return {"success": True, "data": row}
+    return {"success": True, "data": snake_to_camel(row)}
 
 
 @router.delete("/patterns/{pattern_id}")
@@ -724,7 +727,7 @@ async def disable_auto_heal(device_id: str | None = Depends(get_device_id), patt
 @router.get("/remediations")
 async def get_remediations(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     rows = await ds.query("SELECT * FROM remediation_executions WHERE device_id=$1 ORDER BY timestamp DESC", [device_id])
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows)}
 
 
 @router.get("/remediations/{remediation_id}")
@@ -732,7 +735,7 @@ async def get_remediation_by_id(device_id: str | None = Depends(get_device_id), 
     row = await ds.query_one("SELECT * FROM remediation_executions WHERE id=$1", [remediation_id])
     if not row:
         raise HTTPException(404, "Remediation not found")
-    return {"success": True, "data": row}
+    return {"success": True, "data": snake_to_camel(row)}
 
 
 @router.post("/remediations/{remediation_id}/execute")
@@ -749,7 +752,7 @@ async def execute_fault_remediation(device_id: str | None = Depends(get_device_i
 @router.get("/channels")
 async def get_notification_channels(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     rows = await ds.query("SELECT * FROM notification_channels WHERE device_id=$1 ORDER BY created_at DESC", [device_id])
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows)}
 
 
 @router.get("/channels/{channel_id}")
@@ -757,7 +760,7 @@ async def get_notification_channel_by_id(device_id: str | None = Depends(get_dev
     row = await ds.query_one("SELECT * FROM notification_channels WHERE id=$1 AND device_id=$2", [channel_id, device_id])
     if not row:
         raise HTTPException(404, "Channel not found")
-    return {"success": True, "data": row}
+    return {"success": True, "data": snake_to_camel(row)}
 
 
 @router.post("/channels")
@@ -769,7 +772,7 @@ async def create_notification_channel(device_id: str | None = Depends(get_device
         [cid, device_id, body.get("name", ""), body.get("type", "webhook"), json.dumps(body.get("config", {})), body.get("enabled", True)],
     )
     row = await ds.query_one("SELECT * FROM notification_channels WHERE id=$1", [cid])
-    return {"success": True, "data": row}
+    return {"success": True, "data": snake_to_camel(row)}
 
 
 @router.put("/channels/{channel_id}")
@@ -789,7 +792,7 @@ async def update_notification_channel(device_id: str | None = Depends(get_device
         params.append(channel_id)
         await ds.execute(f"UPDATE notification_channels SET {', '.join(sets)} WHERE id = ${idx}", tuple(params))
     row = await ds.query_one("SELECT * FROM notification_channels WHERE id=$1", [channel_id])
-    return {"success": True, "data": row}
+    return {"success": True, "data": snake_to_camel(row)}
 
 
 @router.delete("/channels/{channel_id}")
@@ -809,7 +812,7 @@ async def test_notification_channel(device_id: str | None = Depends(get_device_i
 @router.get("/channels/{channel_id}/pending")
 async def get_pending_notifications(device_id: str | None = Depends(get_device_id), channel_id: str = "", ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     rows = await ds.query("SELECT * FROM notifications WHERE device_id=$1 AND channel_id=$2 AND status='pending' ORDER BY created_at DESC", [device_id, channel_id])
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows)}
 
 
 @router.get("/notifications/history")
@@ -831,7 +834,7 @@ async def get_notification_history(device_id: str | None = Depends(get_device_id
     sql += f" ORDER BY created_at DESC LIMIT ${idx}"
     params.append(limit)
     rows = await ds.query(sql, params)
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows)}
 
 
 # ---------------------------------------------------------------------------
@@ -848,7 +851,7 @@ async def get_audit_logs(
         [device_id, limit, offset],
     )
     count_row = await ds.query_one("SELECT COUNT(*) as total FROM audit_logs WHERE device_id=$1", [device_id])
-    return {"success": True, "data": rows, "total": count_row["total"] if count_row else 0}
+    return {"success": True, "data": snake_to_camel_list(rows), "total": count_row["total"] if count_row else 0}
 
 
 # ---------------------------------------------------------------------------
@@ -938,7 +941,7 @@ async def get_syslog_events(
     offset = (page - 1) * limit
     base += f" ORDER BY timestamp DESC LIMIT {int(limit)} OFFSET {int(offset)}"
     rows = await ds.query(base, params)
-    return {"success": True, "data": rows, "total": total}
+    return {"success": True, "data": snake_to_camel_list(rows), "total": total}
 
 
 @router.get("/syslog/stats")
@@ -971,25 +974,25 @@ async def reset_syslog_stats(device_id: str | None = Depends(get_device_id), req
 @router.get("/filters/maintenance")
 async def get_maintenance_windows(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     rows = await ds.query("SELECT * FROM maintenance_windows WHERE device_id=$1 ORDER BY start_time DESC", [device_id])
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows)}
 
 
 @router.post("/filters/maintenance")
 async def create_maintenance_window(device_id: str | None = Depends(get_device_id), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    body = await request.json()
+    body = camel_to_snake_keys(await request.json())
     mid = str(uuid.uuid4())
     await ds.execute(
         "INSERT INTO maintenance_windows (id, device_id, name, start_time, end_time, filters, created_at) VALUES ($1,$2,$3,$4,$5,$6,NOW())",
-        [mid, device_id, body.get("name", ""), body.get("startTime", 0), body.get("endTime", 0), json.dumps(body.get("filters", {}))],
+        [mid, device_id, body.get("name", ""), body.get("start_time", 0), body.get("end_time", 0), json.dumps(body.get("filters", {}))],
     )
     row = await ds.query_one("SELECT * FROM maintenance_windows WHERE id=$1", [mid])
-    return {"success": True, "data": row}
+    return {"success": True, "data": snake_to_camel(row)}
 
 
 @router.put("/filters/maintenance/{window_id}")
 async def update_maintenance_window(device_id: str | None = Depends(get_device_id), window_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     _ALLOWED = {"name", "start_time", "end_time", "filters", "enabled", "description"}
-    body = await request.json()
+    body = camel_to_snake_keys(await request.json())
     sets, params, idx = [], [], 1
     for k, v in body.items():
         if k not in _ALLOWED:
@@ -1003,7 +1006,7 @@ async def update_maintenance_window(device_id: str | None = Depends(get_device_i
         params.append(window_id)
         await ds.execute(f"UPDATE maintenance_windows SET {', '.join(sets)} WHERE id = ${idx}", tuple(params))
     row = await ds.query_one("SELECT * FROM maintenance_windows WHERE id=$1", [window_id])
-    return {"success": True, "data": row}
+    return {"success": True, "data": snake_to_camel(row)}
 
 
 @router.delete("/filters/maintenance/{window_id}")
@@ -1018,25 +1021,25 @@ async def delete_maintenance_window(device_id: str | None = Depends(get_device_i
 @router.get("/filters/known-issues")
 async def get_known_issues(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     rows = await ds.query("SELECT * FROM known_issues WHERE device_id=$1 ORDER BY created_at DESC", [device_id])
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows)}
 
 
 @router.post("/filters/known-issues")
 async def create_known_issue(device_id: str | None = Depends(get_device_id), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    body = await request.json()
+    body = camel_to_snake_keys(await request.json())
     kid = str(uuid.uuid4())
     await ds.execute(
         "INSERT INTO known_issues (id, device_id, title, description, pattern, auto_resolve, created_at) VALUES ($1,$2,$3,$4,$5,$6,NOW())",
-        [kid, device_id, body.get("title", ""), body.get("description", ""), json.dumps(body.get("pattern", {})), body.get("autoResolve", False)],
+        [kid, device_id, body.get("title", ""), body.get("description", ""), json.dumps(body.get("pattern", {})), body.get("auto_resolve", False)],
     )
     row = await ds.query_one("SELECT * FROM known_issues WHERE id=$1", [kid])
-    return {"success": True, "data": row}
+    return {"success": True, "data": snake_to_camel(row)}
 
 
 @router.put("/filters/known-issues/{issue_id}")
 async def update_known_issue(device_id: str | None = Depends(get_device_id), issue_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     _ALLOWED = {"name", "title", "description", "pattern", "severity", "enabled", "auto_resolve"}
-    body = await request.json()
+    body = camel_to_snake_keys(await request.json())
     sets, params, idx = [], [], 1
     for k, v in body.items():
         if k not in _ALLOWED:
@@ -1050,7 +1053,7 @@ async def update_known_issue(device_id: str | None = Depends(get_device_id), iss
         params.append(issue_id)
         await ds.execute(f"UPDATE known_issues SET {', '.join(sets)} WHERE id = ${idx}", tuple(params))
     row = await ds.query_one("SELECT * FROM known_issues WHERE id=$1", [issue_id])
-    return {"success": True, "data": row}
+    return {"success": True, "data": snake_to_camel(row)}
 
 
 @router.delete("/filters/known-issues/{issue_id}")
@@ -1065,7 +1068,7 @@ async def delete_known_issue(device_id: str | None = Depends(get_device_id), iss
 @router.get("/decisions/rules")
 async def get_decision_rules(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     rows = await ds.query("SELECT * FROM decision_rules WHERE device_id=$1 ORDER BY created_at DESC", [device_id])
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows)}
 
 
 @router.get("/decisions/rules/{rule_id}")
@@ -1073,7 +1076,7 @@ async def get_decision_rule_by_id(device_id: str | None = Depends(get_device_id)
     row = await ds.query_one("SELECT * FROM decision_rules WHERE id=$1 AND device_id=$2", [rule_id, device_id])
     if not row:
         raise HTTPException(404, "Decision rule not found")
-    return {"success": True, "data": row}
+    return {"success": True, "data": snake_to_camel(row)}
 
 
 @router.post("/decisions/rules")
@@ -1086,7 +1089,7 @@ async def create_decision_rule(device_id: str | None = Depends(get_device_id), r
          json.dumps(body.get("action", {})), body.get("priority", 0), body.get("enabled", True)],
     )
     row = await ds.query_one("SELECT * FROM decision_rules WHERE id=$1", [rid])
-    return {"success": True, "data": row}
+    return {"success": True, "data": snake_to_camel(row)}
 
 
 @router.put("/decisions/rules/{rule_id}")
@@ -1106,7 +1109,7 @@ async def update_decision_rule(device_id: str | None = Depends(get_device_id), r
         params.append(rule_id)
         await ds.execute(f"UPDATE decision_rules SET {', '.join(sets)} WHERE id = ${idx}", tuple(params))
     row = await ds.query_one("SELECT * FROM decision_rules WHERE id=$1", [rule_id])
-    return {"success": True, "data": row}
+    return {"success": True, "data": snake_to_camel(row)}
 
 
 @router.delete("/decisions/rules/{rule_id}")
@@ -1125,7 +1128,7 @@ async def get_decision_history(
         "SELECT * FROM decision_history WHERE device_id=$1 ORDER BY timestamp DESC LIMIT $2 OFFSET $3",
         [device_id, limit, offset],
     )
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows)}
 
 
 # ---------------------------------------------------------------------------
@@ -1164,7 +1167,7 @@ async def get_rules_needing_review(device_id: str | None = Depends(get_device_id
         "WHERE device_id=$1 AND rating <= 2 GROUP BY rule_id HAVING COUNT(*) >= 3 ORDER BY negative_count DESC",
         [device_id],
     )
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows)}
 
 
 # ---------------------------------------------------------------------------
@@ -1339,7 +1342,7 @@ async def get_health_trend(device_id: str | None = Depends(get_device_id), hours
         f"SELECT * FROM health_checks WHERE device_id=$1 AND timestamp > NOW() - INTERVAL '{int(hours)} hours' ORDER BY timestamp",
         [device_id],
     )
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows)}
 
 
 @router.get("/health/{service_name}")
@@ -1389,7 +1392,7 @@ async def list_iterations(device_id: str | None = Depends(get_device_id), ds=Dep
         "SELECT * FROM iterations WHERE device_id=$1 AND status IN ('running','pending') ORDER BY created_at DESC",
         [device_id],
     )
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows)}
 
 
 @router.get("/iterations/{iteration_id}")
@@ -1397,7 +1400,7 @@ async def get_iteration_state(device_id: str | None = Depends(get_device_id), it
     row = await ds.query_one("SELECT * FROM iterations WHERE id=$1 AND device_id=$2", [iteration_id, device_id])
     if not row:
         raise HTTPException(404, "Iteration not found")
-    return {"success": True, "data": row}
+    return {"success": True, "data": snake_to_camel(row)}
 
 
 @router.post("/iterations/{iteration_id}/abort")
@@ -1411,7 +1414,7 @@ async def get_evaluation_report(device_id: str | None = Depends(get_device_id), 
     row = await ds.query_one("SELECT * FROM evaluation_reports WHERE plan_id=$1", [plan_id])
     if not row:
         raise HTTPException(404, "Evaluation report not found")
-    return {"success": True, "data": row}
+    return {"success": True, "data": snake_to_camel(row)}
 
 
 @router.get("/learning")
@@ -1433,7 +1436,7 @@ async def query_learning(
     offset = (page - 1) * limit
     base += f" ORDER BY created_at DESC LIMIT {int(limit)} OFFSET {int(offset)}"
     rows = await ds.query(base, params)
-    return {"success": True, "data": rows, "total": total}
+    return {"success": True, "data": snake_to_camel_list(rows), "total": total}
 
 
 @router.get("/stats/critic")
@@ -1619,7 +1622,7 @@ async def get_tool_stats(device_id: str | None = Depends(get_device_id), ds=Depe
         "FROM tool_usage WHERE device_id=$1 GROUP BY tool_name ORDER BY usage_count DESC",
         [device_id],
     )
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows)}
 
 
 @router.get("/anomaly/predictions")
@@ -1627,7 +1630,7 @@ async def get_anomaly_predictions(device_id: str | None = Depends(get_device_id)
     rows = await ds.query(
         "SELECT * FROM anomaly_predictions WHERE device_id=$1 ORDER BY created_at DESC LIMIT 20", [device_id]
     )
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows)}
 
 
 # ---------------------------------------------------------------------------
@@ -1778,7 +1781,7 @@ async def get_pending_intents(device_id: str | None = Depends(get_device_id), re
         "SELECT * FROM brain_intents WHERE device_id=$1 AND status='pending' ORDER BY created_at DESC",
         [device_id],
     )
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows)}
 
 
 @router.post("/intents/grant/{intent_id}")
@@ -1830,7 +1833,7 @@ async def get_perception_stats(request: Request = None, user=Depends(get_current
 @router.get("/syslog/sources")
 async def get_syslog_sources(ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     rows = await ds.query("SELECT * FROM syslog_sources ORDER BY created_at DESC")
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows)}
 
 
 @router.post("/syslog/sources")
@@ -1842,7 +1845,7 @@ async def create_syslog_source(request: Request = None, ds=Depends(get_datastore
         [sid, body.get("name", ""), body.get("host", ""), body.get("port", 514), body.get("protocol", "udp")],
     )
     row = await ds.query_one("SELECT * FROM syslog_sources WHERE id=$1", [sid])
-    return {"success": True, "data": row}
+    return {"success": True, "data": snake_to_camel(row)}
 
 
 @router.put("/syslog/sources/{source_id}")
@@ -1862,7 +1865,7 @@ async def update_syslog_source(source_id: str = Path(...), request: Request = No
     row = await ds.query_one("SELECT * FROM syslog_sources WHERE id=$1", [source_id])
     if not row:
         raise HTTPException(404, "Syslog source not found")
-    return {"success": True, "data": row}
+    return {"success": True, "data": snake_to_camel(row)}
 
 
 @router.delete("/syslog/sources/{source_id}")
@@ -1874,7 +1877,7 @@ async def delete_syslog_source(source_id: str = Path(...), ds=Depends(get_datast
 @router.get("/syslog/rules")
 async def get_syslog_rules(ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     rows = await ds.query("SELECT * FROM syslog_rules ORDER BY priority ASC")
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows)}
 
 
 @router.post("/syslog/rules")
@@ -1886,7 +1889,7 @@ async def create_syslog_rule(request: Request = None, ds=Depends(get_datastore),
         [rid, body.get("name", ""), body.get("pattern", ""), json.dumps(body.get("action", {})), body.get("priority", 0)],
     )
     row = await ds.query_one("SELECT * FROM syslog_rules WHERE id=$1", [rid])
-    return {"success": True, "data": row}
+    return {"success": True, "data": snake_to_camel(row)}
 
 
 @router.put("/syslog/rules/{rule_id}")
@@ -1908,7 +1911,7 @@ async def update_syslog_rule(rule_id: str = Path(...), request: Request = None, 
     row = await ds.query_one("SELECT * FROM syslog_rules WHERE id=$1", [rule_id])
     if not row:
         raise HTTPException(404, "Syslog rule not found")
-    return {"success": True, "data": row}
+    return {"success": True, "data": snake_to_camel(row)}
 
 
 @router.delete("/syslog/rules/{rule_id}")
@@ -1984,7 +1987,7 @@ async def test_syslog_rule(rule_id: str = Path(...), request: Request = None, ds
 @router.get("/syslog/filters")
 async def get_syslog_filters(ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     rows = await ds.query("SELECT * FROM syslog_filters ORDER BY created_at DESC")
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows)}
 
 
 @router.post("/syslog/filters")
@@ -1996,7 +1999,7 @@ async def create_syslog_filter(request: Request = None, ds=Depends(get_datastore
         [fid, body.get("name", ""), json.dumps(body.get("condition", {})), body.get("action", "drop")],
     )
     row = await ds.query_one("SELECT * FROM syslog_filters WHERE id=$1", [fid])
-    return {"success": True, "data": row}
+    return {"success": True, "data": snake_to_camel(row)}
 
 
 # ---------------------------------------------------------------------------
@@ -2015,7 +2018,7 @@ async def get_snmp_trap_status(request: Request = None, user=Depends(get_current
 @router.get("/snmp-trap/oid-mappings")
 async def get_oid_mappings(ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     rows = await ds.query("SELECT * FROM snmp_oid_mappings ORDER BY oid ASC")
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows)}
 
 
 @router.post("/snmp-trap/oid-mappings")
@@ -2027,7 +2030,7 @@ async def create_oid_mapping(request: Request = None, ds=Depends(get_datastore),
         [mid, body.get("oid", ""), body.get("name", ""), body.get("severity", "info"), body.get("description", "")],
     )
     row = await ds.query_one("SELECT * FROM snmp_oid_mappings WHERE id=$1", [mid])
-    return {"success": True, "data": row}
+    return {"success": True, "data": snake_to_camel(row)}
 
 
 @router.put("/snmp-trap/oid-mappings/{mapping_id}")
@@ -2047,7 +2050,7 @@ async def update_oid_mapping(mapping_id: str = Path(...), request: Request = Non
     row = await ds.query_one("SELECT * FROM snmp_oid_mappings WHERE id=$1", [mapping_id])
     if not row:
         raise HTTPException(404, "OID mapping not found")
-    return {"success": True, "data": row}
+    return {"success": True, "data": snake_to_camel(row)}
 
 
 @router.delete("/snmp-trap/oid-mappings/{mapping_id}")
@@ -2059,7 +2062,7 @@ async def delete_oid_mapping(mapping_id: str = Path(...), ds=Depends(get_datasto
 @router.get("/snmp-trap/v3-credentials")
 async def get_v3_credentials(ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     rows = await ds.query("SELECT * FROM snmp_v3_credentials ORDER BY created_at DESC")
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows)}
 
 
 @router.post("/snmp-trap/v3-credentials")
@@ -2073,7 +2076,7 @@ async def create_v3_credential(request: Request = None, ds=Depends(get_datastore
          body.get("authPassword", ""), body.get("privProtocol", "AES"), body.get("privPassword", "")],
     )
     row = await ds.query_one("SELECT * FROM snmp_v3_credentials WHERE id=$1", [cid])
-    return {"success": True, "data": row}
+    return {"success": True, "data": snake_to_camel(row)}
 
 
 # ---------------------------------------------------------------------------
@@ -2490,7 +2493,7 @@ async def get_feature_flag_history(
             "SELECT * FROM feature_flag_history ORDER BY changed_at DESC LIMIT $1 OFFSET $2",
             [limit, offset],
         )
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows)}
 
 
 @router.put("/feature-flags/{name}")
@@ -2636,7 +2639,7 @@ async def get_system_config_history(
             "SELECT * FROM system_config_history ORDER BY changed_at DESC LIMIT $1 OFFSET $2",
             [limit, offset],
         )
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows)}
 
 
 @router.put("/system/config")
@@ -2702,7 +2705,7 @@ async def get_knowledge_prompts(
     base += f" ORDER BY created_at DESC LIMIT ${idx} OFFSET ${idx + 1}"
     params.extend([limit, offset])
     rows = await ds.query(base, params)
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows)}
 
 
 @router.post("/knowledge/prompts")
@@ -2723,4 +2726,4 @@ async def create_knowledge_prompt(
         [kid, content, json.dumps(metadata)],
     )
     row = await ds.query_one("SELECT * FROM knowledge_embeddings WHERE id=$1", [kid])
-    return {"success": True, "data": row}
+    return {"success": True, "data": snake_to_camel(row)}

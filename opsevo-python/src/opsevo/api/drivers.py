@@ -21,6 +21,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File
 
 from opsevo.api.deps import get_current_user, get_datastore
+from opsevo.api.utils import snake_to_camel, snake_to_camel_list, camel_to_snake_keys
 
 router = APIRouter(prefix="/api", tags=["drivers"])
 
@@ -31,19 +32,7 @@ def _get_driver_manager(request: Request):
 
 def _profile_to_camel(row: dict | None) -> dict | None:
     """Convert DB snake_case keys to frontend camelCase for profile rows."""
-    if row is None:
-        return None
-    out = {}
-    for k, v in row.items():
-        if k == "target_system":
-            out["targetSystem"] = v
-        elif k == "created_at":
-            out["created_at"] = str(v) if v else None
-        elif k == "updated_at":
-            out["updated_at"] = str(v) if v else None
-        else:
-            out[k] = v
-    return out
+    return snake_to_camel(row)
 
 
 # ==================== Drivers ====================

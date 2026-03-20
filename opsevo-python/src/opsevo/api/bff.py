@@ -16,6 +16,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from .deps import get_current_user, get_datastore
+from .utils import snake_to_camel, snake_to_camel_list, camel_to_snake_keys
 
 router = APIRouter(prefix="/api", tags=["bff"])
 
@@ -34,7 +35,7 @@ async def device_metrics(device_id: str, ds=Depends(get_datastore), user=Depends
     row = await ds.query_one(
         "SELECT * FROM system_metrics WHERE device_id=$1 ORDER BY timestamp DESC LIMIT 1", [device_id]
     )
-    return {"success": True, "data": row or {}}
+    return {"success": True, "data": snake_to_camel(row) or {}}
 
 
 @router.get("/devices/{device_id}/health-detail")
@@ -59,13 +60,13 @@ async def device_health(device_id: str, request: Request, ds=Depends(get_datasto
 @router.get("/profiles")
 async def get_profiles(ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     rows = await ds.query("SELECT * FROM device_profiles ORDER BY name ASC")
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows or [])}
 
 
 @router.get("/profiles/export")
 async def export_profiles(ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     rows = await ds.query("SELECT * FROM device_profiles ORDER BY name ASC")
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows or [])}
 
 
 @router.post("/profiles/import")
@@ -95,7 +96,7 @@ async def get_profile_by_id(profile_id: str, ds=Depends(get_datastore), user=Dep
     row = await ds.query_one("SELECT * FROM device_profiles WHERE id=$1", [profile_id])
     if not row:
         raise HTTPException(404, "Profile not found")
-    return {"success": True, "data": row}
+    return {"success": True, "data": snake_to_camel(row)}
 
 
 @router.get("/profiles/{profile_id}/export")
@@ -103,7 +104,7 @@ async def export_profile_by_id(profile_id: str, ds=Depends(get_datastore), user=
     row = await ds.query_one("SELECT * FROM device_profiles WHERE id=$1", [profile_id])
     if not row:
         raise HTTPException(404, "Profile not found")
-    return {"success": True, "data": row}
+    return {"success": True, "data": snake_to_camel(row)}
 
 
 @router.post("/profiles")
@@ -115,13 +116,13 @@ async def create_profile(request: Request, ds=Depends(get_datastore), user=Depen
         [pid, body.get("name", ""), body.get("vendor", ""), body.get("model", ""), json.dumps(body.get("config", {}))],
     )
     row = await ds.query_one("SELECT * FROM device_profiles WHERE id=$1", [pid])
-    return {"success": True, "data": row}
+    return {"success": True, "data": snake_to_camel(row)}
 
 
 @router.put("/profiles/{profile_id}")
 async def update_profile(profile_id: str, request: Request, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     _ALLOWED = {"name", "vendor", "model", "config"}
-    body = await request.json()
+    body = camel_to_snake_keys(await request.json())
     sets, params, idx = [], [], 1
     for k, v in body.items():
         if k not in _ALLOWED:
@@ -135,7 +136,7 @@ async def update_profile(profile_id: str, request: Request, ds=Depends(get_datas
         params.append(profile_id)
         await ds.execute(f"UPDATE device_profiles SET {', '.join(sets)} WHERE id = ${idx}", tuple(params))
     row = await ds.query_one("SELECT * FROM device_profiles WHERE id=$1", [profile_id])
-    return {"success": True, "data": row}
+    return {"success": True, "data": snake_to_camel(row)}
 
 
 @router.delete("/profiles/{profile_id}")
@@ -160,13 +161,13 @@ async def get_noise_filter_stats(request: Request, user=Depends(get_current_user
 @router.get("/inspections/tasks")
 async def get_inspection_tasks(ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     rows = await ds.query("SELECT * FROM inspection_tasks ORDER BY created_at DESC")
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows or [])}
 
 
 @router.get("/inspections/history")
 async def get_inspection_history(ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     rows = await ds.query("SELECT * FROM inspection_history ORDER BY executed_at DESC LIMIT 50")
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows or [])}
 
 
 @router.post("/inspections/trigger")
@@ -209,7 +210,7 @@ async def get_evaluations(
     rows = await ds.query("SELECT * FROM evaluation_reports ORDER BY created_at DESC")
     total = len(rows)
     start = (page - 1) * limit
-    return {"success": True, "data": rows[start:start + limit], "total": total}
+    return {"success": True, "data": snake_to_camel_list((rows or [])[start:start + limit]), "total": total}
 
 
 @router.get("/evaluations/{eval_id}")
@@ -217,7 +218,7 @@ async def get_evaluation_by_id(eval_id: str, ds=Depends(get_datastore), user=Dep
     row = await ds.query_one("SELECT * FROM evaluation_reports WHERE id=$1", [eval_id])
     if not row:
         raise HTTPException(404, "Evaluation not found")
-    return {"success": True, "data": row}
+    return {"success": True, "data": snake_to_camel(row)}
 
 
 # ---------------------------------------------------------------------------
@@ -231,7 +232,7 @@ async def get_knowledge_entries(
     rows = await ds.query("SELECT * FROM knowledge_entries ORDER BY created_at DESC")
     total = len(rows)
     start = (page - 1) * limit
-    return {"success": True, "data": rows[start:start + limit], "total": total}
+    return {"success": True, "data": snake_to_camel_list((rows or [])[start:start + limit]), "total": total}
 
 
 @router.post("/knowledge/search")
@@ -248,7 +249,7 @@ async def search_knowledge(request: Request, ds=Depends(get_datastore), user=Dep
         rows = await ds.query(
             "SELECT * FROM knowledge_entries WHERE content ILIKE $1 LIMIT 20", [f"%{query}%"]
         )
-        return {"success": True, "data": rows}
+        return {"success": True, "data": snake_to_camel_list(rows or [])}
 
 
 # ---------------------------------------------------------------------------
@@ -265,7 +266,7 @@ async def get_knowledge_graph_nodes(
         )
     else:
         rows = await ds.query("SELECT * FROM knowledge_graph_nodes LIMIT $1", [limit])
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows or [])}
 
 
 @router.get("/knowledge-graph/nodes/{node_id}")
@@ -273,7 +274,7 @@ async def get_knowledge_graph_node(node_id: str, ds=Depends(get_datastore), user
     row = await ds.query_one("SELECT * FROM knowledge_graph_nodes WHERE id=$1", [node_id])
     if not row:
         raise HTTPException(404, "Node not found")
-    return {"success": True, "data": row}
+    return {"success": True, "data": snake_to_camel(row)}
 
 
 @router.get("/knowledge-graph/edges")
@@ -293,4 +294,4 @@ async def get_knowledge_graph_edges(
         params.append(target)
         idx += 1
     rows = await ds.query(base, params)
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows or [])}

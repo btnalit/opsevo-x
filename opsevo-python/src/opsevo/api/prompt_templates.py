@@ -15,6 +15,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 
 from .deps import get_current_user, get_datastore, get_device_id
+from .utils import snake_to_camel, snake_to_camel_list
 
 router = APIRouter(prefix="/api/prompt-templates", tags=["prompt-templates"])
 
@@ -56,7 +57,7 @@ async def get_default_template(
         )
     if not row:
         raise HTTPException(404, "未找到默认模板")
-    return {"success": True, "data": row}
+    return {"success": True, "data": snake_to_camel(row)}
 
 
 # ==================== 模板覆盖路由 ====================
@@ -65,7 +66,7 @@ async def get_overrides(device_id: str | None = Depends(get_device_id), ds=Depen
     rows = await ds.query(
         "SELECT * FROM template_overrides WHERE device_id=$1", [device_id]
     )
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows)}
 
 
 @router.post("/overrides")
@@ -85,7 +86,7 @@ async def set_override(device_id: str | None = Depends(get_device_id), request: 
         [device_id, sys_name, custom_id],
     )
     rows = await ds.query("SELECT * FROM template_overrides WHERE device_id=$1", [device_id])
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows)}
 
 
 @router.delete("/overrides/{system_template_name}")
@@ -95,7 +96,7 @@ async def clear_override(device_id: str | None = Depends(get_device_id), system_
         [device_id, system_template_name],
     )
     rows = await ds.query("SELECT * FROM template_overrides WHERE device_id=$1", [device_id])
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows)}
 
 
 # ==================== CRUD 路由 ====================
@@ -123,7 +124,7 @@ async def get_templates(
     start = (page - 1) * page_size
     return {
         "success": True,
-        "data": rows[start:start + page_size],
+        "data": snake_to_camel_list(rows)[start:start + page_size],
         "pagination": {"page": page, "pageSize": page_size, "total": total},
     }
 
@@ -144,7 +145,7 @@ async def create_template(device_id: str | None = Depends(get_device_id), reques
          body.get("category", "general"), json.dumps(placeholders), body.get("isDefault", False)],
     )
     row = await ds.query_one("SELECT * FROM prompt_templates WHERE id=$1", [tid])
-    return {"success": True, "data": row}
+    return {"success": True, "data": snake_to_camel(row)}
 
 
 # ==================== 版本历史 & 回滚 (Bug 1.5, 1.6) ====================
@@ -160,7 +161,7 @@ async def get_template_versions(
         "SELECT * FROM prompt_template_versions WHERE template_id=$1 ORDER BY version DESC LIMIT $2",
         [template_id, limit],
     )
-    return {"success": True, "data": rows}
+    return {"success": True, "data": snake_to_camel_list(rows)}
 
 
 @router.post("/{template_id}/rollback")
@@ -208,7 +209,7 @@ async def rollback_template(
 
     await ds.transaction(_tx)
     row = await ds.query_one("SELECT * FROM prompt_templates WHERE id=$1", [template_id])
-    return {"success": True, "data": row}
+    return {"success": True, "data": snake_to_camel(row)}
 
 
 @router.get("/{template_id}")
@@ -218,7 +219,7 @@ async def get_template_by_id(device_id: str | None = Depends(get_device_id), tem
     )
     if not row:
         raise HTTPException(404, "模板不存在")
-    return {"success": True, "data": row}
+    return {"success": True, "data": snake_to_camel(row)}
 
 
 @router.put("/{template_id}")
@@ -275,7 +276,7 @@ async def update_template(device_id: str | None = Depends(get_device_id), templa
 
     await ds.transaction(_tx)
     row = await ds.query_one("SELECT * FROM prompt_templates WHERE id=$1", [template_id])
-    return {"success": True, "data": row}
+    return {"success": True, "data": snake_to_camel(row)}
 
 
 @router.delete("/{template_id}")
