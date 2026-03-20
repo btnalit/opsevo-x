@@ -1637,7 +1637,11 @@ async def get_anomaly_predictions(device_id: str | None = Depends(get_device_id)
 async def stream_learning_events(device_id: str | None = Depends(get_device_id), request: Request = None, user=Depends(get_current_user)):
     """SSE stream for learning events."""
     async def _generate():
-        ds = _c(request).datastore()
+        try:
+            ds = _c(request).datastore()
+        except Exception as exc:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+            return
         last_id = 0
         try:
             while True:
@@ -1648,9 +1652,12 @@ async def stream_learning_events(device_id: str | None = Depends(get_device_id),
                 for row in rows:
                     last_id = row.get("id", last_id)
                     yield f"data: {json.dumps(row, default=str)}\n\n"
+                yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
                 await asyncio.sleep(2)
         except asyncio.CancelledError:
             pass
+        except Exception as exc:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
 
     return StreamingResponse(_generate(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
@@ -1660,7 +1667,11 @@ async def stream_learning_events(device_id: str | None = Depends(get_device_id),
 async def stream_iteration_events(device_id: str | None = Depends(get_device_id), iteration_id: str = Path(...), request: Request = None, user=Depends(get_current_user)):
     """SSE stream for iteration progress."""
     async def _generate():
-        ds = _c(request).datastore()
+        try:
+            ds = _c(request).datastore()
+        except Exception as exc:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+            return
         try:
             while True:
                 row = await ds.query_one("SELECT * FROM iterations WHERE id=$1 AND device_id=$2", [iteration_id, device_id])
@@ -1668,9 +1679,12 @@ async def stream_iteration_events(device_id: str | None = Depends(get_device_id)
                     yield f"data: {json.dumps(row, default=str)}\n\n"
                     if row.get("status") in ("completed", "failed", "aborted"):
                         break
+                yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
                 await asyncio.sleep(2)
         except asyncio.CancelledError:
             pass
+        except Exception as exc:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
 
     return StreamingResponse(_generate(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
@@ -1680,7 +1694,11 @@ async def stream_iteration_events(device_id: str | None = Depends(get_device_id)
 async def stream_autonomous_intents(device_id: str | None = Depends(get_device_id), request: Request = None, user=Depends(get_current_user)):
     """SSE stream for autonomous brain intents."""
     async def _generate():
-        brain = _c(request).autonomous_brain()
+        try:
+            brain = _c(request).autonomous_brain()
+        except Exception as exc:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+            return
         q: asyncio.Queue[dict] = asyncio.Queue()
 
         def _on_thinking(phase, message, meta=None):
@@ -1708,6 +1726,8 @@ async def stream_autonomous_intents(device_id: str | None = Depends(get_device_i
                     yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
         except asyncio.CancelledError:
             pass
+        except Exception as exc:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
         finally:
             brain.remove_on_thinking(_on_thinking)
 
@@ -1719,7 +1739,11 @@ async def stream_autonomous_intents(device_id: str | None = Depends(get_device_i
 async def stream_brain_thinking(device_id: str | None = Depends(get_device_id), request: Request = None, user=Depends(get_current_user)):
     """SSE stream for brain OODA thinking process."""
     async def _generate():
-        brain = _c(request).autonomous_brain()
+        try:
+            brain = _c(request).autonomous_brain()
+        except Exception as exc:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+            return
         q: asyncio.Queue[dict] = asyncio.Queue()
 
         def _on_thinking(phase, message, meta=None):
@@ -1736,6 +1760,8 @@ async def stream_brain_thinking(device_id: str | None = Depends(get_device_id), 
                     yield ": keepalive\n\n"
         except asyncio.CancelledError:
             pass
+        except Exception as exc:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
         finally:
             brain.remove_on_thinking(_on_thinking)
 

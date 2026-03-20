@@ -304,7 +304,7 @@ def create_app() -> FastAPI:
     app.include_router(drivers_router)
 
     # ── Static files & SPA fallback ──────────────────────────────────────
-    from fastapi.responses import FileResponse
+    from fastapi.responses import FileResponse, JSONResponse
 
     public_dir = _resolve_public_dir()
     if public_dir is not None:
@@ -316,6 +316,12 @@ def create_app() -> FastAPI:
         # SPA fallback: non-API routes serve index.html
         @app.get("/{full_path:path}")
         async def spa_fallback(full_path: str):
+            # API paths must NOT fall through to SPA — return 404 JSON
+            if full_path.startswith("api/") or full_path.startswith("api"):
+                return JSONResponse(
+                    status_code=404,
+                    content={"success": False, "error": f"API endpoint not found: /{full_path}"},
+                )
             # Try to serve the exact file first
             file_path = public_dir / full_path
             if full_path and file_path.is_file():

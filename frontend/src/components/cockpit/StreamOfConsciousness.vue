@@ -164,6 +164,10 @@ const connectIntentSSE = () => {
         const data = JSON.parse(event.data)
         // 忽略心跳和连接事件
         if (data.type === 'heartbeat' || data.type === 'connected') return
+        if (data.type === 'error') {
+          console.warn('[StreamOfConsciousness] Intent SSE error:', data.message)
+          return
+        }
         if (data.type === 'intent' && data.data) {
           const intent = data.data
           enqueueThought('deciding', `生成防护策略: Intent(action="${intent.action}", target="${intent.target || 'system'}")。风险等级: ${intent.riskLevel || 'MEDIUM'}。`)
@@ -197,6 +201,10 @@ const connectBrainThinkingSSE = () => {
         const data = JSON.parse(event.data)
         // 忽略心跳和连接事件 — 这些仅用于保活
         if (data.type === 'heartbeat' || data.type === 'connected') return
+        if (data.type === 'error') {
+          console.warn('[StreamOfConsciousness] Brain SSE error:', data.message)
+          return
+        }
       } catch { /* ignore parse errors for non-JSON data */ }
     })
 

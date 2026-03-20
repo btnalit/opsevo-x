@@ -73,6 +73,7 @@ export function createAuthEventSource(
   let heartbeatTimer: ReturnType<typeof setTimeout> | null = null
   let currentHeartbeatTimeoutMs = heartbeatTimeoutMs
   let heartbeatReconnectAttempts = 0
+  const maxHeartbeatReconnects = 3
 
   // Store listeners so they survive reconnects
   const eventListeners: Array<{ type: string; handler: (event: MessageEvent) => void }> = []
@@ -112,9 +113,18 @@ export function createAuthEventSource(
         resetHeartbeatTimeout()
       } else {
         // Connection is NOT open — execute exponential backoff reconnect (Requirement 7.3, 7.4)
+        if (heartbeatReconnectAttempts >= maxHeartbeatReconnects) {
+          console.warn(
+            `[authEventSource] Heartbeat reconnect limit reached (${maxHeartbeatReconnects}) on ${basePath}. Giving up.`
+          )
+          source?.close()
+          source = null
+          onError?.(new Event('error'))
+          return
+        }
         console.warn(
           `[authEventSource] Heartbeat timeout on ${basePath}, readyState is not OPEN. ` +
-          `Reconnecting with backoff (attempt ${heartbeatReconnectAttempts + 1})...`
+          `Reconnecting with backoff (attempt ${heartbeatReconnectAttempts + 1}/${maxHeartbeatReconnects})...`
         )
         heartbeatReconnectAttempts++
         const delay = Math.min(1000 * Math.pow(2, heartbeatReconnectAttempts - 1), 30000)
