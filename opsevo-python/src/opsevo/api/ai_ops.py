@@ -1290,10 +1290,12 @@ async def get_health_current(device_id: str | None = Depends(get_device_id), req
     all_status = hm.get_all_status()
     total = len(all_status)
     if total == 0:
+        # 没有设备接入时，系统本身是健康的，返回基线状态而非 unknown
         return {"success": True, "data": {
-            "score": 0, "level": "unknown",
-            "dimensions": {"system": 0, "network": 0, "performance": 0, "reliability": 0},
+            "score": 100, "level": "healthy",
+            "dimensions": {"system": 100, "network": 0, "performance": 100, "reliability": 100},
             "issues": [],
+            "message": "No devices connected",
         }}
 
     healthy_count = sum(1 for s in all_status.values() if s.get("healthy"))

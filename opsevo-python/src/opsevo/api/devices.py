@@ -195,6 +195,7 @@ async def stream_device_events(
 async def create_device(
     body: DeviceCreate,
     request: Request,
+    orchestrator=Depends(get_device_orchestrator),
     user: dict = Depends(get_current_user),
 ):
     dm = _get_device_manager(request)
@@ -202,6 +203,12 @@ async def create_device(
         tenant_id=str(user["id"]),
         data=body.model_dump(),
     )
+    # Register in orchestrator so connect/disconnect work immediately.
+    # Use background task to avoid blocking the API response on network I/O.
+    try:
+        await orchestrator.register_device(device)
+    except Exception:
+        logger.warning("orchestrator_register_failed", device_id=device.get("id"))
     return SuccessResponse(data=device).model_dump()
 
 
@@ -223,12 +230,20 @@ async def update_device(
     device_id: str,
     body: DeviceUpdate,
     request: Request,
+    orchestrator=Depends(get_device_orchestrator),
     user: dict = Depends(get_current_user),
 ):
     dm = _get_device_manager(request)
-    updated = await dm.update_device(device_id, body.model_dump(exclude_none=True))
+    changes = body.model_dump(exclude_none=True)
+    updated = await dm.update_device(device_id, changes)
     if updated is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Device not found")
+    # Sync changes to orchestrator registry (handles reconnect on host/port change)
+    try:
+        await orchestrator.update_device(device_id, changes)
+    except KeyError:
+        # Device not yet in registry (e.g. created before orchestrator started)
+        logger.warning("orchestrator_update_skipped_not_in_registry", device_id=device_id)
     return SuccessResponse(data=updated).model_dump()
 
 
@@ -236,12 +251,18 @@ async def update_device(
 async def delete_device(
     device_id: str,
     request: Request,
+    orchestrator=Depends(get_device_orchestrator),
     user: dict = Depends(get_current_user),
 ):
-    dm = _get_device_manager(request)
-    ok = await dm.delete_device(device_id)
-    if not ok:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Device not found")
+    try:
+        # orchestrator.remove_device internally deletes from DB + cleans registry
+        await orchestrator.remove_device(device_id)
+    except KeyError:
+        # Device not in registry — fallback to direct DB delete
+        dm = _get_device_manager(request)
+        ok = await dm.delete_device(device_id)
+        if not ok:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Device not found")
     return MessageResponse(message="Device deleted").model_dump()
 
 
@@ -254,13 +275,20 @@ async def connect_device(
 ):
     try:
         success = await orchestrator.connect_device_manual(device_id)
+    except KeyError:
+        # Device not in registry — try loading from DB and registering first
+        dm = _get_device_manager(request)
+        device = await dm.get_device(device_id)
+        if not device:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Device not found")
+        await orchestrator.register_device(device)
+        success = await orchestrator.connect_device_manual(device_id)
+    try:
         if not success:
             return {"success": False, "error": "Connection failed"}
         dm = _get_device_manager(request)
         device = await dm.get_device(device_id)
         return SuccessResponse(data=device).model_dump()
-    except KeyError as exc:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc))
     except Exception as exc:
         return {"success": False, "error": str(exc)}
 

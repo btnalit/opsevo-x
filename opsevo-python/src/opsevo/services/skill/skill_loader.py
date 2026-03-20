@@ -26,6 +26,7 @@ class SkillLoader:
 
     def __init__(self, skills_dir: str = "data/ai-ops/skills") -> None:
         self._dir = Path(skills_dir)
+        self._intent_mapping: dict[str, Any] = {}
 
     def load_all(self) -> dict[str, dict[str, Any]]:
         skills: dict[str, dict[str, Any]] = {}
@@ -37,6 +38,7 @@ class SkillLoader:
                     try:
                         defn = self._load_skill_dir(entry)
                         if defn is not None:
+                            defn["isBuiltin"] = True
                             name = defn.get("name", entry.name)
                             skills[name] = defn
                     except Exception:
@@ -45,20 +47,40 @@ class SkillLoader:
                 elif entry.suffix in (".json", ".yaml", ".yml"):
                     try:
                         defn = self._load_file(entry)
+                        defn["isBuiltin"] = True
                         name = defn.get("name", entry.stem)
                         skills[name] = defn
                     except Exception:
                         logger.warning("Failed to load skill", file=str(entry))
 
-        # load mapping
+        # Load custom skills
+        custom_dir = self._dir / "custom"
+        if custom_dir.exists():
+            for entry in custom_dir.iterdir():
+                if entry.is_dir():
+                    try:
+                        defn = self._load_skill_dir(entry)
+                        if defn is not None:
+                            defn["isBuiltin"] = False
+                            name = defn.get("name", entry.name)
+                            skills[name] = defn
+                    except Exception:
+                        logger.warning("Failed to load custom skill dir", dir=str(entry))
+                elif entry.suffix in (".json", ".yaml", ".yml"):
+                    try:
+                        defn = self._load_file(entry)
+                        defn["isBuiltin"] = False
+                        name = defn.get("name", entry.stem)
+                        skills[name] = defn
+                    except Exception:
+                        logger.warning("Failed to load custom skill", file=str(entry))
+
+        # load intent mapping (NOT skill definitions — used by intent routing only)
         mapping_file = self._dir / "mapping.json"
         if mapping_file.exists():
             try:
-                with open(mapping_file) as fh:
-                    mapping = json.load(fh)
-                for name, meta in mapping.items():
-                    if name not in skills:
-                        skills[name] = meta
+                with open(mapping_file, encoding="utf-8") as fh:
+                    self._intent_mapping = json.load(fh)
             except Exception:
                 logger.warning("Failed to load skill mapping")
 

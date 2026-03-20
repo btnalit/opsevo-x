@@ -657,6 +657,38 @@ class DeviceOrchestrator:
 
     # ── 设备热插拔 ────────────────────────────────────────────────────
 
+    async def register_device(self, device_record: dict) -> DeviceSlot:
+        """注册设备到 Registry（不自动连接）。
+
+        供 API create_device 端点调用。设备创建后只注册到内存，
+        用户点击"连接"按钮时再通过 connect_device_manual 触发连接。
+        如果设备已在 registry 中则跳过。
+        """
+        device_id = str(device_record["id"])
+        if device_id in self._registry:
+            return self._registry[device_id]
+
+        slot = DeviceSlot(
+            device_id=device_id,
+            name=device_record.get("name", ""),
+            host=device_record.get("host", ""),
+            port=device_record.get("port", 443),
+            profile_id=device_record.get("profile_id", ""),
+            tenant_id=device_record.get("tenant_id"),
+            username=device_record.get("username", ""),
+            password=device_record.get("password", ""),
+            use_tls=device_record.get("use_tls", False),
+            status="offline",
+        )
+
+        async with self._cycle_lock:
+            self._registry[device_id] = slot
+            self._ip_to_device[slot.host] = device_id
+
+        await self._publish_lifecycle_event(EventType.DEVICE_ADDED, slot,
+                                            host=slot.host, profile_id=slot.profile_id)
+        return slot
+
     async def add_device(self, device_record: dict) -> DeviceSlot:
         """运行时添加设备到 Registry 并尝试连接。"""
         device_id = str(device_record["id"])

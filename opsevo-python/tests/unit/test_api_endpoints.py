@@ -39,12 +39,20 @@ def _make_test_app() -> tuple[FastAPI, Settings, AuthService, MockPgDataStore]:
     auth = AuthService(settings=settings, datastore=ds)
     dm = DeviceManager(datastore=ds)
     pool = MagicMock()
+    orchestrator = MagicMock()
+    # register_device returns a coroutine
+    orchestrator.register_device = AsyncMock()
+    orchestrator.update_device = AsyncMock()
+    orchestrator.remove_device = AsyncMock(side_effect=KeyError("not in registry"))
+    orchestrator.connect_device_manual = AsyncMock(return_value=True)
+    orchestrator.disconnect_device_manual = AsyncMock()
 
     class _Container:
         def datastore(self): return ds
         def auth_service(self): return auth
         def device_manager(self): return dm
         def device_pool(self): return pool
+        def device_orchestrator(self): return orchestrator
 
     app = FastAPI()
     app.add_middleware(

@@ -38,7 +38,7 @@ coverage
 # Documentation
 docs
 *.md
-!opsevo-python/src/opsevo/data/ai-ops/skills/**/SKILL.md
+!opsevo-python/data/ai-ops/skills/**/SKILL.md
 CHANGELOG.md
 CONTRIBUTING.md
 LICENSE.md
