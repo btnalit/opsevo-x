@@ -147,6 +147,70 @@ async def create_template(device_id: str = Query(None, alias="deviceId"), reques
     return {"success": True, "data": row}
 
 
+# ==================== 版本历史 & 回滚 (Bug 1.5, 1.6) ====================
+
+@router.get("/{template_id}/versions")
+async def get_template_versions(
+    template_id: str = Path(...),
+    limit: int = Query(50, le=500, ge=1),
+    ds=Depends(get_datastore),
+    user=Depends(get_current_user),
+) -> dict:
+    rows = await ds.query(
+        "SELECT * FROM prompt_template_versions WHERE template_id=$1 ORDER BY version DESC LIMIT $2",
+        [template_id, limit],
+    )
+    return {"success": True, "data": rows}
+
+
+@router.post("/{template_id}/rollback")
+async def rollback_template(
+    template_id: str = Path(...),
+    request: Request = None,
+    ds=Depends(get_datastore),
+    user=Depends(get_current_user),
+) -> dict:
+    body = await request.json()
+    target_version = body.get("version")
+    if target_version is None:
+        raise HTTPException(400, "version is required")
+
+    async def _tx(tx):
+        # 锁定当前模板
+        current = await tx.query_one(
+            "SELECT * FROM prompt_templates WHERE id=$1 FOR UPDATE", [template_id]
+        )
+        if not current:
+            raise HTTPException(404, "模板不存在")
+        # 读取目标版本
+        ver_row = await tx.query_one(
+            "SELECT * FROM prompt_template_versions WHERE template_id=$1 AND version=$2",
+            [template_id, target_version],
+        )
+        if not ver_row:
+            raise HTTPException(404, f"Version {target_version} not found")
+        # 保存当前版本到历史
+        cur_version = current.get("version", 1)
+        await tx.execute(
+            "INSERT INTO prompt_template_versions (template_id, version, name, content, description, category) "
+            "VALUES ($1,$2,$3,$4,$5,$6)",
+            [template_id, cur_version, current.get("name"), current.get("content"),
+             current.get("description"), current.get("category")],
+        )
+        # 用目标版本内容更新模板
+        restored_placeholders = json.dumps(_extract_placeholders(ver_row["content"]))
+        await tx.execute(
+            "UPDATE prompt_templates SET name=COALESCE($2,name), content=$3, description=COALESCE($4,description), "
+            "category=COALESCE($5,category), placeholders=$6, version=$7, updated_at=NOW() WHERE id=$1",
+            [template_id, ver_row.get("name"), ver_row["content"],
+             ver_row.get("description"), ver_row.get("category"), restored_placeholders, cur_version + 1],
+        )
+
+    await ds.transaction(_tx)
+    row = await ds.query_one("SELECT * FROM prompt_templates WHERE id=$1", [template_id])
+    return {"success": True, "data": row}
+
+
 @router.get("/{template_id}")
 async def get_template_by_id(device_id: str = Query(None, alias="deviceId"), template_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     row = await ds.query_one(
@@ -160,26 +224,56 @@ async def get_template_by_id(device_id: str = Query(None, alias="deviceId"), tem
 @router.put("/{template_id}")
 async def update_template(device_id: str = Query(None, alias="deviceId"), template_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     body = await request.json()
-    existing = await ds.query_one("SELECT * FROM prompt_templates WHERE id=$1 AND device_id=$2", [template_id, device_id])
-    if not existing:
-        raise HTTPException(404, "模板不存在")
-    sets, params, idx = [], [], 1
-    for k in ("name", "content", "description", "category", "is_default"):
-        camel = k.replace("_d", "D").replace("_n", "N").replace("_c", "C")  # snake to camel rough
-        val = body.get(k) or body.get(camel)
-        if val is not None:
-            sets.append(f"{k} = ${idx}")
-            params.append(val)
+
+    async def _tx(tx):
+        # SELECT FOR UPDATE 锁定当前模板行
+        existing = await tx.query_one("SELECT * FROM prompt_templates WHERE id=$1 FOR UPDATE", [template_id])
+        if not existing:
+            raise HTTPException(404, "模板不存在")
+        # 构建 UPDATE
+        sets, params, idx = [], [], 1
+        for k in ("name", "content", "description", "category", "is_default"):
+            camel = k.replace("_d", "D").replace("_n", "N").replace("_c", "C")
+            val = body.get(k)
+            if val is None:
+                val = body.get(camel)
+            if val is not None:
+                sets.append(f"{k} = ${idx}")
+                params.append(val)
+                idx += 1
+        new_content = body.get("content")
+        if new_content:
+            sets.append(f"placeholders = ${idx}")
+            params.append(json.dumps(_extract_placeholders(new_content)))
             idx += 1
-    # Re-extract placeholders if content changed
-    new_content = body.get("content")
-    if new_content:
-        sets.append(f"placeholders = ${idx}")
-        params.append(json.dumps(_extract_placeholders(new_content)))
-        idx += 1
-    if sets:
-        params.append(template_id)
-        await ds.execute(f"UPDATE prompt_templates SET {', '.join(sets)} WHERE id = ${idx}", tuple(params))
+        # 检查是否有实质性变更（内容相同则跳过版本递增）
+        has_content_change = False
+        for k in ("name", "content", "description", "category"):
+            camel = k.replace("_d", "D").replace("_n", "N").replace("_c", "C")
+            val = body.get(k)
+            if val is None:
+                val = body.get(camel)
+            if val is not None and val != existing.get(k):
+                has_content_change = True
+                break
+        if has_content_change:
+            # 快照当前版本到历史表
+            cur_version = existing.get("version", 1)
+            await tx.execute(
+                "INSERT INTO prompt_template_versions (template_id, version, name, content, description, category) "
+                "VALUES ($1,$2,$3,$4,$5,$6)",
+                [template_id, cur_version, existing.get("name"), existing.get("content"),
+                 existing.get("description"), existing.get("category")],
+            )
+            # 递增版本号
+            sets.append(f"version = ${idx}")
+            params.append(cur_version + 1)
+            idx += 1
+        if sets:
+            params.append(template_id)
+            await tx.execute(f"UPDATE prompt_templates SET {', '.join(sets)}, updated_at=NOW() WHERE id = ${idx}", tuple(params))
+
+    await ds.transaction(_tx)
     row = await ds.query_one("SELECT * FROM prompt_templates WHERE id=$1", [template_id])
     return {"success": True, "data": row}
 
@@ -203,7 +297,7 @@ async def render_template(device_id: str = Query(None, alias="deviceId"), templa
     # Replace {{placeholder}} with provided values
     for key, value in body.items():
         content = content.replace(f"{{{{{key}}}}}", str(value))
-    return {"success": True, "data": {"rendered": content}}
+    return {"success": True, "data": {"content": content, "rendered": content}}
 
 
 @router.post("/{template_id}/default")

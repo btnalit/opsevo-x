@@ -29,6 +29,14 @@ def get_auth_service(request: Request) -> AuthService:
     return _get_container(request).auth_service()
 
 
+def get_feature_flag_manager(request: Request):
+    return _get_container(request).feature_flag_manager()
+
+
+def get_tracing_service(request: Request):
+    return _get_container(request).tracing_service()
+
+
 async def get_current_user(
     request: Request,
     creds: HTTPAuthorizationCredentials | None = Depends(_bearer),
@@ -44,4 +52,19 @@ async def get_current_user(
     user = await auth_svc.get_user_by_id(payload["sub"])
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+    # 软删除用户 JWT 失效
+    if not user.get("is_active", True):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User deactivated")
     return user
+
+
+def require_role(role: str):
+    """返回一个依赖函数，检查当前用户是否具有指定角色。"""
+    async def _check(user: dict = Depends(get_current_user)):
+        if user.get("role") != role:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Requires '{role}' role",
+            )
+        return user
+    return _check

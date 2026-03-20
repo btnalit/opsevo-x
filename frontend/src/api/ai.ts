@@ -298,18 +298,48 @@ export const chatApi = {
     callbacks: StreamCallbacks
   ): AbortController => {
     const controller = new AbortController()
+    let isRetrying = false
 
-    // 使用 fetch 发送 POST 请求并处理 SSE 响应
-    fetch('/api/ai/chat/stream', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(useAuthStore().token ? { 'Authorization': `Bearer ${useAuthStore().token}` } : {})
-      },
-      body: JSON.stringify(data),
-      signal: controller.signal
-    })
-      .then(async (response) => {
+    const deviceStore = useDeviceStore()
+    const deviceId = deviceStore.currentDeviceId
+    if (!deviceId) {
+      // 拦截：无设备选中时不发送请求
+      callbacks.onError?.('请先选择一个设备后再发送消息')
+      return controller
+    }
+
+    const doFetch = async () => {
+      try {
+        const authStore = useAuthStore()
+        const url = `/api/devices/${deviceId}/ai/chat/stream`
+
+        const headers: Record<string, string> = {
+          'Content-Type': 'application/json'
+        }
+        if (authStore.token) {
+          headers['Authorization'] = `Bearer ${authStore.token}`
+        }
+
+        const response = await fetch(url, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(data),
+          signal: controller.signal
+        })
+
+        // 处理 Token 过期导致的 401 Error
+        if (response.status === 401 && !isRetrying) {
+          isRetrying = true
+          const success = await authStore.refreshAccessToken()
+          if (success) {
+            return doFetch()
+          } else {
+            authStore.logout()
+            callbacks.onError?.('认证已过期，请重新登录')
+            return
+          }
+        }
+
         if (!response.ok) {
           const errorData = await response.json().catch(() => ({ error: '请求失败' }))
           callbacks.onError?.(errorData.error || `HTTP ${response.status}`)
@@ -325,52 +355,48 @@ export const chatApi = {
         const decoder = new TextDecoder()
         let buffer = ''
 
-        try {
-          while (true) {
-            const { done, value } = await reader.read()
-            if (done) break
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
 
-            buffer += decoder.decode(value, { stream: true })
+          buffer += decoder.decode(value, { stream: true })
 
-            // 解析 SSE 数据
-            const lines = buffer.split('\n')
-            buffer = lines.pop() || '' // 保留未完成的行
+          // 解析 SSE 数据
+          const lines = buffer.split('\n')
+          buffer = lines.pop() || '' // 保留未完成的行
 
-            for (const line of lines) {
-              if (line.startsWith('data: ')) {
-                const jsonStr = line.slice(6).trim()
-                if (!jsonStr) continue
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              const jsonStr = line.slice(6).trim()
+              if (!jsonStr) continue
 
-                try {
-                  const chunk: StreamChunk = JSON.parse(jsonStr)
+              try {
+                const chunk: StreamChunk = JSON.parse(jsonStr)
 
-                  if (chunk.error) {
-                    callbacks.onError?.(chunk.error)
-                    return
-                  }
-
-                  if (chunk.done && chunk.fullContent !== undefined) {
-                    callbacks.onComplete?.(chunk.fullContent)
-                  } else if (chunk.content) {
-                    callbacks.onChunk?.(chunk.content)
-                  }
-                } catch {
-                  // 忽略解析错误，可能是不完整的 JSON
+                if (chunk.error) {
+                  callbacks.onError?.(chunk.error)
+                  return
                 }
+
+                if (chunk.done && chunk.fullContent !== undefined) {
+                  callbacks.onComplete?.(chunk.fullContent)
+                } else if (chunk.content) {
+                  callbacks.onChunk?.(chunk.content)
+                }
+              } catch {
+                // 忽略解析错误，可能是不完整的 JSON
               }
             }
           }
-        } catch (error) {
-          if ((error as Error).name !== 'AbortError') {
-            callbacks.onError?.((error as Error).message || '流式响应错误')
-          }
         }
-      })
-      .catch((error) => {
-        if (error.name !== 'AbortError') {
-          callbacks.onError?.(error.message || '网络请求失败')
+      } catch (error) {
+        if ((error as Error).name !== 'AbortError') {
+          callbacks.onError?.((error as Error).message || '网络请求失败')
         }
-      })
+      }
+    }
+
+    doFetch()
 
     return controller
   }

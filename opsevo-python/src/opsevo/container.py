@@ -48,6 +48,16 @@ class Container(containers.DeclarativeContainer):
         datastore=datastore,
     )
 
+    # ── Feature Flags & Tracing ───────────────────────────────────────────
+    feature_flag_manager = providers.Singleton(
+        "opsevo.services.state_machine.feature_flag_manager.FeatureFlagManager",
+        datastore=datastore,
+    )
+
+    tracing_service = providers.Singleton(
+        "opsevo.services.ai_ops.tracing_service.TracingService",
+    )
+
     # ── AI / Adapter ──────────────────────────────────────────────────────
     adapter_pool = providers.Singleton(
         "opsevo.services.ai.adapter_pool.AdapterPool",
@@ -177,6 +187,11 @@ class Container(containers.DeclarativeContainer):
         datastore=datastore,
     )
 
+    # ── Topology (must be before device_orchestrator) ─────────────────────
+    topology_discovery = providers.Singleton(
+        "opsevo.services.topology.discovery_service.TopologyDiscoveryService",
+    )
+
     # ── Device Orchestrator ───────────────────────────────────────────────
     device_orchestrator = providers.Singleton(
         "opsevo.services.device_orchestrator.DeviceOrchestrator",
@@ -268,9 +283,4 @@ class Container(containers.DeclarativeContainer):
         perception_cache=perception_cache,
         tool_registry=tool_registry,
         tool_search=tool_search,
-    )
-
-    # ── Topology ──────────────────────────────────────────────────────────
-    topology_discovery = providers.Singleton(
-        "opsevo.services.topology.discovery_service.TopologyDiscoveryService",
     )

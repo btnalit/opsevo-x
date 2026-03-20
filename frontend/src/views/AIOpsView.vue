@@ -680,7 +680,10 @@ const trafficChartOption = computed<EChartsOption | null>(() => {
 })
 
 // Methods
+let currentRequestId = 0
+
 const loadDashboardData = async () => {
+  const requestId = ++currentRequestId
   loading.value = true
   error.value = ''
 
@@ -692,10 +695,15 @@ const loadDashboardData = async () => {
       schedulerApi.getTasks(),
       metricsApi.getDeviceTrafficHistory(deviceId), // 获取当前设备的流量历史
       metricsApi.getTrafficCollectionStatus(deviceId), // 获取流量采集状态
-      systemDashboardApi.getResource() // 获取系统信息 (TODO: this might be legacy system info not device specific?)
+      deviceStore.currentDeviceId
+        ? systemDashboardApi.getResource()
+        : Promise.resolve({ data: { success: true, data: { cpu: 0, memory: 0, disk: 0, network: [] } } }) // 无设备时用默认空数据占位
     ])
 
     if (dashboardResponse.data.success && dashboardResponse.data.data) {
+      // 竞态防护：如果请求期间设备已切换，丢弃过期结果
+      if (requestId !== currentRequestId) return
+
       dashboardData.value = dashboardResponse.data.data
 
       // Auto-select first interface if not selected
