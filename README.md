@@ -25,6 +25,7 @@ Opsevo-x is a generalized AIOps intelligent operations platform. Through a devic
 ### Key Features
 
 - **Device-Agnostic** — Unified DeviceDriver interface with pluggable drivers (API / SSH / SNMP)
+- **Device Orchestration** — Centralized lifecycle management with health checks, metrics collection, hot-plug, SSE real-time events, and exponential backoff for offline devices
 - **Event-Driven** — EventBus + BrainLoopEngine replaces polling; unified perception sources (Syslog / SNMP Trap / Webhook)
 - **AI Brain** — Multi-LLM adapters (OpenAI / Gemini / Claude / DeepSeek / Qwen / Zhipu), ReAct reasoning, RAG knowledge augmentation
 - **Learning & Evolution** — Critic → Reflector → PatternLearner → EvolutionEngine closed loop
@@ -64,9 +65,9 @@ Opsevo-x uses an 8-layer architecture (Layer 0 – Layer 7):
 │  EmbeddingService │ AdapterPool │ RateLimiter │ TokenBudget     │
 ├─────────────────────────────────────────────────────────────────┤
 │  Layer 0: Infrastructure                                        │
-│  EventBus │ PgDataStore │ DeviceManager │ SyslogManager         │
-│  SNMPTrapReceiver │ DeviceDriverPlugins │ ServiceLifecycle       │
-│  TracingService │ DegradationManager                            │
+│  EventBus │ PgDataStore │ DeviceManager │ DeviceOrchestrator    │
+│  SyslogManager │ SNMPTrapReceiver │ DeviceDriverPlugins         │
+│  ServiceLifecycle │ TracingService │ DegradationManager         │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -89,6 +90,7 @@ Browser ──→ Python/FastAPI (:3099) ──psycopg──→ PostgreSQL + pgv
                 │
                 ├── Serves Vue 3 SPA (static files)
                 ├── REST API + SSE streaming
+                ├── DeviceOrchestrator (lifecycle, health, metrics)
                 ├── Syslog receiver (UDP :514)
                 └── SNMP Trap receiver (UDP :162)
 ```
@@ -257,7 +259,8 @@ opsevo-x/
 │   │   │   ├── mcp/             # MCP server/client + tool registry
 │   │   │   ├── topology/        # Topology discovery
 │   │   │   ├── state_machine/   # State machine orchestration
-│   │   │   └── bridges/         # EventBus bridges
+│   │   │   ├── bridges/         # EventBus bridges
+│   │   │   └── device_orchestrator.py  # Device lifecycle orchestration
 │   │   ├── drivers/             # DeviceDriver plugins (API/SSH/SNMP)
 │   │   ├── data/                # DataStore + migrations
 │   │   ├── events/              # EventBus

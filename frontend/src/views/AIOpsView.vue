@@ -7,6 +7,7 @@
             <span>智能运维仪表盘</span>
           </div>
           <div class="header-actions">
+            <DeviceSelector />
             <el-tag v-if="autoRefresh" type="success" size="small" style="white-space: nowrap">
               <el-icon class="is-loading"><i-ep-loading /></el-icon>
               自动刷新中
@@ -484,6 +485,9 @@ import {
 import { dashboardApi as systemDashboardApi } from '@/api/system'
 import { useDeviceStore } from '@/stores/device'
 import { perceptionApi } from '@/api/perception'
+import { deviceApi } from '@/api/device'
+import { ElNotification } from 'element-plus'
+import DeviceSelector from '@/components/DeviceSelector.vue'
 
 defineOptions({
   name: 'AIOpsView'
@@ -998,14 +1002,40 @@ watch(
   }
 )
 
+// SSE device event stream
+let deviceEventController: AbortController | null = null
+
 // Lifecycle
 onMounted(() => {
   loadDashboardData()
   startAutoRefresh()
+
+  // Start SSE device event stream
+  deviceEventController = deviceApi.streamDeviceEvents(
+    (event) => {
+      deviceStore.handleDeviceEvent(event)
+      if (event.type === 'device_offline') {
+        ElNotification.warning({
+          title: '设备离线',
+          message: `${event.device_name || event.device_id} 已离线`,
+          duration: 5000,
+        })
+      } else if (event.type === 'device_online') {
+        ElNotification.success({
+          title: '设备上线',
+          message: `${event.device_name || event.device_id} 已上线`,
+          duration: 3000,
+        })
+      }
+    },
+    (err) => console.error('Device event stream error:', err),
+  )
 })
 
 onUnmounted(() => {
   stopAutoRefresh()
+  deviceEventController?.abort()
+  deviceEventController = null
 })
 </script>
 

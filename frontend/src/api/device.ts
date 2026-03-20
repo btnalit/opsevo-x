@@ -66,6 +66,22 @@ export interface DeviceResponse {
 
 // ==================== 新增类型 ====================
 
+export interface DeviceSummary {
+  total: number
+  online: number
+  offline: number
+  connecting: number
+  avg_health_score: number
+}
+
+export interface OrchestratorStatus {
+  running: boolean
+  uptime_s: number
+  last_health_cycle: string | null
+  last_metrics_cycle: string | null
+  registry_size: number
+}
+
 export interface DeviceMetrics {
   cpu?: number
   memory?: number
@@ -156,6 +172,68 @@ export const deviceApi = {
 
   execute: (id: string, payload: Record<string, unknown>) =>
     api.post<{ success: boolean; data?: unknown; error?: string }>(`/devices/${id}/execute`, payload),
+
+  /** 获取设备聚合摘要（来自 DeviceOrchestrator） */
+  getSummary: () =>
+    api.get<{ success: boolean; data?: DeviceSummary; error?: string }>('/devices/summary'),
+
+  /** 获取编排器运行状态 */
+  getOrchestratorStatus: () =>
+    api.get<{ success: boolean; data?: OrchestratorStatus; error?: string }>('/devices/orchestrator/status'),
+
+  /** SSE 设备生命周期事件流 */
+  streamDeviceEvents: (
+    onMessage: (event: { type: string; device_id?: string; [key: string]: unknown }) => void,
+    onError?: (error: unknown) => void,
+  ): AbortController => {
+    const controller = new AbortController()
+    const baseURL = api.defaults.baseURL || ''
+    const url = `${baseURL}/devices/events/stream`
+
+    const token = localStorage.getItem('auth_token')
+    const headers: Record<string, string> = { Accept: 'text/event-stream' }
+    if (token) headers['Authorization'] = `Bearer ${token}`
+
+    fetch(url, {
+      signal: controller.signal,
+      credentials: 'include',
+      headers,
+    })
+      .then(async (response) => {
+        if (!response.ok || !response.body) {
+          onError?.(new Error(`SSE connect failed: ${response.status}`))
+          return
+        }
+        const reader = response.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+          const lines = buffer.split('\n')
+          buffer = lines.pop() || ''
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              try {
+                const data = JSON.parse(line.slice(6))
+                if (data.type !== 'ping' && data.type !== 'connected') {
+                  onMessage(data)
+                }
+              } catch {
+                // ignore parse errors
+              }
+            }
+          }
+        }
+      })
+      .catch((err) => {
+        if (err.name !== 'AbortError') onError?.(err)
+      })
+
+    return controller
+  },
 }
 
 export const driverApi = {

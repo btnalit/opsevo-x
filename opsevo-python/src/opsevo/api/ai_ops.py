@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from fastapi.responses import StreamingResponse
 
 from .deps import get_current_user, get_datastore
+from .dependencies import get_device_orchestrator
 
 router = APIRouter(prefix="/api/ai-ops", tags=["ai-ops"])
 
@@ -34,10 +35,20 @@ def _c(request: Request):
 # ---------------------------------------------------------------------------
 @router.get("/metrics/latest")
 async def get_latest_metrics(device_id: str = Query(None, alias="deviceId"), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+    if device_id:
+        rows = await ds.query(
+            "SELECT * FROM system_metrics WHERE device_id=$1 ORDER BY timestamp DESC LIMIT 1", [device_id]
+        )
+        return {"success": True, "data": rows[0] if rows else None}
+    # 全局模式：返回每台设备的最新指标（SQLite 兼容）
     rows = await ds.query(
-        "SELECT * FROM system_metrics WHERE device_id=$1 ORDER BY timestamp DESC LIMIT 1", [device_id]
+        "SELECT m.* FROM system_metrics m "
+        "INNER JOIN (SELECT device_id, MAX(timestamp) AS max_ts "
+        "FROM system_metrics GROUP BY device_id) latest "
+        "ON m.device_id = latest.device_id AND m.timestamp = latest.max_ts "
+        "ORDER BY m.device_id"
     )
-    return {"success": True, "data": rows[0] if rows else None}
+    return {"success": True, "data": rows}
 
 
 @router.get("/metrics/history")
@@ -825,22 +836,35 @@ async def get_audit_logs(
 # Dashboard — aggregated data
 # ---------------------------------------------------------------------------
 @router.get("/dashboard")
-async def get_dashboard_data(device_id: str = Query(None, alias="deviceId"), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_dashboard_data(device_id: str = Query(None, alias="deviceId"), request: Request = None, ds=Depends(get_datastore), orchestrator=Depends(get_device_orchestrator), user=Depends(get_current_user)) -> dict:
     ae = _c(request).alert_engine()
     active_alerts = await ae.get_active_alerts(device_id)
     now_ms = int(time.time() * 1000)
     recent_events = await ae.get_alert_history(now_ms - 86400_000, now_ms, device_id)
     hm = _c(request).health_monitor()
-    device_status = hm.get_device_status(device_id)
-    return {
-        "success": True,
-        "data": {
-            "activeAlerts": len(active_alerts),
-            "recentEvents24h": len(recent_events),
-            "deviceHealth": device_status,
-            "criticalAlerts": len([a for a in active_alerts if a.severity == "critical"]),
-        },
+
+    data: dict = {
+        "activeAlerts": len(active_alerts),
+        "recentEvents24h": len(recent_events),
+        "criticalAlerts": len([a for a in active_alerts if a.severity == "critical"]),
     }
+
+    if device_id:
+        # 单设备模式：返回该设备的健康状态
+        data["deviceHealth"] = hm.get_device_status(device_id)
+    else:
+        # 全局模式：返回设备聚合摘要
+        summary = orchestrator.get_device_summary()
+        data["deviceHealth"] = None
+        data["deviceSummary"] = {
+            "total": summary.total,
+            "online": summary.online,
+            "offline": summary.offline,
+            "connecting": summary.connecting,
+            "avg_health_score": summary.avg_health_score,
+        }
+
+    return {"success": True, "data": data}
 
 
 # ---------------------------------------------------------------------------

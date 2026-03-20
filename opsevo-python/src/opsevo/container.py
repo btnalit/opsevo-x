@@ -116,17 +116,6 @@ class Container(containers.DeclarativeContainer):
         datastore=datastore,
     )
 
-    syslog_receiver = providers.Singleton(
-        "opsevo.services.ai_ops.syslog_receiver.SyslogReceiver",
-        event_bus=event_bus,
-    )
-
-    snmp_trap_receiver = providers.Singleton(
-        "opsevo.services.ai_ops.snmp_trap_receiver.SnmpTrapReceiver",
-        data_store=datastore,
-        event_bus=event_bus,
-    )
-
     decision_engine = providers.Singleton(
         "opsevo.services.ai_ops.decision_engine.DecisionEngine",
     )
@@ -182,6 +171,40 @@ class Container(containers.DeclarativeContainer):
         api_key_manager=api_key_manager,
     )
 
+    # ── Metrics Collector ────────────────────────────────────────────────
+    metrics_collector = providers.Singleton(
+        "opsevo.services.ai_ops.metrics_collector.MetricsCollector",
+        datastore=datastore,
+    )
+
+    # ── Device Orchestrator ───────────────────────────────────────────────
+    device_orchestrator = providers.Singleton(
+        "opsevo.services.device_orchestrator.DeviceOrchestrator",
+        device_manager=device_manager,
+        device_pool=device_pool,
+        health_monitor=health_monitor,
+        alert_engine=alert_engine,
+        metrics_collector=metrics_collector,
+        event_bus=event_bus,
+        settings=settings,
+        datastore=datastore,
+        topology_discovery=topology_discovery,
+    )
+
+    # ── Syslog / SNMP (depend on device_orchestrator for IP resolution) ──
+    syslog_receiver = providers.Singleton(
+        "opsevo.services.ai_ops.syslog_receiver.SyslogReceiver",
+        event_bus=event_bus,
+        device_orchestrator=device_orchestrator,
+    )
+
+    snmp_trap_receiver = providers.Singleton(
+        "opsevo.services.ai_ops.snmp_trap_receiver.SnmpTrapReceiver",
+        data_store=datastore,
+        event_bus=event_bus,
+        device_orchestrator=device_orchestrator,
+    )
+
     # ── Bridges ───────────────────────────────────────────────────────────
     health_monitor_bridge = providers.Singleton(
         "opsevo.services.bridges.health_monitor_bridge.HealthMonitorBridge",
@@ -225,6 +248,7 @@ class Container(containers.DeclarativeContainer):
         skill_factory=skill_factory,
         skill_registry=skill_registry,
         mcp_client_manager=mcp_client_manager,
+        device_orchestrator=device_orchestrator,
     )
 
     perception_cache = providers.Singleton(
@@ -232,6 +256,7 @@ class Container(containers.DeclarativeContainer):
         datastore=datastore,
         health_monitor=health_monitor,
         alert_engine=alert_engine,
+        device_orchestrator=device_orchestrator,
     )
 
     autonomous_brain = providers.Singleton(

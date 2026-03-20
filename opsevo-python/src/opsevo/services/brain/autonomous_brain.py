@@ -53,6 +53,7 @@ class BrainTickContext:
     patterns: list[dict] = field(default_factory=list)
     pending_decisions: list[dict] = field(default_factory=list)
     device_id: str | None = None
+    device_inventory: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -73,10 +74,12 @@ class AutonomousBrainService:
     OBSERVE_TOOLS: frozenset[str] = frozenset({
         "query_device", "search_knowledge", "analyze_alert",
         "list_skills", "list_mcp_servers", "collect_metrics",
+        "list_devices",
     })
     ACT_TOOLS: frozenset[str] = frozenset({
         "query_device", "search_knowledge", "analyze_alert",
         "list_skills", "list_mcp_servers", "collect_metrics",
+        "list_devices",
         "execute_command", "update_config", "create_remediation",
         "invoke_skill", "send_notification", "schedule_task",
         "create_skill", "configure_mcp_server",
@@ -230,6 +233,16 @@ class AutonomousBrainService:
             ctx.predictions = results[3] if isinstance(results[3], list) else []
             ctx.patterns = results[4] if isinstance(results[4], list) else []
 
+            # 获取设备清单
+            try:
+                inv = await asyncio.wait_for(
+                    cache.get_device_inventory(), timeout=self._config.context_timeout_s,
+                )
+                if isinstance(inv, dict):
+                    ctx.device_inventory = inv
+            except Exception:
+                logger.warning("Context gather failed: device_inventory")
+
         # consume notes
         current_notes = list(self._notes)
         self._notes.clear()
@@ -250,6 +263,15 @@ class AutonomousBrainService:
             parts.append(f"Predictions: {self._compress_predictions(ctx.predictions)}")
         if ctx.patterns:
             parts.append(f"Patterns: {self._compress_patterns(ctx.patterns)}")
+        if ctx.device_inventory:
+            summary = ctx.device_inventory.get("summary", {})
+            if summary:
+                parts.append(
+                    f"Device inventory: {summary.get('total', 0)} total, "
+                    f"{summary.get('online', 0)} online, "
+                    f"{summary.get('offline', 0)} offline, "
+                    f"avg health {summary.get('avg_health_score', 0)}"
+                )
         if self._episodes:
             recent = self._episodes[-5:]
             parts.append("Recent memory: " + "; ".join(e.content[:100] for e in recent))

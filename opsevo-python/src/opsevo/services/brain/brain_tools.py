@@ -32,6 +32,7 @@ class BrainTools:
         skill_factory: Any = None,
         skill_registry: Any = None,
         mcp_client_manager: Any = None,
+        device_orchestrator: Any = None,
     ) -> None:
         self._device_pool = device_pool
         self._datastore = datastore
@@ -42,6 +43,7 @@ class BrainTools:
         self._skill_factory = skill_factory
         self._skill_registry = skill_registry
         self._mcp_client_manager = mcp_client_manager
+        self._device_orchestrator = device_orchestrator
 
         # Rate limiting state for AI self-creation operations
         self._skill_creates_this_tick: int = 0
@@ -294,6 +296,42 @@ class BrainTools:
         except Exception as exc:
             return {"error": str(exc)}
 
+    async def _tool_list_devices(self, params: dict, **_: Any) -> dict:
+        """List all devices from DeviceOrchestrator registry."""
+        if not self._device_orchestrator:
+            return {"error": "device_orchestrator not available"}
+        try:
+            status_filter = params.get("status")
+            devices = self._device_orchestrator.list_devices(status=status_filter)
+            return {
+                "success": True,
+                "devices": [
+                    {
+                        "device_id": s.device_id,
+                        "name": s.name,
+                        "host": s.host,
+                        "status": s.status,
+                        "health_score": s.health_score,
+                        "profile_id": s.profile_id,
+                    }
+                    for s in devices
+                ],
+            }
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    async def _tool_collect_metrics(self, params: dict, device_id: str | None = None) -> dict:
+        """Collect metrics from a device via DeviceDriver."""
+        did = params.get("device_id") or device_id
+        if not did or not self._device_pool:
+            return {"error": "device_id required"}
+        try:
+            driver = await self._device_pool.get_driver(did)
+            metrics = await driver.collect_metrics()
+            return {"success": True, "data": vars(metrics) if hasattr(metrics, "__dict__") else metrics}
+        except Exception as exc:
+            return {"error": str(exc)}
+
     # ------------------------------------------------------------------
     # OpenAI schema conversion
     # ------------------------------------------------------------------
@@ -482,5 +520,25 @@ class BrainTools:
                 "parameters": {},
                 "input_examples": [{}],
                 "negative_constraint": "仅用于查询 MCP Server 连接状态，不要用于配置新 Server",
+            },
+            "list_devices": {
+                "name": "list_devices",
+                "description": "List all devices from the DeviceOrchestrator registry with status and health info",
+                "parameters": {"status": "string?"},
+                "input_examples": [
+                    {},
+                    {"status": "online"},
+                    {"status": "offline"},
+                ],
+                "negative_constraint": "仅用于查询设备列表，不要用于修改设备或执行设备命令",
+            },
+            "collect_metrics": {
+                "name": "collect_metrics",
+                "description": "Collect metrics from a device via DeviceDriver",
+                "parameters": {"device_id": "string"},
+                "input_examples": [
+                    {"device_id": "router-01"},
+                ],
+                "negative_constraint": "仅用于采集设备指标数据，不要用于修改设备配置",
             },
         }

@@ -8,8 +8,9 @@
 
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { deviceApi, type Device, type CreateDeviceRequest } from '@/api/device'
+import { deviceApi, type Device, type CreateDeviceRequest, type DeviceSummary } from '@/api/device'
 import { useConnectionStore } from './connection'
+import { debounce } from 'lodash-es'
 
 const CURRENT_DEVICE_KEY = 'current_device_id'
 
@@ -18,6 +19,7 @@ export const useDeviceStore = defineStore('device', () => {
   const devices = ref<Device[]>([])
   const currentDeviceId = ref<string>('')
   const loading = ref(false)
+  const deviceSummary = ref<DeviceSummary | null>(null)
 
   // Initialize from storage immediately
   loadFromStorage()
@@ -39,6 +41,9 @@ export const useDeviceStore = defineStore('device', () => {
   const hasSelectedDevice = computed<boolean>(() => {
     return !!currentDeviceId.value && !!currentDevice.value
   })
+
+  /** 是否处于全局模式（未选择特定设备） */
+  const isGlobalMode = computed(() => !currentDeviceId.value)
 
   // ==================== 方法 ====================
 
@@ -147,23 +152,24 @@ export const useDeviceStore = defineStore('device', () => {
    * 连接设备
    */
   async function connectDevice(id: string): Promise<void> {
-    // 先更新本地状态为 connecting
+    // 防止重复点击
     const device = devices.value.find((d) => d.id === id)
-    if (device) {
-      device.status = 'connecting'
+    if (!device || device.status === 'connecting' || device.status === 'online') {
+      return
     }
+    device.status = 'connecting'
     try {
       const response = await deviceApi.connect(id)
       if (response.data.success && response.data.data) {
         // 更新设备状态
         const idx = devices.value.findIndex((d) => d.id === id)
         if (idx !== -1) {
-          // 强制设置为 online，确保 UI 更新
-          devices.value[idx] = { ...response.data.data, status: 'online' }
-          // 如果是当前选中设备，同步全局连接状态
+          // 使用后端返回的真实状态（异步模式下为 connecting），由 SSE 事件驱动最终状态
+          devices.value[idx] = { ...response.data.data }
+          // 如果是当前选中设备，等 SSE device_online 再设 connected
           if (currentDeviceId.value === id) {
             const connectionStore = useConnectionStore()
-            connectionStore.setConnected(true)
+            connectionStore.setConnected(false)
           }
         }
       } else {
@@ -172,9 +178,14 @@ export const useDeviceStore = defineStore('device', () => {
         throw new Error(response.data.error || '连接设备失败')
       }
     } catch (err) {
-      if (device) device.status = 'offline'
-      // 连接失败，刷新设备列表获取最新状态
-      await fetchDevices()
+      // 连接失败，刷新设备列表获取真实状态（不乐观降级，避免 UI 闪烁）
+      try {
+        await fetchDevices()
+      } catch (fetchErr) {
+        // 网络完全不可用时兜底设为 offline
+        if (device) device.status = 'offline'
+        console.error('Failed to sync state after connect error', fetchErr)
+      }
       throw err
     }
   }
@@ -183,11 +194,12 @@ export const useDeviceStore = defineStore('device', () => {
    * 断开设备连接
    */
   async function disconnectDevice(id: string): Promise<void> {
-    // 立即更新本地状态为 offline，优化 UI 响应速度
+    // 防止重复点击
     const device = devices.value.find((d) => d.id === id)
-    if (device) {
-      device.status = 'offline'
+    if (!device || device.status === 'offline') {
+      return
     }
+    device.status = 'offline'
 
     // 如果是当前选中设备，立即断开全局连接状态
     if (currentDeviceId.value === id) {
@@ -207,9 +219,86 @@ export const useDeviceStore = defineStore('device', () => {
         throw new Error(response.data.error || '断开连接失败')
       }
     } catch (err) {
-      // 即使后端报错，前端也保持 offline 状态，因为用户意图是断开
+      // 发生错误时，重新拉取真实状态，防止前后端状态永久脱节
+      try {
+        await fetchDevices()
+      } catch (fetchErr) {
+        console.error('Failed to sync state after disconnect error', fetchErr)
+      }
       throw err
     }
+  }
+
+  /**
+   * 获取设备聚合摘要（从 DeviceOrchestrator）
+   */
+  async function fetchDeviceSummary(): Promise<void> {
+    try {
+      const response = await deviceApi.getSummary()
+      if (response.data.success && response.data.data) {
+        deviceSummary.value = response.data.data
+      }
+    } catch (e) {
+      console.error('Failed to fetch device summary:', e)
+    }
+  }
+
+  /**
+   * 清除设备选择，回到全局模式
+   */
+  function clearSelection(): void {
+    selectDevice('')
+  }
+
+  /**
+   * 防抖版 fetchDeviceSummary，防止事件风暴时大量并发请求
+   */
+  const debouncedFetchSummary = debounce(() => {
+    fetchDeviceSummary()
+  }, 1000)
+
+  /**
+   * 处理 SSE 设备状态事件
+   */
+  function handleDeviceEvent(event: {
+    type: string
+    device_id?: string
+    device_name?: string
+    health_score?: number
+  }): void {
+    if (event.device_id) {
+      const device = devices.value.find(d => d.id === event.device_id)
+      switch (event.type) {
+        case 'device_online':
+          if (device) {
+            device.status = 'online'
+            // 如果是当前选中设备，同步全局连接状态
+            if (currentDeviceId.value === event.device_id) {
+              const connectionStore = useConnectionStore()
+              connectionStore.setConnected(true)
+            }
+          }
+          break
+        case 'device_offline':
+          if (device) {
+            device.status = 'offline'
+            if (currentDeviceId.value === event.device_id) {
+              const connectionStore = useConnectionStore()
+              connectionStore.setConnected(false)
+            }
+          }
+          break
+        case 'device_added':
+          fetchDevices()
+          break
+        case 'device_removed':
+          devices.value = devices.value.filter(d => d.id !== event.device_id)
+          if (currentDeviceId.value === event.device_id) clearSelection()
+          break
+      }
+    }
+    // 刷新摘要（防抖，防止事件风暴）
+    debouncedFetchSummary()
   }
 
   return {
@@ -217,18 +306,23 @@ export const useDeviceStore = defineStore('device', () => {
     devices,
     currentDeviceId,
     loading,
+    deviceSummary,
     // 计算属性
     currentDevice,
     onlineDevices,
     hasSelectedDevice,
+    isGlobalMode,
     // 方法
     loadFromStorage,
     fetchDevices,
+    fetchDeviceSummary,
     selectDevice,
+    clearSelection,
     addDevice,
     removeDevice,
     connectDevice,
     disconnectDevice,
     setDevice,
+    handleDeviceEvent,
   }
 })

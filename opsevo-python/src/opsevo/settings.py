@@ -296,6 +296,29 @@ class Settings(BaseSettings):
         description="Encryption key for device credential storage",
     )
 
+    # ── DeviceOrchestrator ────────────────────────────────────────────────
+    orchestrator_health_check_interval_s: int = Field(
+        default=60, ge=10, description="健康检查间隔（秒）",
+    )
+    orchestrator_metrics_interval_s: int = Field(
+        default=120, ge=30, description="指标采集间隔（秒）",
+    )
+    orchestrator_max_concurrent_checks: int = Field(
+        default=10, ge=1, description="最大并发检查数",
+    )
+    orchestrator_max_concurrent_connections: int = Field(
+        default=5, ge=1, description="启动时最大并发连接数",
+    )
+    orchestrator_max_backoff_s: int = Field(
+        default=300, ge=60, description="离线设备最大退避间隔（秒）",
+    )
+    orchestrator_auto_connect: bool = Field(
+        default=True, description="启动时是否自动连接设备",
+    )
+    orchestrator_operation_timeout_s: int = Field(
+        default=15, ge=5, description="单设备操作超时（秒）",
+    )
+
     # ── Profiles ──────────────────────────────────────────────────────────
     profiles_dir: str = Field(
         default="profiles",

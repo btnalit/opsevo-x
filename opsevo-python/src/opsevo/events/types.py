@@ -21,6 +21,14 @@ class EventType(str, Enum):
     INTERNAL = "internal"
     BRAIN_HEARTBEAT = "brain_heartbeat"
 
+    # DeviceOrchestrator 生命周期事件
+    DEVICE_ADDED = "device_added"
+    DEVICE_REMOVED = "device_removed"
+    DEVICE_ONLINE = "device_online"
+    DEVICE_OFFLINE = "device_offline"
+    DEVICE_HEALTH_CHANGED = "device_health_changed"
+    ORCHESTRATOR_READY = "orchestrator_ready"
+
 
 class Priority(str, Enum):
     CRITICAL = "critical"

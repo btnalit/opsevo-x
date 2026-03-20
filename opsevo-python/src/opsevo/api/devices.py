@@ -2,6 +2,9 @@
 
 GET    /api/devices
 POST   /api/devices
+GET    /api/devices/summary
+GET    /api/devices/orchestrator/status
+GET    /api/devices/events/stream
 GET    /api/devices/{device_id}
 PUT    /api/devices/{device_id}
 DELETE /api/devices/{device_id}
@@ -13,17 +16,26 @@ GET    /api/devices/{device_id}/metrics
 GET    /api/devices/{device_id}/health
 POST   /api/devices/{device_id}/execute
 
-Requirements: 3.1
+Requirements: 3.1, 10.1, 6.1, 6.2
 """
 
 from __future__ import annotations
 
+import asyncio
+import json
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import StreamingResponse
 
 from opsevo.api.deps import get_current_user
+from opsevo.api.dependencies import get_device_orchestrator
 from opsevo.drivers.types import DeviceConnectionConfig
+from opsevo.events.types import EventType, PerceptionEvent
 from opsevo.models.common import MessageResponse, SuccessResponse
 from opsevo.models.device import DeviceCreate, DeviceResponse, DeviceUpdate
+from opsevo.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/devices", tags=["devices"])
 
@@ -76,6 +88,107 @@ async def list_devices(
     dm = _get_device_manager(request)
     devices = await dm.list_devices(tenant_id=str(user["id"]))
     return SuccessResponse(data=devices).model_dump()
+
+
+@router.get("/summary")
+async def get_device_summary(
+    orchestrator=Depends(get_device_orchestrator),
+    user: dict = Depends(get_current_user),
+):
+    """GET /api/devices/summary — 设备聚合摘要（来自 DeviceOrchestrator）。"""
+    summary = orchestrator.get_device_summary()
+    return {
+        "success": True,
+        "data": {
+            "total": summary.total,
+            "online": summary.online,
+            "offline": summary.offline,
+            "connecting": summary.connecting,
+            "avg_health_score": summary.avg_health_score,
+        },
+    }
+
+
+@router.get("/orchestrator/status")
+async def get_orchestrator_status(
+    orchestrator=Depends(get_device_orchestrator),
+    user: dict = Depends(get_current_user),
+):
+    """GET /api/devices/orchestrator/status — 编排器运行状态。"""
+    return {"success": True, "data": orchestrator.get_status()}
+
+
+# 需要订阅的设备生命周期事件类型
+_DEVICE_EVENT_TYPES = (
+    EventType.DEVICE_ADDED,
+    EventType.DEVICE_REMOVED,
+    EventType.DEVICE_ONLINE,
+    EventType.DEVICE_OFFLINE,
+    EventType.DEVICE_HEALTH_CHANGED,
+    EventType.ORCHESTRATOR_READY,
+)
+
+
+@router.get("/events/stream")
+async def stream_device_events(
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    """SSE 端点：推送设备生命周期事件。"""
+    event_bus = request.app.state.container.event_bus()
+    queue: asyncio.Queue[PerceptionEvent | None] = asyncio.Queue(maxsize=256)
+    _overflow = False  # 标记队列溢出，通知生成器停止
+
+    async def _on_event(event: PerceptionEvent) -> None:
+        nonlocal _overflow
+        if _overflow:
+            return  # 已溢出，不再入队
+        try:
+            queue.put_nowait(event)
+        except asyncio.QueueFull:
+            # 队列满说明客户端消费太慢，放入哨兵值通知生成器断开
+            _overflow = True
+            logger.warning("sse_queue_full_disconnecting")
+            try:
+                queue.get_nowait()  # 腾出一个位置
+            except asyncio.QueueEmpty:
+                pass
+            try:
+                queue.put_nowait(None)  # 哨兵值
+            except asyncio.QueueFull:
+                pass
+
+    async def _generate():
+        # 订阅移入生成器内部，确保 finally 一定能配对清理
+        for et in _DEVICE_EVENT_TYPES:
+            event_bus.subscribe(et, _on_event)
+        try:
+            yield f"data: {json.dumps({'type': 'connected'})}\n\n"
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=30.0)
+                    if event is None:
+                        # 哨兵值：队列溢出，断开连接迫使前端重连并全量拉取
+                        break
+                    payload = {
+                        "type": event.type.value,
+                        **(event.payload or {}),
+                    }
+                    yield f"data: {json.dumps(payload, default=str)}\n\n"
+                except asyncio.TimeoutError:
+                    # keep-alive ping
+                    yield f"data: {json.dumps({'type': 'ping'})}\n\n"
+        except asyncio.CancelledError:
+            pass
+        finally:
+            for et in _DEVICE_EVENT_TYPES:
+                event_bus.unsubscribe(et, _on_event)
+
+    return StreamingResponse(
+        _generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("", status_code=201)
@@ -136,16 +249,18 @@ async def delete_device(
 async def connect_device(
     device_id: str,
     request: Request,
+    orchestrator=Depends(get_device_orchestrator),
     user: dict = Depends(get_current_user),
 ):
     try:
-        driver, config = await _resolve_driver(request, device_id)
-        await driver.connect(config)
+        success = await orchestrator.connect_device_manual(device_id)
+        if not success:
+            return {"success": False, "error": "Connection failed"}
         dm = _get_device_manager(request)
-        updated = await dm.update_device(device_id, {"status": "online"})
-        return SuccessResponse(data=updated).model_dump()
-    except HTTPException:
-        raise
+        device = await dm.get_device(device_id)
+        return SuccessResponse(data=device).model_dump()
+    except KeyError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc))
     except Exception as exc:
         return {"success": False, "error": str(exc)}
 
@@ -154,16 +269,16 @@ async def connect_device(
 async def disconnect_device(
     device_id: str,
     request: Request,
+    orchestrator=Depends(get_device_orchestrator),
     user: dict = Depends(get_current_user),
 ):
     try:
-        driver, _ = await _resolve_driver(request, device_id)
-        await driver.disconnect()
+        await orchestrator.disconnect_device_manual(device_id)
         dm = _get_device_manager(request)
-        updated = await dm.update_device(device_id, {"status": "offline"})
-        return SuccessResponse(data=updated).model_dump()
-    except HTTPException:
-        raise
+        device = await dm.get_device(device_id)
+        return SuccessResponse(data=device).model_dump()
+    except KeyError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc))
     except Exception as exc:
         return {"success": False, "error": str(exc)}
 

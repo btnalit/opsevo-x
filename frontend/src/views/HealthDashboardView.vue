@@ -6,6 +6,14 @@
           <div class="header-left">
             <span>健康监控</span>
             <span class="header-description">实时查看系统健康状态和趋势</span>
+            <el-tag
+              v-if="deviceStore.deviceSummary"
+              type="info"
+              size="small"
+              style="margin-left: 12px"
+            >
+              监控 {{ deviceStore.deviceSummary.total }} 台设备，{{ deviceStore.deviceSummary.online }} 台在线
+            </el-tag>
           </div>
         </div>
       </template>
@@ -400,6 +408,7 @@ watch(
 )
 
 onMounted(() => {
+  deviceStore.fetchDeviceSummary()
   loadData()
   startAutoRefresh()
 })

@@ -18,13 +18,16 @@ import asyncio
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
 from opsevo.data.datastore import DataStore
 from opsevo.events.event_bus import EventBus
 from opsevo.events.types import EventType, PerceptionEvent, Priority
+
+if TYPE_CHECKING:
+    from opsevo.services.device_orchestrator import DeviceOrchestrator
 
 logger = structlog.get_logger(__name__)
 
@@ -439,9 +442,10 @@ class _TrapUdpProtocol(asyncio.DatagramProtocol):
 class SnmpTrapReceiver:
     """SNMP Trap/Inform receiver with BER decoding, OID mapping, and EventBus integration."""
 
-    def __init__(self, data_store: DataStore, event_bus: EventBus) -> None:
+    def __init__(self, data_store: DataStore, event_bus: EventBus, device_orchestrator: DeviceOrchestrator | None = None) -> None:
         self._data_store = data_store
         self._event_bus = event_bus
+        self._device_orchestrator = device_orchestrator
         self._running = False
 
         self._oid_mappings: list[TrapOidMapping] = []
@@ -514,7 +518,13 @@ class SnmpTrapReceiver:
             logger.warn("Auth failed for trap", version=parsed.version, source_ip=source_ip)
             return
         self._update_trap_stats(source_ip)
-        event = self._to_perception_event(parsed)
+
+        # Resolve device_id from IP via DeviceOrchestrator
+        device_id: str | None = None
+        if self._device_orchestrator:
+            device_id = self._device_orchestrator.resolve_device_by_ip(source_ip)
+
+        event = self._to_perception_event(parsed, device_id=device_id)
         await self._event_bus.publish(event)
         if parsed.is_inform:
             self._send_inform_response(parsed, source_ip, source_port, raw)
@@ -544,7 +554,7 @@ class SnmpTrapReceiver:
 
     # ─── Conversion ───
 
-    def _to_perception_event(self, parsed: ParsedTrap) -> PerceptionEvent:
+    def _to_perception_event(self, parsed: ParsedTrap, device_id: str | None = None) -> PerceptionEvent:
         mapped = self.map_oid(parsed.trap_oid)
         severity_map = {
             "critical": Priority.CRITICAL, "high": Priority.HIGH,
@@ -568,6 +578,7 @@ class SnmpTrapReceiver:
                 "is_inform": parsed.is_inform,
                 "community": parsed.community if parsed.version == "v2c" else None,
                 "security_name": parsed.security_name if parsed.version == "v3" else None,
+                "device_id": device_id,
             },
             schema_version="1.0.0",
         )

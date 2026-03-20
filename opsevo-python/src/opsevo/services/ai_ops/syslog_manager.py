@@ -20,13 +20,16 @@ import re
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
 from opsevo.data.datastore import DataStore
 from opsevo.events.event_bus import EventBus
 from opsevo.events.types import EventType, PerceptionEvent, Priority
+
+if TYPE_CHECKING:
+    from opsevo.services.device_orchestrator import DeviceOrchestrator
 
 logger = structlog.get_logger(__name__)
 
@@ -254,9 +257,10 @@ class _UdpSyslogProtocol(asyncio.DatagramProtocol):
 class SyslogManager:
     """Configurable Syslog receiver with parsing, source management, and EventBus integration."""
 
-    def __init__(self, data_store: DataStore, event_bus: EventBus) -> None:
+    def __init__(self, data_store: DataStore, event_bus: EventBus, device_orchestrator: DeviceOrchestrator | None = None) -> None:
         self._data_store = data_store
         self._event_bus = event_bus
+        self._device_orchestrator = device_orchestrator
         self._running = False
 
         self._parse_rules: list[ParseRule] = []
@@ -362,6 +366,13 @@ class SyslogManager:
 
         # 3. Resolve source
         device_id, known = self.resolve_source(source_ip)
+
+        # Fallback to DeviceOrchestrator IP mapping if source not known
+        if not known and self._device_orchestrator:
+            orch_device_id = self._device_orchestrator.resolve_device_by_ip(source_ip)
+            if orch_device_id:
+                device_id = orch_device_id
+                known = True
 
         # Update in-memory stats
         self._update_source_stats(source_ip)

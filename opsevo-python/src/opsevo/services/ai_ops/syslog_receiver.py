@@ -10,12 +10,15 @@ from __future__ import annotations
 import asyncio
 import re
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
 from opsevo.events.event_bus import EventBus
 from opsevo.events.types import EventType, PerceptionEvent, Priority
+
+if TYPE_CHECKING:
+    from opsevo.services.device_orchestrator import DeviceOrchestrator
 
 logger = structlog.get_logger(__name__)
 
@@ -31,10 +34,12 @@ class SyslogReceiver:
         event_bus: EventBus,
         port: int = 514,
         severity_mapping: dict[str, str] | None = None,
+        device_orchestrator: DeviceOrchestrator | None = None,
     ) -> None:
         self._event_bus = event_bus
         self._port = port
         self._severity_mapping = severity_mapping or {}
+        self._device_orchestrator = device_orchestrator
         self._transport: asyncio.DatagramTransport | None = None
         self._protocol: _SyslogProtocol | None = None
         self._message_count = 0
@@ -84,8 +89,15 @@ class SyslogReceiver:
         try:
             text = data.decode("utf-8", errors="replace").strip()
             parsed = self._parse_syslog(text)
-            parsed["source_ip"] = addr[0]
+            source_ip = addr[0]
+            parsed["source_ip"] = source_ip
             parsed["source_port"] = addr[1]
+
+            # Resolve device_id from IP via DeviceOrchestrator
+            device_id: str | None = None
+            if self._device_orchestrator:
+                device_id = self._device_orchestrator.resolve_device_by_ip(source_ip)
+            parsed["device_id"] = device_id
 
             severity = parsed.get("severity", "info")
             priority = self._map_priority(severity)

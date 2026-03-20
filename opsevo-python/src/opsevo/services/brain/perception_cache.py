@@ -25,6 +25,7 @@ class PerceptionCache:
         alert_engine: Any = None,
         anomaly_predictor: Any = None,
         pattern_learner: Any = None,
+        device_orchestrator: Any = None,
         refresh_interval_s: float = 30.0,
     ) -> None:
         self._datastore = datastore
@@ -32,6 +33,7 @@ class PerceptionCache:
         self._alert_engine = alert_engine
         self._anomaly_predictor = anomaly_predictor
         self._pattern_learner = pattern_learner
+        self._device_orchestrator = device_orchestrator
         self._interval = refresh_interval_s
 
         self._active_alerts: list[dict] = []
@@ -39,6 +41,7 @@ class PerceptionCache:
         self._health_summary: dict[str, Any] = {}
         self._predictions: list[dict] = []
         self._patterns: list[dict] = []
+        self._device_inventory: dict[str, Any] = {}
 
         self._task: asyncio.Task[None] | None = None
         self._running = False
@@ -75,6 +78,9 @@ class PerceptionCache:
 
     async def get_patterns(self) -> list[dict]:
         return list(self._patterns)
+
+    async def get_device_inventory(self) -> dict[str, Any]:
+        return dict(self._device_inventory)
 
     # ------------------------------------------------------------------
     async def _loop(self) -> None:
@@ -119,3 +125,28 @@ class PerceptionCache:
                 self._predictions = result
             elif label == "patterns" and isinstance(result, list):
                 self._patterns = result
+
+        # 从 DeviceOrchestrator 获取设备清单
+        if self._device_orchestrator:
+            try:
+                summary = self._device_orchestrator.get_device_summary()
+                self._device_inventory = {
+                    "summary": {
+                        "total": summary.total,
+                        "online": summary.online,
+                        "offline": summary.offline,
+                        "connecting": summary.connecting,
+                        "avg_health_score": summary.avg_health_score,
+                    },
+                    "devices": [
+                        {
+                            "id": s.device_id,
+                            "name": s.name,
+                            "status": s.status,
+                            "health_score": s.health_score,
+                        }
+                        for s in self._device_orchestrator.list_devices()
+                    ],
+                }
+            except Exception:
+                logger.warning("PerceptionCache: device inventory refresh failed")

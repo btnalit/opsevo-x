@@ -176,6 +176,10 @@ async def lifespan(app: FastAPI):
     bp = container.batch_processor()
     bp.start()
 
+    # 5k' — DeviceOrchestrator start
+    orchestrator = container.device_orchestrator()
+    await _safe_start("device_orchestrator", orchestrator.start())
+
     # 5l — AutonomousBrainService start
     brain = container.autonomous_brain()
     await _safe_start("autonomous_brain", brain.start())
@@ -233,6 +237,7 @@ async def lifespan(app: FastAPI):
     await _safe_shutdown("adapter_pool", container.adapter_pool().close_all())
 
     # Phase 3/1 shutdown (existing)
+    await _safe_shutdown("device_orchestrator", orchestrator.stop())
     await _safe_shutdown("device_pool", pool.stop())
     await _safe_shutdown("datastore", ds.close())
 

@@ -19,13 +19,32 @@
         </div>
       </template>
 
-      <!-- No Device Selected -->
-      <el-empty
-        v-if="!deviceStore.currentDeviceId"
-        description="请先选择设备"
-      >
-        <el-button type="primary" @click="$router.push('/devices')">前往设备管理</el-button>
-      </el-empty>
+      <!-- No Device Selected — Global Overview Mode -->
+      <div v-if="!deviceStore.currentDeviceId" class="global-overview">
+        <el-row :gutter="20">
+          <el-col :span="6" v-for="item in summaryCards" :key="item.label">
+            <el-card shadow="hover" class="summary-card">
+              <div class="summary-value" :style="{ color: item.color }">{{ item.value }}</div>
+              <div class="summary-label">{{ item.label }}</div>
+            </el-card>
+          </el-col>
+        </el-row>
+
+        <el-card style="margin-top: 20px">
+          <template #header><span>在线设备</span></template>
+          <el-table :data="deviceStore.onlineDevices" size="small" @row-click="onDeviceClick" style="cursor: pointer">
+            <el-table-column prop="name" label="设备名称" />
+            <el-table-column prop="host" label="地址" />
+            <el-table-column prop="status" label="状态">
+              <template #default="{ row }">
+                <el-tag :type="row.status === 'online' ? 'success' : 'danger'" size="small">
+                  {{ row.status === 'online' ? '在线' : '离线' }}
+                </el-tag>
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-card>
+      </div>
 
       <!-- Loading State -->
       <el-skeleton v-else-if="loading && !resource" :rows="5" animated />
@@ -197,6 +216,7 @@ import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { dashboardApi } from '@/api/system'
 import { useDeviceStore } from '@/stores/device'
+import type { Device } from '@/api/device'
 
 // System Resource interface
 interface SystemResource {
@@ -266,6 +286,22 @@ const diskPercent = computed(() => {
   if (diskTotal.value === 0) return 0
   return Math.round((diskUsed.value / diskTotal.value) * 100)
 })
+
+// Global overview summary cards
+const summaryCards = computed(() => {
+  const s = deviceStore.deviceSummary
+  return [
+    { label: '设备总数', value: s?.total ?? 0, color: 'var(--el-color-primary)' },
+    { label: '在线', value: s?.online ?? 0, color: 'var(--el-color-success)' },
+    { label: '离线', value: s?.offline ?? 0, color: 'var(--el-color-danger)' },
+    { label: '平均健康分', value: s?.avg_health_score?.toFixed(1) ?? '-', color: 'var(--el-color-warning)' },
+  ]
+})
+
+// Click device row to select it
+const onDeviceClick = (row: Device) => {
+  deviceStore.selectDevice(row.id)
+}
 
 // Load resource data
 const loadResource = async () => {
@@ -412,13 +448,15 @@ watch(
         startAutoRefresh()
       } else {
         stopAutoRefresh()
+        deviceStore.fetchDeviceSummary()
       }
     }
   }
 )
 
 // Lifecycle hooks
-onMounted(() => {
+onMounted(async () => {
+  await deviceStore.fetchDeviceSummary()
   if (deviceStore.currentDeviceId) {
     loadResource()
     startAutoRefresh()
@@ -569,5 +607,26 @@ onUnmounted(() => {
   font-size: 14px;
   color: var(--el-text-color-regular);
   font-weight: 500;
+}
+
+.global-overview {
+  padding: 10px 0;
+}
+
+.summary-card {
+  text-align: center;
+  border-radius: 12px;
+}
+
+.summary-value {
+  font-size: 32px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.summary-label {
+  font-size: 14px;
+  color: var(--el-text-color-secondary);
+  margin-top: 4px;
 }
 </style>
