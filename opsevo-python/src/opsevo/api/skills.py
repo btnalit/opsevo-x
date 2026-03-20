@@ -321,7 +321,7 @@ async def import_skill(
 # 基础 CRUD
 # ------------------------------------------------------------------
 
-@router.get("/")
+@router.get("")
 async def list_skills(
     request: Request,
     builtin: str | None = Query(None),
@@ -353,7 +353,7 @@ async def list_skills(
     }
 
 
-@router.post("/", status_code=201)
+@router.post("", status_code=201)
 async def create_skill(
     body: CreateSkillRequest,
     request: Request,

@@ -11,7 +11,6 @@
 import { ref, type Ref } from 'vue'
 import api from '@/api'
 import { createAuthEventSource, type AuthEventSourceHandle } from '@/utils/authEventSource'
-import { useDeviceStore } from '@/stores/device'
 
 // ==================== 类型定义 ====================
 
@@ -92,11 +91,6 @@ let isDeactivated = false
 
 function getSSEUrl(): string {
   const baseUrl = api.defaults.baseURL || ''
-  const deviceStore = useDeviceStore()
-  const deviceId = deviceStore.currentDeviceId
-  if (deviceId) {
-    return `${baseUrl}/devices/${deviceId}/topology/stream`
-  }
   return `${baseUrl}/topology/stream`
 }
 

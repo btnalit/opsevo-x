@@ -1,8 +1,9 @@
 """
 Topology API 路由
-/api/devices/{device_id}/topology/* 端点
+/api/topology/* 端点
 
 接入 TopologyDiscoveryService 真实逻辑。
+Topology 是全局服务（跨设备网络拓扑），不绑定特定 device_id。
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from fastapi.responses import StreamingResponse
 
 from .deps import get_current_user, get_datastore
 
-router = APIRouter(prefix="/api/devices/{device_id}/topology", tags=["topology"])
+router = APIRouter(prefix="/api/topology", tags=["topology"])
 
 
 def _get_topology_service(request: Request):
@@ -29,7 +30,6 @@ def _get_topology_service(request: Request):
 # ---------------------------------------------------------------------------
 @router.get("")
 async def get_topology_graph(
-    device_id: str,
     request: Request,
     user=Depends(get_current_user),
 ) -> dict:
@@ -53,7 +53,6 @@ async def get_topology_graph(
 # ---------------------------------------------------------------------------
 @router.get("/diff")
 async def get_diff_history(
-    device_id: str,
     request: Request,
     limit: int = Query(20),
     user=Depends(get_current_user),
@@ -68,7 +67,6 @@ async def get_diff_history(
 # ---------------------------------------------------------------------------
 @router.post("/discover")
 async def trigger_full_discovery(
-    device_id: str,
     request: Request,
     user=Depends(get_current_user),
 ) -> dict:
@@ -82,7 +80,6 @@ async def trigger_full_discovery(
 # ---------------------------------------------------------------------------
 @router.get("/stats")
 async def get_topology_stats(
-    device_id: str,
     request: Request,
     user=Depends(get_current_user),
 ) -> dict:
@@ -96,7 +93,6 @@ async def get_topology_stats(
 # ---------------------------------------------------------------------------
 @router.get("/config")
 async def get_topology_config(
-    device_id: str,
     request: Request,
     user=Depends(get_current_user),
 ) -> dict:
@@ -110,7 +106,6 @@ async def get_topology_config(
 # ---------------------------------------------------------------------------
 @router.put("/config")
 async def update_topology_config(
-    device_id: str,
     request: Request,
     user=Depends(get_current_user),
 ) -> dict:
@@ -170,7 +165,6 @@ async def update_topology_config(
 # ---------------------------------------------------------------------------
 @router.get("/stream")
 async def topology_stream(
-    device_id: str,
     request: Request,
     user=Depends(get_current_user),
 ) -> StreamingResponse:
