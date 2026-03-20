@@ -44,7 +44,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted, onActivated, onDeactivated } from 'vue'
 import api from '@/api'
 import { ElMessage } from 'element-plus'
 
@@ -90,6 +90,17 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (pollTimer) clearInterval(pollTimer)
+})
+
+onDeactivated(() => {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
+})
+
+onActivated(() => {
+  if (!pollTimer) {
+    fetchPending()
+    pollTimer = window.setInterval(fetchPending, 3000)
+  }
 })
 
 const handleGrant = async () => {

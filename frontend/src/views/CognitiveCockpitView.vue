@@ -97,15 +97,18 @@ onUnmounted(() => {
 })
 
 onDeactivated(() => {
-  // keep-alive 停用：断开 SSE 连接，停止健康轮询
+  // keep-alive 停用：断开 SSE 连接，停止健康轮询，停止 brainTimer
   sse.deactivate()
   health.stop()
+  if (brainTimer) { clearInterval(brainTimer); brainTimer = null }
 })
 
 onActivated(() => {
-  // keep-alive 激活：恢复 SSE 连接，重启健康轮询
+  // keep-alive 激活：恢复 SSE 连接，重启健康轮询，重启 brainTimer
   sse.activate()
   health.start()
+  loadBrainStatus()
+  if (!brainTimer) { brainTimer = setInterval(loadBrainStatus, 15000) }
 })
 </script>
 

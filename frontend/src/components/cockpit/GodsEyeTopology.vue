@@ -30,7 +30,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, onActivated, onDeactivated, watch } from 'vue'
 import { Graph } from '@antv/g6'
 import { registerNeonNode } from './topology/registerNeonNode'
 import {
@@ -544,6 +544,39 @@ onMounted(async () => {
   watch(showEndpoints, (newVal) => {
     if (topoNodesMap.size > 0) toggleEndpointVisibility(newVal)
   })
+})
+
+onDeactivated(() => {
+  // keep-alive 停用：停止轮询和 SSE，但保留 graph 实例
+  if (refreshTimer !== undefined) {
+    clearInterval(refreshTimer)
+    refreshTimer = undefined
+  }
+  if (unsubscribeSSE) {
+    unsubscribeSSE()
+    unsubscribeSSE = null
+  }
+  if (focusAnimator) {
+    focusAnimator.stop(true)
+    focusAnimator = null
+  }
+})
+
+onActivated(() => {
+  // keep-alive 激活：恢复轮询和 SSE
+  if (unsubscribeSSE === null) {
+    unsubscribeSSE = subscribe((diff: TopologyDiff) => {
+      batchProcessor.push(diff)
+      discoveryStatus.value = 'live'
+    })
+  }
+  if (refreshTimer === undefined) {
+    refreshTimer = window.setInterval(() => {
+      if (discoveryStatus.value !== 'live') {
+        fetchTopology()
+      }
+    }, 30000)
+  }
 })
 
 onUnmounted(() => {

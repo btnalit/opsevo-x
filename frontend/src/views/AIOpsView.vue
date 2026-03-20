@@ -455,7 +455,7 @@
 <script setup lang="ts">
 import { Refresh, MoreFilled, Loading, CircleCheckFilled, CircleCloseFilled, RefreshLeft } from '@element-plus/icons-vue'
 
-import { ref, computed, onMounted, onUnmounted, markRaw, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, onActivated, onDeactivated, markRaw, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import VChart from 'vue-echarts'
@@ -1044,6 +1044,38 @@ onUnmounted(() => {
   stopAutoRefresh()
   deviceEventController?.abort()
   deviceEventController = null
+})
+
+onDeactivated(() => {
+  // keep-alive 停用：停止轮询和 SSE，释放浏览器连接池
+  stopAutoRefresh()
+  deviceEventController?.abort()
+  deviceEventController = null
+})
+
+onActivated(() => {
+  // keep-alive 激活：恢复轮询和 SSE
+  loadDashboardData()
+  startAutoRefresh()
+  deviceEventController = deviceApi.streamDeviceEvents(
+    (event) => {
+      deviceStore.handleDeviceEvent(event)
+      if (event.type === 'device_offline') {
+        ElNotification.warning({
+          title: '设备离线',
+          message: `${event.device_name || event.device_id} 已离线`,
+          duration: 5000,
+        })
+      } else if (event.type === 'device_online') {
+        ElNotification.success({
+          title: '设备上线',
+          message: `${event.device_name || event.device_id} 已上线`,
+          duration: 3000,
+        })
+      }
+    },
+    (err) => console.error('Device event stream error:', err),
+  )
 })
 </script>
 
