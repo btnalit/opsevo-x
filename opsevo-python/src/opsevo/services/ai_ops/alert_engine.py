@@ -6,7 +6,9 @@ Severity mapping loaded from DeviceDriver Profile, no hardcoded RouterOS mapping
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import inspect
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -226,6 +228,7 @@ class AlertEngine:
             state="active", current_value=value, threshold=rule.threshold, timestamp=now,
         )
         self._active_alerts[evt.id] = evt
+        self._enforce_active_alerts_limit()
         self._trigger_states[rule.id] = {"last_triggered": now}
         await self._ds.execute(
             "INSERT INTO alert_events (id,rule_id,device_id,severity,message,state,current_value,threshold,timestamp) "
@@ -351,9 +354,13 @@ class AlertEngine:
             metadata={"source": "syslog", "fingerprint": fp},
         )
         self._active_alerts[evt.id] = evt
+        self._enforce_active_alerts_limit()
         for handler in self._preprocessed_handlers:
             try:
-                handler(evt)
+                if inspect.iscoroutinefunction(handler):
+                    asyncio.create_task(handler(evt))
+                else:
+                    handler(evt)
             except Exception:
                 pass
 
@@ -364,6 +371,26 @@ class AlertEngine:
 
     def on_preprocessed_event(self, handler: Callable) -> None:
         self._preprocessed_handlers.append(handler)
+
+    def off_preprocessed_event(self, handler: Callable) -> None:
+        """Remove a previously registered preprocessed-event handler."""
+        try:
+            self._preprocessed_handlers.remove(handler)
+        except ValueError:
+            pass
+
+    def _enforce_active_alerts_limit(self) -> None:
+        """Evict oldest active alerts when exceeding max_active_alerts."""
+        limit = self._config.max_active_alerts
+        if len(self._active_alerts) <= limit:
+            return
+        sorted_ids = sorted(
+            self._active_alerts,
+            key=lambda aid: self._active_alerts[aid].timestamp,
+        )
+        to_remove = len(self._active_alerts) - limit
+        for aid in sorted_ids[:to_remove]:
+            self._active_alerts.pop(aid, None)
 
     async def flush(self) -> None:
         logger.info("alert_engine_flushed")

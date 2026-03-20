@@ -47,3 +47,20 @@ class HealthMonitor:
 
     def get_device_status(self, device_id: str) -> dict[str, Any] | None:
         return self._device_status.get(device_id)
+
+    async def get_summary(self) -> dict[str, Any]:
+        """Aggregate device statuses into an overall health summary."""
+        statuses = list(self._device_status.values())
+        total = len(statuses)
+        if total == 0:
+            return {"total": 0, "healthy": 0, "unhealthy": 0, "overall": 100}
+        healthy = sum(1 for s in statuses if s.get("healthy"))
+        avg_latency = sum(s.get("latency_ms", 0) for s in statuses) / total
+        overall = int((healthy / total) * 100)
+        return {
+            "total": total,
+            "healthy": healthy,
+            "unhealthy": total - healthy,
+            "overall": overall,
+            "avg_latency_ms": round(avg_latency, 1),
+        }

@@ -43,6 +43,8 @@ class AlertEngineBridge:
         # 注册回调到 AlertEngine
         if hasattr(self._alert_engine, "on_preprocessed_event"):
             self._alert_engine.on_preprocessed_event(self._on_event)
+        # BUG-2 fix: 订阅 SYSLOG 事件，路由到 AlertEngine.process_syslog_event
+        self._event_bus.subscribe(EventType.SYSLOG, self._on_syslog_event)
         self._started = True
         logger.info("AlertEngineBridge started")
 
@@ -51,6 +53,7 @@ class AlertEngineBridge:
             return
         if hasattr(self._alert_engine, "off_preprocessed_event"):
             self._alert_engine.off_preprocessed_event(self._on_event)
+        self._event_bus.unsubscribe(EventType.SYSLOG, self._on_syslog_event)
         self._started = False
         logger.info("AlertEngineBridge stopped")
 
@@ -59,6 +62,16 @@ class AlertEngineBridge:
             await self._publish_alert(event)
         except Exception as exc:
             logger.warn("AlertEngineBridge publish failed", error=str(exc))
+
+    async def _on_syslog_event(self, event: PerceptionEvent) -> None:
+        """Route SYSLOG events from EventBus to AlertEngine.process_syslog_event."""
+        try:
+            syslog_data = dict(event.payload)
+            if "device_id" not in syslog_data:
+                syslog_data["device_id"] = event.payload.get("device_id", "")
+            await self._alert_engine.process_syslog_event(syslog_data)
+        except Exception as exc:
+            logger.warn("AlertEngineBridge syslog routing failed", error=str(exc))
 
     async def _publish_alert(self, event: dict[str, Any]) -> None:
         severity = event.get("severity", "info")

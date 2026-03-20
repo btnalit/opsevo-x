@@ -59,12 +59,11 @@ class HealthMonitorBridge:
 
     async def publish_once(self, device_id: str | None = None) -> None:
         try:
-            metrics = await self._health_monitor.collect_metrics()
-            score = self._health_monitor.calculate_score(metrics)
-            await self._publish_metric(metrics, score, device_id)
-            overall = score.get("overall", 100) if isinstance(score, dict) else getattr(score, "overall", 100)
+            summary = await self._health_monitor.get_summary()
+            overall = summary.get("overall", 100)
+            await self._publish_metric(summary, overall, device_id)
             if overall < self._alert_threshold:
-                await self._publish_health_alert(metrics, score, device_id)
+                await self._publish_health_alert(summary, overall, device_id)
         except Exception as exc:
             logger.warn("HealthMonitorBridge publish failed", error=str(exc))
 
@@ -74,17 +73,10 @@ class HealthMonitorBridge:
             await asyncio.sleep(self._collect_interval)
 
     async def _publish_metric(
-        self, metrics: Any, score: Any, device_id: str | None
+        self, summary: dict[str, Any], overall: float, device_id: str | None
     ) -> None:
-        overall = score.get("overall", 100) if isinstance(score, dict) else getattr(score, "overall", 100)
         priority = self._score_to_priority(overall)
-        payload: dict[str, Any] = {}
-        if isinstance(metrics, dict):
-            payload = dict(metrics)
-        else:
-            for attr in ("cpu_usage", "memory_usage", "disk_usage", "error_rate"):
-                if hasattr(metrics, attr):
-                    payload[attr] = getattr(metrics, attr)
+        payload = dict(summary)
         payload["score"] = overall
         event = PerceptionEvent(
             type=EventType.METRIC,
@@ -98,9 +90,8 @@ class HealthMonitorBridge:
         await self._event_bus.publish(event)
 
     async def _publish_health_alert(
-        self, metrics: Any, score: Any, device_id: str | None
+        self, summary: dict[str, Any], overall: float, device_id: str | None
     ) -> None:
-        overall = score.get("overall", 100) if isinstance(score, dict) else getattr(score, "overall", 100)
         if overall < 30:
             priority = Priority.CRITICAL
         elif overall < 50:

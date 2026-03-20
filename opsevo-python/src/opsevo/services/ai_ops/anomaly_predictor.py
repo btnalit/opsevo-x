@@ -15,6 +15,7 @@ logger = get_logger(__name__)
 class AnomalyPredictor:
     def __init__(self, z_threshold: float = 2.5):
         self._z_threshold = z_threshold
+        self._latest_predictions: list[dict[str, Any]] = []
 
     def detect(self, values: list[float]) -> list[dict[str, Any]]:
         if len(values) < 5:
@@ -29,4 +30,9 @@ class AnomalyPredictor:
             z = abs(v - mean) / std
             if z > self._z_threshold:
                 anomalies.append({"index": i, "value": v, "z_score": round(z, 2)})
+        self._latest_predictions = anomalies
         return anomalies
+
+    async def get_predictions(self) -> list[dict[str, Any]]:
+        """Return the latest anomaly predictions for PerceptionCache consumption."""
+        return list(self._latest_predictions)

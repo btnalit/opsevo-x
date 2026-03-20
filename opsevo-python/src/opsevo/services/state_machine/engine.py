@@ -148,7 +148,22 @@ class StateMachineEngine:
             running = await self.step(instance_id)
             if not running:
                 break
+        self.cleanup_completed()
         return self._instances.get(instance_id)
+
+    def cleanup_completed(self, max_age_s: float = 3600) -> int:
+        """Remove completed/failed/aborted instances older than max_age_s. Returns count removed."""
+        now = time.time()
+        to_remove = [
+            iid for iid, inst in self._instances.items()
+            if inst.status in ("completed", "failed", "aborted")
+            and (now - inst.updated_at) > max_age_s
+        ]
+        for iid in to_remove:
+            del self._instances[iid]
+        if to_remove:
+            logger.info("StateMachine cleanup", removed=len(to_remove))
+        return len(to_remove)
 
     def abort(self, instance_id: str) -> bool:
         instance = self._instances.get(instance_id)
