@@ -39,6 +39,7 @@ const DEVICE_SCOPED_PREFIXES = [
   '/container',
   '/ai',
   '/monitoring',
+  '/topology',
 ]
 
 /**
