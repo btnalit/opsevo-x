@@ -27,6 +27,7 @@ export enum AIProvider {
   DEEPSEEK = 'deepseek',
   QWEN = 'qwen',
   ZHIPU = 'zhipu',
+  OLLAMA = 'ollama',
   CUSTOM = 'custom'
 }
 

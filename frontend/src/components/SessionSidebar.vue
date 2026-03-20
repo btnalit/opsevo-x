@@ -221,6 +221,7 @@ const PROVIDER_NAMES: Record<AIProvider, string> = {
   [AIProvider.DEEPSEEK]: 'DeepSeek',
   [AIProvider.QWEN]: 'Qwen',
   [AIProvider.ZHIPU]: '智谱AI',
+  [AIProvider.OLLAMA]: 'Ollama',
   [AIProvider.CUSTOM]: '自定义'
 }
 

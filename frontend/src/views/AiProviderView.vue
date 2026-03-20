@@ -98,14 +98,15 @@
           <el-input v-model="formData.name" placeholder="配置名称" />
         </el-form-item>
         <el-form-item label="提供商" prop="provider">
-          <el-select v-model="formData.provider" placeholder="选择提供商" style="width:100%">
+          <el-select v-model="formData.provider" placeholder="选择提供商" style="width:100%" filterable allow-create>
             <el-option label="OpenAI" value="openai" />
             <el-option label="Claude" value="claude" />
             <el-option label="Gemini" value="gemini" />
             <el-option label="DeepSeek" value="deepseek" />
-            <el-option label="Qwen" value="qwen" />
-            <el-option label="ZhiPu" value="zhipu" />
-            <el-option label="Custom" value="custom" />
+            <el-option label="Qwen (通义千问)" value="qwen" />
+            <el-option label="智谱AI" value="zhipu" />
+            <el-option label="Ollama (本地)" value="ollama" />
+            <el-option label="自定义" value="custom" />
           </el-select>
         </el-form-item>
         <el-form-item label="API Key" prop="apiKey">

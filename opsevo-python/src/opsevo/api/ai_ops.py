@@ -2727,3 +2727,163 @@ async def create_knowledge_prompt(
     )
     row = await ds.query_one("SELECT * FROM knowledge_embeddings WHERE id=$1", [kid])
     return {"success": True, "data": snake_to_camel(row)}
+
+
+# ---------------------------------------------------------------------------
+# AI Providers (maps to ai_configs table, global scope)
+# ---------------------------------------------------------------------------
+
+def _mask_api_key(key: str | None) -> str:
+    if not key:
+        return ""
+    if len(key) <= 4:
+        return "****"
+    return "*" * (len(key) - 4) + key[-4:]
+
+
+def _format_provider_row(row: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not row:
+        return None
+    return {
+        "id": row.get("id"),
+        "name": row.get("name", ""),
+        "provider": row.get("provider", ""),
+        "apiKey": _mask_api_key(row.get("api_key") or ""),
+        "model": row.get("model") or row.get("model_name") or "",
+        "baseUrl": row.get("base_url") or "",
+        "enabled": bool(row.get("is_active", True)),
+        "isDefault": bool(row.get("is_default", False)),
+        "createdAt": row.get("created_at"),
+        "updatedAt": row.get("updated_at"),
+    }
+
+
+@router.get("/ai-providers")
+async def get_ai_providers(
+    ds=Depends(get_datastore),
+    user=Depends(get_current_user),
+) -> dict:
+    rows = await ds.query("SELECT * FROM ai_configs ORDER BY created_at DESC")
+    return {"success": True, "data": [_format_provider_row(r) for r in (rows or [])]}
+
+
+@router.post("/ai-providers")
+async def create_ai_provider(
+    request: Request,
+    ds=Depends(get_datastore),
+    user=Depends(get_current_user),
+) -> dict:
+    body = await request.json()
+    pid = str(uuid.uuid4())
+    name = body.get("name", "")
+    provider = body.get("provider", "custom")
+    api_key = body.get("apiKey", "")
+    model = body.get("model", "")
+    base_url = body.get("baseUrl", "")
+    enabled = body.get("enabled", True)
+    await ds.execute(
+        "INSERT INTO ai_configs (id, name, provider, api_key, model, base_url, is_active) "
+        "VALUES ($1,$2,$3,$4,$5,$6,$7)",
+        (pid, name, provider, api_key, model, base_url, enabled),
+    )
+    row = await ds.query_one("SELECT * FROM ai_configs WHERE id=$1", [pid])
+    return {"success": True, "data": _format_provider_row(row)}
+
+
+@router.put("/ai-providers/{provider_id}")
+async def update_ai_provider(
+    provider_id: str = Path(...),
+    request: Request = None,
+    ds=Depends(get_datastore),
+    user=Depends(get_current_user),
+) -> dict:
+    body = await request.json()
+    existing = await ds.query_one("SELECT * FROM ai_configs WHERE id=$1", [provider_id])
+    if not existing:
+        raise HTTPException(404, "Provider not found")
+    sets = []
+    params: list[Any] = []
+    idx = 1
+    col_map = {
+        "name": "name", "provider": "provider", "apiKey": "api_key",
+        "model": "model", "baseUrl": "base_url", "enabled": "is_active",
+        "isDefault": "is_default",
+    }
+    for k, v in body.items():
+        col = col_map.get(k)
+        if col:
+            sets.append(f"{col} = ${idx}")
+            params.append(v)
+            idx += 1
+    if sets:
+        sets.append(f"updated_at = NOW()")
+        params.append(provider_id)
+        await ds.execute(
+            f"UPDATE ai_configs SET {', '.join(sets)} WHERE id = ${idx}",
+            tuple(params),
+        )
+    row = await ds.query_one("SELECT * FROM ai_configs WHERE id=$1", [provider_id])
+    return {"success": True, "data": _format_provider_row(row)}
+
+
+@router.delete("/ai-providers/{provider_id}")
+async def delete_ai_provider(
+    provider_id: str = Path(...),
+    ds=Depends(get_datastore),
+    user=Depends(get_current_user),
+) -> dict:
+    rows = await ds.execute("DELETE FROM ai_configs WHERE id=$1", [provider_id])
+    if rows == 0:
+        raise HTTPException(404, "Provider not found")
+    return {"success": True, "message": "Provider deleted"}
+
+
+@router.post("/ai-providers/{provider_id}/test")
+async def test_ai_provider(
+    provider_id: str = Path(...),
+    request: Request = None,
+    ds=Depends(get_datastore),
+    user=Depends(get_current_user),
+) -> dict:
+    row = await ds.query_one("SELECT * FROM ai_configs WHERE id=$1", [provider_id])
+    if not row:
+        raise HTTPException(404, "Provider not found")
+    try:
+        container = request.app.state.container
+        pool = container.adapter_pool()
+        adapter = await pool.get_adapter()
+        await adapter.chat([{"role": "user", "content": "ping"}])
+        return {"success": True, "message": "Connection test passed"}
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+
+@router.get("/ai-providers/usage")
+async def get_ai_providers_usage(
+    ds=Depends(get_datastore),
+    user=Depends(get_current_user),
+) -> dict:
+    """Token usage statistics per provider/model."""
+    rows = await ds.query(
+        """SELECT provider, model, 
+           COALESCE(SUM((config->>'totalTokens')::int), 0) as total_tokens,
+           COALESCE(SUM((config->>'promptTokens')::int), 0) as prompt_tokens,
+           COALESCE(SUM((config->>'completionTokens')::int), 0) as completion_tokens,
+           COUNT(*) as request_count,
+           0 as error_count
+           FROM ai_configs
+           GROUP BY provider, model
+           ORDER BY total_tokens DESC"""
+    )
+    result = []
+    for r in (rows or []):
+        result.append({
+            "provider": r.get("provider", ""),
+            "model": r.get("model", ""),
+            "totalTokens": r.get("total_tokens", 0),
+            "promptTokens": r.get("prompt_tokens", 0),
+            "completionTokens": r.get("completion_tokens", 0),
+            "requestCount": r.get("request_count", 0),
+            "errorCount": r.get("error_count", 0),
+        })
+    return {"success": True, "data": result}

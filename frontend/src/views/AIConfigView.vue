@@ -237,6 +237,7 @@ const DEFAULT_ENDPOINTS: Record<AIProvider, string> = {
   [AIProvider.DEEPSEEK]: 'https://api.deepseek.com/v1',
   [AIProvider.QWEN]: 'https://dashscope.aliyuncs.com/api/v1',
   [AIProvider.ZHIPU]: 'https://open.bigmodel.cn/api/paas/v4',
+  [AIProvider.OLLAMA]: 'http://localhost:11434/v1',
   [AIProvider.CUSTOM]: ''
 }
 
@@ -247,6 +248,7 @@ const PROVIDER_DISPLAY_NAMES: Record<AIProvider, string> = {
   [AIProvider.DEEPSEEK]: 'DeepSeek',
   [AIProvider.QWEN]: 'Qwen',
   [AIProvider.ZHIPU]: '智谱AI',
+  [AIProvider.OLLAMA]: 'Ollama',
   [AIProvider.CUSTOM]: '自定义'
 }
 
@@ -387,6 +389,7 @@ const getProviderTagType = (provider: AIProvider): 'success' | 'warning' | 'info
     [AIProvider.DEEPSEEK]: 'info',
     [AIProvider.QWEN]: 'warning',
     [AIProvider.ZHIPU]: 'danger',
+    [AIProvider.OLLAMA]: 'success',
     [AIProvider.CUSTOM]: 'info'
   }
   return typeMap[provider] || 'info'
