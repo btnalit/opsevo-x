@@ -14,7 +14,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Path, UploadFile, File, Query, Request
 from fastapi.responses import JSONResponse
 
-from .deps import get_current_user
+from .deps import get_current_user, get_device_id
 from opsevo.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -122,7 +122,7 @@ def _generate_progress_id() -> str:
 # GET /upload/types — 获取支持的文件类型
 # ---------------------------------------------------------------------------
 @router.get("/types")
-async def get_supported_types(device_id: str = Query(None, alias="deviceId"), user=Depends(get_current_user)) -> dict:
+async def get_supported_types(device_id: str | None = Depends(get_device_id), user=Depends(get_current_user)) -> dict:
     return {"success": True, "data": SUPPORTED_FILE_TYPES}
 
 
@@ -131,7 +131,7 @@ async def get_supported_types(device_id: str = Query(None, alias="deviceId"), us
 # ---------------------------------------------------------------------------
 @router.post("/validate")
 async def validate_files(
-    device_id: str = Query(None, alias="deviceId"),
+    device_id: str | None = Depends(get_device_id),
     files: list[UploadFile] = File(...),
     user=Depends(get_current_user),
 ) -> dict:
@@ -157,7 +157,7 @@ async def validate_files(
 # ---------------------------------------------------------------------------
 @router.post("")
 async def upload_file(
-    device_id: str = Query(None, alias="deviceId"),
+    device_id: str | None = Depends(get_device_id),
     request: Request = None,
     file: UploadFile = File(...),
     user=Depends(get_current_user),
@@ -227,7 +227,7 @@ async def upload_file(
 # ---------------------------------------------------------------------------
 @router.post("/batch")
 async def batch_upload_files(
-    device_id: str = Query(None, alias="deviceId"),
+    device_id: str | None = Depends(get_device_id),
     request: Request = None,
     files: list[UploadFile] = File(...),
     user=Depends(get_current_user),
@@ -316,7 +316,7 @@ async def batch_upload_files(
 # ---------------------------------------------------------------------------
 @router.get("/progress/{progress_id}")
 async def get_upload_progress(
-    device_id: str = Query(None, alias="deviceId"),
+    device_id: str | None = Depends(get_device_id),
     progress_id: str = Path(...),
     user=Depends(get_current_user),
 ) -> dict:

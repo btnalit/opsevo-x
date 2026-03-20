@@ -23,7 +23,7 @@ class FeatureFlagManager:
             "fast_path_enabled": True,
             "intent_driven_enabled": True,
             "parallel_execution_enabled": True,
-            "auto_remediation_enabled": False,
+            "auto_remediation_enabled": True,
             "brain_autonomous_enabled": True,
         }
 

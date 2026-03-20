@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import Depends, HTTPException, Query, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from opsevo.data.datastore import DataStore
@@ -77,3 +77,16 @@ def require_role(role: str):
             )
         return user
     return _check
+
+
+def get_device_id(
+    deviceId: str | None = Query(None, alias="deviceId"),
+) -> str | None:
+    """Normalize device_id query param: empty string → None.
+
+    The frontend sends '' when "全部设备" (all devices) is selected.
+    PostgreSQL cannot cast '' to UUID, so we convert it to None here.
+    All ai-ops endpoints should use ``Depends(get_device_id)`` instead of
+    reading the query param directly.
+    """
+    return deviceId.strip() if deviceId and deviceId.strip() else None

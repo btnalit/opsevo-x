@@ -1,8 +1,10 @@
 #!/bin/sh
 set -e
 
-# Sync builtin skill files from backup to data volume (first-time setup)
-if [ -d /app/skills-backup/builtin ] && [ ! -f /app/data/ai-ops/skills/builtin/.synced ]; then
+# Always sync builtin skill files from backup to data volume
+# Builtin skills are read-only defaults shipped with the image,
+# so we always overwrite to ensure they stay up-to-date.
+if [ -d /app/skills-backup/builtin ]; then
     echo "[entrypoint] Syncing builtin skills to data volume..."
     mkdir -p /app/data/ai-ops/skills/builtin
     cp -r /app/skills-backup/builtin/* /app/data/ai-ops/skills/builtin/

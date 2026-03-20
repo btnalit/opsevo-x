@@ -14,7 +14,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 
-from .deps import get_current_user, get_datastore
+from .deps import get_current_user, get_datastore, get_device_id
 
 router = APIRouter(prefix="/api/prompt-templates", tags=["prompt-templates"])
 
@@ -36,13 +36,13 @@ def _extract_placeholders(content: str) -> list[str]:
 
 # ==================== 特殊路由（放在参数路由之前） ====================
 @router.get("/placeholders")
-async def get_placeholders(device_id: str = Query(None, alias="deviceId"), user=Depends(get_current_user)) -> dict:
+async def get_placeholders(device_id: str | None = Depends(get_device_id), user=Depends(get_current_user)) -> dict:
     return {"success": True, "data": _SYSTEM_PLACEHOLDERS}
 
 
 @router.get("/default")
 async def get_default_template(
-    device_id: str = Query(None, alias="deviceId"), category: str = Query(None),
+    device_id: str | None = Depends(get_device_id), category: str = Query(None),
     ds=Depends(get_datastore), user=Depends(get_current_user),
 ) -> dict:
     if category:
@@ -61,7 +61,7 @@ async def get_default_template(
 
 # ==================== 模板覆盖路由 ====================
 @router.get("/overrides")
-async def get_overrides(device_id: str = Query(None, alias="deviceId"), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_overrides(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     rows = await ds.query(
         "SELECT * FROM template_overrides WHERE device_id=$1", [device_id]
     )
@@ -69,7 +69,7 @@ async def get_overrides(device_id: str = Query(None, alias="deviceId"), ds=Depen
 
 
 @router.post("/overrides")
-async def set_override(device_id: str = Query(None, alias="deviceId"), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def set_override(device_id: str | None = Depends(get_device_id), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     body = await request.json()
     sys_name = body.get("systemTemplateName", "")
     custom_id = body.get("customTemplateId", "")
@@ -89,7 +89,7 @@ async def set_override(device_id: str = Query(None, alias="deviceId"), request: 
 
 
 @router.delete("/overrides/{system_template_name}")
-async def clear_override(device_id: str = Query(None, alias="deviceId"), system_template_name: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def clear_override(device_id: str | None = Depends(get_device_id), system_template_name: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     await ds.execute(
         "DELETE FROM template_overrides WHERE device_id=$1 AND system_template_name=$2",
         [device_id, system_template_name],
@@ -101,7 +101,7 @@ async def clear_override(device_id: str = Query(None, alias="deviceId"), system_
 # ==================== CRUD 路由 ====================
 @router.get("")
 async def get_templates(
-    device_id: str = Query(None, alias="deviceId"),
+    device_id: str | None = Depends(get_device_id),
     category: str = Query(None), search: str = Query(None),
     page: int = Query(1), page_size: int = Query(10),
     ds=Depends(get_datastore), user=Depends(get_current_user),
@@ -129,7 +129,7 @@ async def get_templates(
 
 
 @router.post("")
-async def create_template(device_id: str = Query(None, alias="deviceId"), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def create_template(device_id: str | None = Depends(get_device_id), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     body = await request.json()
     name = body.get("name", "")
     content = body.get("content", "")
@@ -212,7 +212,7 @@ async def rollback_template(
 
 
 @router.get("/{template_id}")
-async def get_template_by_id(device_id: str = Query(None, alias="deviceId"), template_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_template_by_id(device_id: str | None = Depends(get_device_id), template_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     row = await ds.query_one(
         "SELECT * FROM prompt_templates WHERE id=$1 AND device_id=$2", [template_id, device_id]
     )
@@ -222,7 +222,7 @@ async def get_template_by_id(device_id: str = Query(None, alias="deviceId"), tem
 
 
 @router.put("/{template_id}")
-async def update_template(device_id: str = Query(None, alias="deviceId"), template_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def update_template(device_id: str | None = Depends(get_device_id), template_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     body = await request.json()
 
     async def _tx(tx):
@@ -279,7 +279,7 @@ async def update_template(device_id: str = Query(None, alias="deviceId"), templa
 
 
 @router.delete("/{template_id}")
-async def delete_template(device_id: str = Query(None, alias="deviceId"), template_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def delete_template(device_id: str | None = Depends(get_device_id), template_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     existing = await ds.query_one("SELECT * FROM prompt_templates WHERE id=$1 AND device_id=$2", [template_id, device_id])
     if not existing:
         raise HTTPException(404, "模板不存在")
@@ -288,7 +288,7 @@ async def delete_template(device_id: str = Query(None, alias="deviceId"), templa
 
 
 @router.post("/{template_id}/render")
-async def render_template(device_id: str = Query(None, alias="deviceId"), template_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def render_template(device_id: str | None = Depends(get_device_id), template_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     row = await ds.query_one("SELECT * FROM prompt_templates WHERE id=$1 AND device_id=$2", [template_id, device_id])
     if not row:
         raise HTTPException(404, "模板不存在")
@@ -301,7 +301,7 @@ async def render_template(device_id: str = Query(None, alias="deviceId"), templa
 
 
 @router.post("/{template_id}/default")
-async def set_default_template(device_id: str = Query(None, alias="deviceId"), template_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def set_default_template(device_id: str | None = Depends(get_device_id), template_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     existing = await ds.query_one("SELECT * FROM prompt_templates WHERE id=$1 AND device_id=$2", [template_id, device_id])
     if not existing:
         raise HTTPException(404, "模板不存在")

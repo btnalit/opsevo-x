@@ -19,7 +19,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from fastapi.responses import StreamingResponse
 
-from .deps import get_current_user, get_datastore, get_feature_flag_manager, get_tracing_service
+from .deps import get_current_user, get_datastore, get_device_id, get_feature_flag_manager, get_tracing_service
 from .dependencies import get_device_orchestrator
 
 router = APIRouter(prefix="/api/ai-ops", tags=["ai-ops"])
@@ -37,7 +37,7 @@ def _c(request: Request):
 # Metrics
 # ---------------------------------------------------------------------------
 @router.get("/metrics/latest")
-async def get_latest_metrics(device_id: str = Query(None, alias="deviceId"), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_latest_metrics(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     if device_id:
         rows = await ds.query(
             "SELECT * FROM system_metrics WHERE device_id=$1 ORDER BY timestamp DESC LIMIT 1", [device_id]
@@ -56,7 +56,7 @@ async def get_latest_metrics(device_id: str = Query(None, alias="deviceId"), ds=
 
 @router.get("/metrics/history")
 async def get_metrics_history(
-    device_id: str = Query(None, alias="deviceId"), hours: int = Query(24),
+    device_id: str | None = Depends(get_device_id), hours: int = Query(24),
     ds=Depends(get_datastore), user=Depends(get_current_user),
 ) -> dict:
     rows = await ds.query(
@@ -67,13 +67,13 @@ async def get_metrics_history(
 
 
 @router.get("/metrics/config")
-async def get_metrics_config(device_id: str = Query(None, alias="deviceId"), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_metrics_config(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     row = await ds.query_one("SELECT config FROM device_settings WHERE device_id=$1 AND key='metrics_config'", [device_id])
     return {"success": True, "data": row["config"] if row else {"interval": 60, "enabled": True}}
 
 
 @router.put("/metrics/config")
-async def update_metrics_config(device_id: str = Query(None, alias="deviceId"), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def update_metrics_config(device_id: str | None = Depends(get_device_id), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     body = await request.json()
     await ds.execute(
         "INSERT INTO device_settings (device_id, key, config) VALUES ($1, 'metrics_config', $2) "
@@ -84,7 +84,7 @@ async def update_metrics_config(device_id: str = Query(None, alias="deviceId"), 
 
 
 @router.post("/metrics/collect")
-async def collect_metrics_now(device_id: str = Query(None, alias="deviceId"), request: Request = None, user=Depends(get_current_user)) -> dict:
+async def collect_metrics_now(device_id: str | None = Depends(get_device_id), request: Request = None, user=Depends(get_current_user)) -> dict:
     pool = _c(request).device_pool()
     try:
         driver = await pool.get_driver(device_id)
@@ -99,7 +99,7 @@ async def collect_metrics_now(device_id: str = Query(None, alias="deviceId"), re
 # ---------------------------------------------------------------------------
 @router.get("/metrics/traffic")
 async def get_traffic_history(
-    device_id: str = Query(None, alias="deviceId"), interface: str = Query(None), hours: int = Query(24),
+    device_id: str | None = Depends(get_device_id), interface: str = Query(None), hours: int = Query(24),
     ds=Depends(get_datastore), user=Depends(get_current_user),
 ) -> dict:
     if interface:
@@ -116,7 +116,7 @@ async def get_traffic_history(
 
 
 @router.get("/metrics/traffic/interfaces")
-async def get_traffic_interfaces(device_id: str = Query(None, alias="deviceId"), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_traffic_interfaces(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     rows = await ds.query(
         "SELECT DISTINCT interface, MAX(timestamp) as last_seen FROM traffic_metrics WHERE device_id=$1 GROUP BY interface",
         [device_id],
@@ -125,19 +125,19 @@ async def get_traffic_interfaces(device_id: str = Query(None, alias="deviceId"),
 
 
 @router.get("/metrics/traffic/status")
-async def get_traffic_collection_status(device_id: str = Query(None, alias="deviceId"), request: Request = None, user=Depends(get_current_user)) -> dict:
+async def get_traffic_collection_status(device_id: str | None = Depends(get_device_id), request: Request = None, user=Depends(get_current_user)) -> dict:
     sched = _c(request).scheduler()
     return {"success": True, "data": {"collecting": sched.is_running}}
 
 
 @router.get("/metrics/traffic/rate-config")
-async def get_rate_calculation_config(device_id: str = Query(None, alias="deviceId"), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_rate_calculation_config(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     row = await ds.query_one("SELECT config FROM device_settings WHERE device_id=$1 AND key='rate_config'", [device_id])
     return {"success": True, "data": row["config"] if row else {"windowSize": 5, "algorithm": "sliding"}}
 
 
 @router.put("/metrics/traffic/rate-config")
-async def update_rate_calculation_config(device_id: str = Query(None, alias="deviceId"), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def update_rate_calculation_config(device_id: str | None = Depends(get_device_id), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     body = await request.json()
     await ds.execute(
         "INSERT INTO device_settings (device_id, key, config) VALUES ($1, 'rate_config', $2) "
@@ -148,7 +148,7 @@ async def update_rate_calculation_config(device_id: str = Query(None, alias="dev
 
 
 @router.get("/metrics/traffic/rate-stats")
-async def get_rate_statistics(device_id: str = Query(None, alias="deviceId"), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_rate_statistics(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     row = await ds.query_one(
         "SELECT COUNT(*) as samples, AVG(rx_rate) as avg_rx, AVG(tx_rate) as avg_tx FROM traffic_metrics WHERE device_id=$1 AND timestamp > NOW() - INTERVAL '1 hour'",
         [device_id],
@@ -158,7 +158,7 @@ async def get_rate_statistics(device_id: str = Query(None, alias="deviceId"), ds
 
 @router.get("/metrics/traffic/history-with-status")
 async def get_traffic_history_with_status(
-    device_id: str = Query(None, alias="deviceId"), interface: str = Query(None), hours: int = Query(24),
+    device_id: str | None = Depends(get_device_id), interface: str = Query(None), hours: int = Query(24),
     request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user),
 ) -> dict:
     base = "SELECT * FROM traffic_metrics WHERE device_id=$1"
@@ -173,7 +173,7 @@ async def get_traffic_history_with_status(
 
 
 @router.get("/parallel-execution/metrics")
-async def get_parallel_execution_metrics(device_id: str = Query(None, alias="deviceId"), request: Request = None, user=Depends(get_current_user)) -> dict:
+async def get_parallel_execution_metrics(device_id: str | None = Depends(get_device_id), request: Request = None, user=Depends(get_current_user)) -> dict:
     cc = _c(request).concurrency_controller()
     return {"success": True, "data": {"maxConcurrent": 5, "active": 0}}
 
@@ -182,14 +182,14 @@ async def get_parallel_execution_metrics(device_id: str = Query(None, alias="dev
 # Alert Rules — wired to AlertEngine
 # ---------------------------------------------------------------------------
 @router.get("/alerts/rules")
-async def get_alert_rules(device_id: str = Query(None, alias="deviceId"), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_alert_rules(device_id: str | None = Depends(get_device_id), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     ae = _c(request).alert_engine()
     rules = await ae.get_rules(device_id)
     return {"success": True, "data": [_rule_to_dict(r) for r in rules]}
 
 
 @router.get("/alerts/rules/{rule_id}")
-async def get_alert_rule_by_id(device_id: str = Query(None, alias="deviceId"), rule_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_alert_rule_by_id(device_id: str | None = Depends(get_device_id), rule_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     ae = _c(request).alert_engine()
     rule = await ae.get_rule_by_id(rule_id)
     if not rule:
@@ -198,7 +198,7 @@ async def get_alert_rule_by_id(device_id: str = Query(None, alias="deviceId"), r
 
 
 @router.post("/alerts/rules")
-async def create_alert_rule(device_id: str = Query(None, alias="deviceId"), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def create_alert_rule(device_id: str | None = Depends(get_device_id), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     body = await request.json()
     body["device_id"] = device_id
     ae = _c(request).alert_engine()
@@ -207,7 +207,7 @@ async def create_alert_rule(device_id: str = Query(None, alias="deviceId"), requ
 
 
 @router.put("/alerts/rules/{rule_id}")
-async def update_alert_rule(device_id: str = Query(None, alias="deviceId"), rule_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def update_alert_rule(device_id: str | None = Depends(get_device_id), rule_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     body = await request.json()
     ae = _c(request).alert_engine()
     rule = await ae.update_rule(rule_id, body)
@@ -215,21 +215,21 @@ async def update_alert_rule(device_id: str = Query(None, alias="deviceId"), rule
 
 
 @router.delete("/alerts/rules/{rule_id}")
-async def delete_alert_rule(device_id: str = Query(None, alias="deviceId"), rule_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def delete_alert_rule(device_id: str | None = Depends(get_device_id), rule_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     ae = _c(request).alert_engine()
     await ae.delete_rule(rule_id)
     return {"success": True, "message": "Alert rule deleted"}
 
 
 @router.post("/alerts/rules/{rule_id}/enable")
-async def enable_alert_rule(device_id: str = Query(None, alias="deviceId"), rule_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def enable_alert_rule(device_id: str | None = Depends(get_device_id), rule_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     ae = _c(request).alert_engine()
     rule = await ae.update_rule(rule_id, {"enabled": True})
     return {"success": True, "data": _rule_to_dict(rule)}
 
 
 @router.post("/alerts/rules/{rule_id}/disable")
-async def disable_alert_rule(device_id: str = Query(None, alias="deviceId"), rule_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def disable_alert_rule(device_id: str | None = Depends(get_device_id), rule_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     ae = _c(request).alert_engine()
     rule = await ae.update_rule(rule_id, {"enabled": False})
     return {"success": True, "data": _rule_to_dict(rule)}
@@ -249,7 +249,7 @@ def _rule_to_dict(rule) -> dict:
 # ---------------------------------------------------------------------------
 @router.get("/alerts/events")
 async def get_alert_events(
-    device_id: str = Query(None, alias="deviceId"), request: Request = None,
+    device_id: str | None = Depends(get_device_id), request: Request = None,
     severity: str = Query(None), status: str = Query(None),
     source: str = Query(None),
     page: int = Query(1, ge=1), limit: int = Query(50, ge=1, le=1000),
@@ -266,7 +266,7 @@ async def get_alert_events(
 
 
 @router.get("/alerts/events/active")
-async def get_active_alerts(device_id: str = Query(None, alias="deviceId"), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_active_alerts(device_id: str | None = Depends(get_device_id), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     ae = _c(request).alert_engine()
     alerts = await ae.get_active_alerts(device_id)
     return {"success": True, "data": [_alert_to_dict(a) for a in alerts]}
@@ -274,7 +274,7 @@ async def get_active_alerts(device_id: str = Query(None, alias="deviceId"), requ
 
 @router.get("/alerts/events/unified")
 async def get_unified_events(
-    device_id: str = Query(None, alias="deviceId"), request: Request = None,
+    device_id: str | None = Depends(get_device_id), request: Request = None,
     page: int = Query(1, ge=1), limit: int = Query(50, ge=1, le=1000),
     ds=Depends(get_datastore), user=Depends(get_current_user),
 ) -> dict:
@@ -288,14 +288,14 @@ async def get_unified_events(
 
 
 @router.get("/alerts/events/unified/active")
-async def get_active_unified_events(device_id: str = Query(None, alias="deviceId"), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_active_unified_events(device_id: str | None = Depends(get_device_id), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     ae = _c(request).alert_engine()
     alerts = await ae.get_active_alerts(device_id)
     return {"success": True, "data": [_alert_to_dict(a) for a in alerts]}
 
 
 @router.get("/alerts/events/{alert_id}")
-async def get_alert_event_by_id(device_id: str = Query(None, alias="deviceId"), alert_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_alert_event_by_id(device_id: str | None = Depends(get_device_id), alert_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     row = await ds.query_one("SELECT * FROM alert_events WHERE id=$1", [alert_id])
     if not row:
         raise HTTPException(404, "Alert event not found")
@@ -303,21 +303,21 @@ async def get_alert_event_by_id(device_id: str = Query(None, alias="deviceId"), 
 
 
 @router.post("/alerts/events/{alert_id}/resolve")
-async def resolve_alert_event(device_id: str = Query(None, alias="deviceId"), alert_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def resolve_alert_event(device_id: str | None = Depends(get_device_id), alert_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     ae = _c(request).alert_engine()
     await ae.resolve_alert(alert_id)
     return {"success": True, "message": "Alert resolved"}
 
 
 @router.delete("/alerts/events/{alert_id}")
-async def delete_alert_event(device_id: str = Query(None, alias="deviceId"), alert_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def delete_alert_event(device_id: str | None = Depends(get_device_id), alert_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     ae = _c(request).alert_engine()
     await ae.delete_alert_event(alert_id)
     return {"success": True, "message": "Alert event deleted"}
 
 
 @router.post("/alerts/events/batch-delete")
-async def batch_delete_alert_events(device_id: str = Query(None, alias="deviceId"), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def batch_delete_alert_events(device_id: str | None = Depends(get_device_id), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     body = await request.json()
     ids = body.get("ids", [])
     ae = _c(request).alert_engine()
@@ -339,7 +339,7 @@ def _alert_to_dict(alert) -> dict:
 # Alert Analysis & Remediation — wired to AlertEngine + FaultHealer
 # ---------------------------------------------------------------------------
 @router.get("/analysis/{alert_id}")
-async def get_alert_analysis(device_id: str = Query(None, alias="deviceId"), alert_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_alert_analysis(device_id: str | None = Depends(get_device_id), alert_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     cache = _c(request).analysis_cache()
     cached = cache.get(alert_id)
     if cached:
@@ -349,7 +349,7 @@ async def get_alert_analysis(device_id: str = Query(None, alias="deviceId"), ale
 
 
 @router.post("/analysis/{alert_id}/refresh")
-async def refresh_alert_analysis(device_id: str = Query(None, alias="deviceId"), alert_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def refresh_alert_analysis(device_id: str | None = Depends(get_device_id), alert_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     alert = await ds.query_one("SELECT * FROM alert_events WHERE id=$1", [alert_id])
     if not alert:
         raise HTTPException(404, "Alert not found")
@@ -364,7 +364,7 @@ async def refresh_alert_analysis(device_id: str = Query(None, alias="deviceId"),
 
 
 @router.get("/analysis/{alert_id}/timeline")
-async def get_alert_timeline(device_id: str = Query(None, alias="deviceId"), alert_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_alert_timeline(device_id: str | None = Depends(get_device_id), alert_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     rows = await ds.query(
         "SELECT * FROM alert_timeline WHERE alert_id=$1 ORDER BY timestamp ASC", [alert_id]
     )
@@ -372,7 +372,7 @@ async def get_alert_timeline(device_id: str = Query(None, alias="deviceId"), ale
 
 
 @router.get("/analysis/{alert_id}/related")
-async def get_related_alerts(device_id: str = Query(None, alias="deviceId"), alert_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_related_alerts(device_id: str | None = Depends(get_device_id), alert_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     alert = await ds.query_one("SELECT * FROM alert_events WHERE id=$1", [alert_id])
     if not alert:
         return {"success": True, "data": []}
@@ -385,7 +385,7 @@ async def get_related_alerts(device_id: str = Query(None, alias="deviceId"), ale
 
 
 @router.get("/remediation/{alert_id}")
-async def get_remediation_plan(device_id: str = Query(None, alias="deviceId"), alert_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_remediation_plan(device_id: str | None = Depends(get_device_id), alert_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     row = await ds.query_one("SELECT * FROM remediation_executions WHERE alert_id=$1 ORDER BY timestamp DESC LIMIT 1", [alert_id])
     return {"success": True, "data": row}
 
@@ -406,17 +406,17 @@ async def _run_remediation(device_id: str, alert_id: str, request: Request, ds) 
 
 
 @router.post("/remediation/{alert_id}")
-async def generate_remediation_plan(device_id: str = Query(None, alias="deviceId"), alert_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def generate_remediation_plan(device_id: str | None = Depends(get_device_id), alert_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     return await _run_remediation(device_id, alert_id, request, ds)
 
 
 @router.post("/remediation/{alert_id}/execute")
-async def execute_remediation_plan(device_id: str = Query(None, alias="deviceId"), alert_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def execute_remediation_plan(device_id: str | None = Depends(get_device_id), alert_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     return await _run_remediation(device_id, alert_id, request, ds)
 
 
 @router.post("/remediation/{alert_id}/rollback")
-async def execute_remediation_rollback(device_id: str = Query(None, alias="deviceId"), alert_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def execute_remediation_rollback(device_id: str | None = Depends(get_device_id), alert_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     row = await ds.query_one("SELECT * FROM remediation_executions WHERE alert_id=$1 ORDER BY timestamp DESC LIMIT 1", [alert_id])
     if not row:
         raise HTTPException(404, "No remediation execution found")
@@ -429,14 +429,14 @@ async def execute_remediation_rollback(device_id: str = Query(None, alias="devic
 # Scheduler — wired to Scheduler service
 # ---------------------------------------------------------------------------
 @router.get("/scheduler/tasks")
-async def get_scheduler_tasks(device_id: str = Query(None, alias="deviceId"), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_scheduler_tasks(device_id: str | None = Depends(get_device_id), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     sched = _c(request).scheduler()
     tasks = sched.get_tasks()
     return {"success": True, "data": tasks}
 
 
 @router.get("/scheduler/tasks/{task_id}")
-async def get_scheduler_task_by_id(device_id: str = Query(None, alias="deviceId"), task_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_scheduler_task_by_id(device_id: str | None = Depends(get_device_id), task_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     sched = _c(request).scheduler()
     tasks = sched.get_tasks()
     task = next((t for t in tasks if t["id"] == task_id), None)
@@ -446,7 +446,7 @@ async def get_scheduler_task_by_id(device_id: str = Query(None, alias="deviceId"
 
 
 @router.post("/scheduler/tasks")
-async def create_scheduler_task(device_id: str = Query(None, alias="deviceId"), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def create_scheduler_task(device_id: str | None = Depends(get_device_id), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     body = await request.json()
     sched = _c(request).scheduler()
 
@@ -464,7 +464,7 @@ async def create_scheduler_task(device_id: str = Query(None, alias="deviceId"), 
 
 
 @router.put("/scheduler/tasks/{task_id}")
-async def update_scheduler_task(device_id: str = Query(None, alias="deviceId"), task_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def update_scheduler_task(device_id: str | None = Depends(get_device_id), task_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     body = await request.json()
     sched = _c(request).scheduler()
     try:
@@ -483,14 +483,14 @@ async def update_scheduler_task(device_id: str = Query(None, alias="deviceId"), 
 
 
 @router.delete("/scheduler/tasks/{task_id}")
-async def delete_scheduler_task(device_id: str = Query(None, alias="deviceId"), task_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def delete_scheduler_task(device_id: str | None = Depends(get_device_id), task_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     sched = _c(request).scheduler()
     await sched.remove_task(task_id)
     return {"success": True, "message": "Task deleted"}
 
 
 @router.post("/scheduler/tasks/{task_id}/run")
-async def run_scheduler_task_now(device_id: str = Query(None, alias="deviceId"), task_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def run_scheduler_task_now(device_id: str | None = Depends(get_device_id), task_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     sched = _c(request).scheduler()
     tasks = sched.get_tasks()
     task = next((t for t in tasks if t["id"] == task_id), None)
@@ -500,7 +500,7 @@ async def run_scheduler_task_now(device_id: str = Query(None, alias="deviceId"),
 
 
 @router.get("/scheduler/executions")
-async def get_scheduler_executions(device_id: str = Query(None, alias="deviceId"), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_scheduler_executions(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     rows = await ds.query(
         "SELECT * FROM scheduler_executions WHERE device_id=$1 ORDER BY timestamp DESC LIMIT 50", [device_id]
     )
@@ -511,13 +511,13 @@ async def get_scheduler_executions(device_id: str = Query(None, alias="deviceId"
 # Snapshots — wired to DataStore
 # ---------------------------------------------------------------------------
 @router.get("/snapshots")
-async def get_snapshots(device_id: str = Query(None, alias="deviceId"), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_snapshots(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     rows = await ds.query("SELECT * FROM config_snapshots WHERE device_id=$1 ORDER BY created_at DESC", [device_id])
     return {"success": True, "data": rows}
 
 
 @router.get("/snapshots/diff")
-async def compare_snapshots(device_id: str = Query(None, alias="deviceId"), id1: str = Query(..., alias="idA"), id2: str = Query(..., alias="idB"), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def compare_snapshots(device_id: str | None = Depends(get_device_id), id1: str = Query(..., alias="idA"), id2: str = Query(..., alias="idB"), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     s1 = await ds.query_one("SELECT config_data FROM config_snapshots WHERE id=$1", [id1])
     s2 = await ds.query_one("SELECT config_data FROM config_snapshots WHERE id=$1", [id2])
     if not s1 or not s2:
@@ -526,7 +526,7 @@ async def compare_snapshots(device_id: str = Query(None, alias="deviceId"), id1:
 
 
 @router.get("/snapshots/diff/latest")
-async def get_latest_diff(device_id: str = Query(None, alias="deviceId"), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_latest_diff(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     rows = await ds.query("SELECT * FROM config_snapshots WHERE device_id=$1 ORDER BY created_at DESC LIMIT 2", [device_id])
     if len(rows) < 2:
         return {"success": True, "data": None}
@@ -534,7 +534,7 @@ async def get_latest_diff(device_id: str = Query(None, alias="deviceId"), ds=Dep
 
 
 @router.get("/snapshots/timeline")
-async def get_change_timeline(device_id: str = Query(None, alias="deviceId"), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_change_timeline(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     rows = await ds.query(
         "SELECT id, name, created_at FROM config_snapshots WHERE device_id=$1 ORDER BY created_at DESC LIMIT 50", [device_id]
     )
@@ -542,7 +542,7 @@ async def get_change_timeline(device_id: str = Query(None, alias="deviceId"), ds
 
 
 @router.get("/snapshots/{snapshot_id}")
-async def get_snapshot_by_id(device_id: str = Query(None, alias="deviceId"), snapshot_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_snapshot_by_id(device_id: str | None = Depends(get_device_id), snapshot_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     row = await ds.query_one("SELECT * FROM config_snapshots WHERE id=$1 AND device_id=$2", [snapshot_id, device_id])
     if not row:
         raise HTTPException(404, "Snapshot not found")
@@ -550,7 +550,7 @@ async def get_snapshot_by_id(device_id: str = Query(None, alias="deviceId"), sna
 
 
 @router.post("/snapshots")
-async def create_snapshot(device_id: str = Query(None, alias="deviceId"), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def create_snapshot(device_id: str | None = Depends(get_device_id), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     body = await request.json()
     pool = _c(request).device_pool()
     try:
@@ -568,13 +568,13 @@ async def create_snapshot(device_id: str = Query(None, alias="deviceId"), reques
 
 
 @router.delete("/snapshots/{snapshot_id}")
-async def delete_snapshot(device_id: str = Query(None, alias="deviceId"), snapshot_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def delete_snapshot(device_id: str | None = Depends(get_device_id), snapshot_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     await ds.execute("DELETE FROM config_snapshots WHERE id=$1 AND device_id=$2", [snapshot_id, device_id])
     return {"success": True, "message": "Snapshot deleted"}
 
 
 @router.get("/snapshots/{snapshot_id}/download")
-async def download_snapshot(device_id: str = Query(None, alias="deviceId"), snapshot_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def download_snapshot(device_id: str | None = Depends(get_device_id), snapshot_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     row = await ds.query_one("SELECT config_data FROM config_snapshots WHERE id=$1 AND device_id=$2", [snapshot_id, device_id])
     if not row:
         raise HTTPException(404, "Snapshot not found")
@@ -582,7 +582,7 @@ async def download_snapshot(device_id: str = Query(None, alias="deviceId"), snap
 
 
 @router.post("/snapshots/{snapshot_id}/restore")
-async def restore_snapshot(device_id: str = Query(None, alias="deviceId"), snapshot_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def restore_snapshot(device_id: str | None = Depends(get_device_id), snapshot_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     row = await ds.query_one("SELECT config_data FROM config_snapshots WHERE id=$1 AND device_id=$2", [snapshot_id, device_id])
     if not row:
         raise HTTPException(404, "Snapshot not found")
@@ -599,13 +599,13 @@ async def restore_snapshot(device_id: str = Query(None, alias="deviceId"), snaps
 # Reports — wired to DataStore
 # ---------------------------------------------------------------------------
 @router.get("/reports")
-async def get_reports(device_id: str = Query(None, alias="deviceId"), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_reports(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     rows = await ds.query("SELECT * FROM reports WHERE device_id=$1 ORDER BY created_at DESC", [device_id])
     return {"success": True, "data": rows}
 
 
 @router.get("/reports/{report_id}")
-async def get_report_by_id(device_id: str = Query(None, alias="deviceId"), report_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_report_by_id(device_id: str | None = Depends(get_device_id), report_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     row = await ds.query_one("SELECT * FROM reports WHERE id=$1 AND device_id=$2", [report_id, device_id])
     if not row:
         raise HTTPException(404, "Report not found")
@@ -613,7 +613,7 @@ async def get_report_by_id(device_id: str = Query(None, alias="deviceId"), repor
 
 
 @router.post("/reports/generate")
-async def generate_report(device_id: str = Query(None, alias="deviceId"), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def generate_report(device_id: str | None = Depends(get_device_id), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     body = await request.json()
     report_id = str(uuid.uuid4())
     report_type = body.get("type", "summary")
@@ -640,7 +640,7 @@ async def generate_report(device_id: str = Query(None, alias="deviceId"), reques
 
 
 @router.get("/reports/{report_id}/export")
-async def export_report(device_id: str = Query(None, alias="deviceId"), report_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def export_report(device_id: str | None = Depends(get_device_id), report_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     row = await ds.query_one("SELECT * FROM reports WHERE id=$1 AND device_id=$2", [report_id, device_id])
     if not row:
         raise HTTPException(404, "Report not found")
@@ -648,7 +648,7 @@ async def export_report(device_id: str = Query(None, alias="deviceId"), report_i
 
 
 @router.delete("/reports/{report_id}")
-async def delete_report(device_id: str = Query(None, alias="deviceId"), report_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def delete_report(device_id: str | None = Depends(get_device_id), report_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     await ds.execute("DELETE FROM reports WHERE id=$1 AND device_id=$2", [report_id, device_id])
     return {"success": True, "message": "Report deleted"}
 
@@ -657,13 +657,13 @@ async def delete_report(device_id: str = Query(None, alias="deviceId"), report_i
 # Fault Patterns & Auto-Heal — wired to DataStore
 # ---------------------------------------------------------------------------
 @router.get("/patterns")
-async def get_fault_patterns(device_id: str = Query(None, alias="deviceId"), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_fault_patterns(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     rows = await ds.query("SELECT * FROM fault_patterns WHERE device_id=$1 ORDER BY created_at DESC", [device_id])
     return {"success": True, "data": rows}
 
 
 @router.get("/patterns/{pattern_id}")
-async def get_fault_pattern_by_id(device_id: str = Query(None, alias="deviceId"), pattern_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_fault_pattern_by_id(device_id: str | None = Depends(get_device_id), pattern_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     row = await ds.query_one("SELECT * FROM fault_patterns WHERE id=$1 AND device_id=$2", [pattern_id, device_id])
     if not row:
         raise HTTPException(404, "Fault pattern not found")
@@ -671,7 +671,7 @@ async def get_fault_pattern_by_id(device_id: str = Query(None, alias="deviceId")
 
 
 @router.post("/patterns")
-async def create_fault_pattern(device_id: str = Query(None, alias="deviceId"), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def create_fault_pattern(device_id: str | None = Depends(get_device_id), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     body = await request.json()
     pid = str(uuid.uuid4())
     await ds.execute(
@@ -683,7 +683,7 @@ async def create_fault_pattern(device_id: str = Query(None, alias="deviceId"), r
 
 
 @router.put("/patterns/{pattern_id}")
-async def update_fault_pattern(device_id: str = Query(None, alias="deviceId"), pattern_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def update_fault_pattern(device_id: str | None = Depends(get_device_id), pattern_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     _ALLOWED = {"name", "description", "severity", "pattern", "enabled", "auto_heal"}
     body = await request.json()
     sets, params, idx = [], [], 1
@@ -701,19 +701,19 @@ async def update_fault_pattern(device_id: str = Query(None, alias="deviceId"), p
 
 
 @router.delete("/patterns/{pattern_id}")
-async def delete_fault_pattern(device_id: str = Query(None, alias="deviceId"), pattern_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def delete_fault_pattern(device_id: str | None = Depends(get_device_id), pattern_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     await ds.execute("DELETE FROM fault_patterns WHERE id=$1 AND device_id=$2", [pattern_id, device_id])
     return {"success": True, "message": "Fault pattern deleted"}
 
 
 @router.post("/patterns/{pattern_id}/enable-auto-heal")
-async def enable_auto_heal(device_id: str = Query(None, alias="deviceId"), pattern_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def enable_auto_heal(device_id: str | None = Depends(get_device_id), pattern_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     await ds.execute("UPDATE fault_patterns SET auto_heal=true WHERE id=$1", [pattern_id])
     return {"success": True, "message": "Auto-heal enabled"}
 
 
 @router.post("/patterns/{pattern_id}/disable-auto-heal")
-async def disable_auto_heal(device_id: str = Query(None, alias="deviceId"), pattern_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def disable_auto_heal(device_id: str | None = Depends(get_device_id), pattern_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     await ds.execute("UPDATE fault_patterns SET auto_heal=false WHERE id=$1", [pattern_id])
     return {"success": True, "message": "Auto-heal disabled"}
 
@@ -722,13 +722,13 @@ async def disable_auto_heal(device_id: str = Query(None, alias="deviceId"), patt
 # Remediations — wired to DataStore
 # ---------------------------------------------------------------------------
 @router.get("/remediations")
-async def get_remediations(device_id: str = Query(None, alias="deviceId"), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_remediations(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     rows = await ds.query("SELECT * FROM remediation_executions WHERE device_id=$1 ORDER BY timestamp DESC", [device_id])
     return {"success": True, "data": rows}
 
 
 @router.get("/remediations/{remediation_id}")
-async def get_remediation_by_id(device_id: str = Query(None, alias="deviceId"), remediation_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_remediation_by_id(device_id: str | None = Depends(get_device_id), remediation_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     row = await ds.query_one("SELECT * FROM remediation_executions WHERE id=$1", [remediation_id])
     if not row:
         raise HTTPException(404, "Remediation not found")
@@ -736,7 +736,7 @@ async def get_remediation_by_id(device_id: str = Query(None, alias="deviceId"), 
 
 
 @router.post("/remediations/{remediation_id}/execute")
-async def execute_fault_remediation(device_id: str = Query(None, alias="deviceId"), remediation_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def execute_fault_remediation(device_id: str | None = Depends(get_device_id), remediation_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     row = await ds.query_one("SELECT * FROM remediation_executions WHERE id=$1", [remediation_id])
     if not row:
         raise HTTPException(404, "Remediation not found")
@@ -747,13 +747,13 @@ async def execute_fault_remediation(device_id: str = Query(None, alias="deviceId
 # Notification Channels — wired to DataStore
 # ---------------------------------------------------------------------------
 @router.get("/channels")
-async def get_notification_channels(device_id: str = Query(None, alias="deviceId"), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_notification_channels(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     rows = await ds.query("SELECT * FROM notification_channels WHERE device_id=$1 ORDER BY created_at DESC", [device_id])
     return {"success": True, "data": rows}
 
 
 @router.get("/channels/{channel_id}")
-async def get_notification_channel_by_id(device_id: str = Query(None, alias="deviceId"), channel_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_notification_channel_by_id(device_id: str | None = Depends(get_device_id), channel_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     row = await ds.query_one("SELECT * FROM notification_channels WHERE id=$1 AND device_id=$2", [channel_id, device_id])
     if not row:
         raise HTTPException(404, "Channel not found")
@@ -761,7 +761,7 @@ async def get_notification_channel_by_id(device_id: str = Query(None, alias="dev
 
 
 @router.post("/channels")
-async def create_notification_channel(device_id: str = Query(None, alias="deviceId"), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def create_notification_channel(device_id: str | None = Depends(get_device_id), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     body = await request.json()
     cid = str(uuid.uuid4())
     await ds.execute(
@@ -773,7 +773,7 @@ async def create_notification_channel(device_id: str = Query(None, alias="device
 
 
 @router.put("/channels/{channel_id}")
-async def update_notification_channel(device_id: str = Query(None, alias="deviceId"), channel_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def update_notification_channel(device_id: str | None = Depends(get_device_id), channel_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     _ALLOWED = {"name", "type", "config", "enabled"}
     body = await request.json()
     sets, params, idx = [], [], 1
@@ -793,13 +793,13 @@ async def update_notification_channel(device_id: str = Query(None, alias="device
 
 
 @router.delete("/channels/{channel_id}")
-async def delete_notification_channel(device_id: str = Query(None, alias="deviceId"), channel_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def delete_notification_channel(device_id: str | None = Depends(get_device_id), channel_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     await ds.execute("DELETE FROM notification_channels WHERE id=$1 AND device_id=$2", [channel_id, device_id])
     return {"success": True, "message": "Channel deleted"}
 
 
 @router.post("/channels/{channel_id}/test")
-async def test_notification_channel(device_id: str = Query(None, alias="deviceId"), channel_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def test_notification_channel(device_id: str | None = Depends(get_device_id), channel_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     row = await ds.query_one("SELECT * FROM notification_channels WHERE id=$1 AND device_id=$2", [channel_id, device_id])
     if not row:
         raise HTTPException(404, "Channel not found")
@@ -807,13 +807,13 @@ async def test_notification_channel(device_id: str = Query(None, alias="deviceId
 
 
 @router.get("/channels/{channel_id}/pending")
-async def get_pending_notifications(device_id: str = Query(None, alias="deviceId"), channel_id: str = "", ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_pending_notifications(device_id: str | None = Depends(get_device_id), channel_id: str = "", ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     rows = await ds.query("SELECT * FROM notifications WHERE device_id=$1 AND channel_id=$2 AND status='pending' ORDER BY created_at DESC", [device_id, channel_id])
     return {"success": True, "data": rows}
 
 
 @router.get("/notifications/history")
-async def get_notification_history(device_id: str = Query(None, alias="deviceId"), channel_id: str = Query(None, alias="channelId"), limit: int = Query(100, le=1000, ge=1), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_notification_history(device_id: str | None = Depends(get_device_id), channel_id: str = Query(None, alias="channelId"), limit: int = Query(100, le=1000, ge=1), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     conditions = []
     params: list = []
     idx = 1
@@ -839,7 +839,7 @@ async def get_notification_history(device_id: str = Query(None, alias="deviceId"
 # ---------------------------------------------------------------------------
 @router.get("/audit")
 async def get_audit_logs(
-    device_id: str = Query(None, alias="deviceId"), page: int = Query(1, ge=1), limit: int = Query(50, ge=1, le=1000),
+    device_id: str | None = Depends(get_device_id), page: int = Query(1, ge=1), limit: int = Query(50, ge=1, le=1000),
     ds=Depends(get_datastore), user=Depends(get_current_user),
 ) -> dict:
     offset = (page - 1) * limit
@@ -855,7 +855,7 @@ async def get_audit_logs(
 # Dashboard — aggregated data
 # ---------------------------------------------------------------------------
 @router.get("/dashboard")
-async def get_dashboard_data(device_id: str = Query(None, alias="deviceId"), request: Request = None, ds=Depends(get_datastore), orchestrator=Depends(get_device_orchestrator), user=Depends(get_current_user)) -> dict:
+async def get_dashboard_data(device_id: str | None = Depends(get_device_id), request: Request = None, ds=Depends(get_datastore), orchestrator=Depends(get_device_orchestrator), user=Depends(get_current_user)) -> dict:
     ae = _c(request).alert_engine()
     active_alerts = await ae.get_active_alerts(device_id)
     now_ms = int(time.time() * 1000)
@@ -890,13 +890,13 @@ async def get_dashboard_data(device_id: str = Query(None, alias="deviceId"), req
 # Syslog — wired to SyslogReceiver + DataStore
 # ---------------------------------------------------------------------------
 @router.get("/syslog/config")
-async def get_syslog_config(device_id: str = Query(None, alias="deviceId"), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_syslog_config(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     row = await ds.query_one("SELECT config FROM device_settings WHERE device_id=$1 AND key='syslog_config'", [device_id])
     return {"success": True, "data": row["config"] if row else {"port": 514, "enabled": False, "severityMapping": {}}}
 
 
 @router.put("/syslog/config")
-async def update_syslog_config(device_id: str = Query(None, alias="deviceId"), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def update_syslog_config(device_id: str | None = Depends(get_device_id), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     body = await request.json()
     await ds.execute(
         "INSERT INTO device_settings (device_id, key, config) VALUES ($1, 'syslog_config', $2) "
@@ -907,7 +907,7 @@ async def update_syslog_config(device_id: str = Query(None, alias="deviceId"), r
 
 
 @router.get("/syslog/status")
-async def get_syslog_status(device_id: str = Query(None, alias="deviceId"), request: Request = None, user=Depends(get_current_user)) -> dict:
+async def get_syslog_status(device_id: str | None = Depends(get_device_id), request: Request = None, user=Depends(get_current_user)) -> dict:
     sr = _c(request).syslog_receiver()
     return {
         "success": True,
@@ -921,7 +921,7 @@ async def get_syslog_status(device_id: str = Query(None, alias="deviceId"), requ
 
 @router.get("/syslog/events")
 async def get_syslog_events(
-    device_id: str = Query(None, alias="deviceId"), severity: str = Query(None),
+    device_id: str | None = Depends(get_device_id), severity: str = Query(None),
     page: int = Query(1, ge=1), limit: int = Query(50, ge=1, le=1000),
     ds=Depends(get_datastore), user=Depends(get_current_user),
 ) -> dict:
@@ -942,7 +942,7 @@ async def get_syslog_events(
 
 
 @router.get("/syslog/stats")
-async def get_syslog_stats(device_id: str = Query(None, alias="deviceId"), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_syslog_stats(device_id: str | None = Depends(get_device_id), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     sr = _c(request).syslog_receiver()
     count_row = await ds.query_one("SELECT COUNT(*) as total FROM syslog_events WHERE device_id=$1", [device_id])
     sev_rows = await ds.query(
@@ -959,7 +959,7 @@ async def get_syslog_stats(device_id: str = Query(None, alias="deviceId"), reque
 
 
 @router.post("/syslog/stats/reset")
-async def reset_syslog_stats(device_id: str = Query(None, alias="deviceId"), request: Request = None, user=Depends(get_current_user)) -> dict:
+async def reset_syslog_stats(device_id: str | None = Depends(get_device_id), request: Request = None, user=Depends(get_current_user)) -> dict:
     sr = _c(request).syslog_receiver()
     sr._message_count = 0
     return {"success": True, "message": "Syslog stats reset"}
@@ -969,13 +969,13 @@ async def reset_syslog_stats(device_id: str = Query(None, alias="deviceId"), req
 # Maintenance Windows — wired to DataStore
 # ---------------------------------------------------------------------------
 @router.get("/filters/maintenance")
-async def get_maintenance_windows(device_id: str = Query(None, alias="deviceId"), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_maintenance_windows(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     rows = await ds.query("SELECT * FROM maintenance_windows WHERE device_id=$1 ORDER BY start_time DESC", [device_id])
     return {"success": True, "data": rows}
 
 
 @router.post("/filters/maintenance")
-async def create_maintenance_window(device_id: str = Query(None, alias="deviceId"), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def create_maintenance_window(device_id: str | None = Depends(get_device_id), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     body = await request.json()
     mid = str(uuid.uuid4())
     await ds.execute(
@@ -987,7 +987,7 @@ async def create_maintenance_window(device_id: str = Query(None, alias="deviceId
 
 
 @router.put("/filters/maintenance/{window_id}")
-async def update_maintenance_window(device_id: str = Query(None, alias="deviceId"), window_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def update_maintenance_window(device_id: str | None = Depends(get_device_id), window_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     _ALLOWED = {"name", "start_time", "end_time", "filters", "enabled", "description"}
     body = await request.json()
     sets, params, idx = [], [], 1
@@ -1007,7 +1007,7 @@ async def update_maintenance_window(device_id: str = Query(None, alias="deviceId
 
 
 @router.delete("/filters/maintenance/{window_id}")
-async def delete_maintenance_window(device_id: str = Query(None, alias="deviceId"), window_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def delete_maintenance_window(device_id: str | None = Depends(get_device_id), window_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     await ds.execute("DELETE FROM maintenance_windows WHERE id=$1 AND device_id=$2", [window_id, device_id])
     return {"success": True, "message": "Maintenance window deleted"}
 
@@ -1016,13 +1016,13 @@ async def delete_maintenance_window(device_id: str = Query(None, alias="deviceId
 # Known Issues — wired to DataStore
 # ---------------------------------------------------------------------------
 @router.get("/filters/known-issues")
-async def get_known_issues(device_id: str = Query(None, alias="deviceId"), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_known_issues(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     rows = await ds.query("SELECT * FROM known_issues WHERE device_id=$1 ORDER BY created_at DESC", [device_id])
     return {"success": True, "data": rows}
 
 
 @router.post("/filters/known-issues")
-async def create_known_issue(device_id: str = Query(None, alias="deviceId"), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def create_known_issue(device_id: str | None = Depends(get_device_id), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     body = await request.json()
     kid = str(uuid.uuid4())
     await ds.execute(
@@ -1034,7 +1034,7 @@ async def create_known_issue(device_id: str = Query(None, alias="deviceId"), req
 
 
 @router.put("/filters/known-issues/{issue_id}")
-async def update_known_issue(device_id: str = Query(None, alias="deviceId"), issue_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def update_known_issue(device_id: str | None = Depends(get_device_id), issue_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     _ALLOWED = {"name", "title", "description", "pattern", "severity", "enabled", "auto_resolve"}
     body = await request.json()
     sets, params, idx = [], [], 1
@@ -1054,7 +1054,7 @@ async def update_known_issue(device_id: str = Query(None, alias="deviceId"), iss
 
 
 @router.delete("/filters/known-issues/{issue_id}")
-async def delete_known_issue(device_id: str = Query(None, alias="deviceId"), issue_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def delete_known_issue(device_id: str | None = Depends(get_device_id), issue_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     await ds.execute("DELETE FROM known_issues WHERE id=$1 AND device_id=$2", [issue_id, device_id])
     return {"success": True, "message": "Known issue deleted"}
 
@@ -1063,13 +1063,13 @@ async def delete_known_issue(device_id: str = Query(None, alias="deviceId"), iss
 # Decision Rules — wired to DataStore + DecisionEngine
 # ---------------------------------------------------------------------------
 @router.get("/decisions/rules")
-async def get_decision_rules(device_id: str = Query(None, alias="deviceId"), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_decision_rules(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     rows = await ds.query("SELECT * FROM decision_rules WHERE device_id=$1 ORDER BY created_at DESC", [device_id])
     return {"success": True, "data": rows}
 
 
 @router.get("/decisions/rules/{rule_id}")
-async def get_decision_rule_by_id(device_id: str = Query(None, alias="deviceId"), rule_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_decision_rule_by_id(device_id: str | None = Depends(get_device_id), rule_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     row = await ds.query_one("SELECT * FROM decision_rules WHERE id=$1 AND device_id=$2", [rule_id, device_id])
     if not row:
         raise HTTPException(404, "Decision rule not found")
@@ -1077,7 +1077,7 @@ async def get_decision_rule_by_id(device_id: str = Query(None, alias="deviceId")
 
 
 @router.post("/decisions/rules")
-async def create_decision_rule(device_id: str = Query(None, alias="deviceId"), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def create_decision_rule(device_id: str | None = Depends(get_device_id), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     body = await request.json()
     rid = str(uuid.uuid4())
     await ds.execute(
@@ -1090,7 +1090,7 @@ async def create_decision_rule(device_id: str = Query(None, alias="deviceId"), r
 
 
 @router.put("/decisions/rules/{rule_id}")
-async def update_decision_rule(device_id: str = Query(None, alias="deviceId"), rule_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def update_decision_rule(device_id: str | None = Depends(get_device_id), rule_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     _ALLOWED = {"name", "description", "condition", "action", "priority", "enabled"}
     body = await request.json()
     sets, params, idx = [], [], 1
@@ -1110,14 +1110,14 @@ async def update_decision_rule(device_id: str = Query(None, alias="deviceId"), r
 
 
 @router.delete("/decisions/rules/{rule_id}")
-async def delete_decision_rule(device_id: str = Query(None, alias="deviceId"), rule_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def delete_decision_rule(device_id: str | None = Depends(get_device_id), rule_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     await ds.execute("DELETE FROM decision_rules WHERE id=$1 AND device_id=$2", [rule_id, device_id])
     return {"success": True, "message": "Decision rule deleted"}
 
 
 @router.get("/decisions/history")
 async def get_decision_history(
-    device_id: str = Query(None, alias="deviceId"), page: int = Query(1, ge=1), limit: int = Query(50, ge=1, le=1000),
+    device_id: str | None = Depends(get_device_id), page: int = Query(1, ge=1), limit: int = Query(50, ge=1, le=1000),
     ds=Depends(get_datastore), user=Depends(get_current_user),
 ) -> dict:
     offset = (page - 1) * limit
@@ -1132,7 +1132,7 @@ async def get_decision_history(
 # Feedback — wired to DataStore
 # ---------------------------------------------------------------------------
 @router.post("/feedback")
-async def submit_feedback(device_id: str = Query(None, alias="deviceId"), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def submit_feedback(device_id: str | None = Depends(get_device_id), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     body = await request.json()
     fid = str(uuid.uuid4())
     await ds.execute(
@@ -1145,7 +1145,7 @@ async def submit_feedback(device_id: str = Query(None, alias="deviceId"), reques
 
 
 @router.get("/feedback/stats")
-async def get_feedback_stats(device_id: str = Query(None, alias="deviceId"), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_feedback_stats(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     total = await ds.query_one("SELECT COUNT(*) as cnt FROM feedback WHERE device_id=$1", [device_id])
     avg_row = await ds.query_one("SELECT AVG(rating) as avg_rating FROM feedback WHERE device_id=$1", [device_id])
     return {
@@ -1158,7 +1158,7 @@ async def get_feedback_stats(device_id: str = Query(None, alias="deviceId"), ds=
 
 
 @router.get("/feedback/review")
-async def get_rules_needing_review(device_id: str = Query(None, alias="deviceId"), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_rules_needing_review(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     rows = await ds.query(
         "SELECT rule_id, COUNT(*) as negative_count FROM feedback "
         "WHERE device_id=$1 AND rating <= 2 GROUP BY rule_id HAVING COUNT(*) >= 3 ORDER BY negative_count DESC",
@@ -1171,34 +1171,34 @@ async def get_rules_needing_review(device_id: str = Query(None, alias="deviceId"
 # Cache Stats — wired to AlertPipeline + AnalysisCache
 # ---------------------------------------------------------------------------
 @router.get("/cache/fingerprint/stats")
-async def get_fingerprint_cache_stats(device_id: str = Query(None, alias="deviceId"), request: Request = None, user=Depends(get_current_user)) -> dict:
+async def get_fingerprint_cache_stats(device_id: str | None = Depends(get_device_id), request: Request = None, user=Depends(get_current_user)) -> dict:
     pipeline = _c(request).alert_pipeline()
     stats = pipeline.get_stats()
     return {"success": True, "data": {"deduplicated": stats.get("deduplicated", 0), "fingerprints": len(pipeline._fingerprints)}}
 
 
 @router.post("/cache/fingerprint/clear")
-async def clear_fingerprint_cache(device_id: str = Query(None, alias="deviceId"), request: Request = None, user=Depends(get_current_user)) -> dict:
+async def clear_fingerprint_cache(device_id: str | None = Depends(get_device_id), request: Request = None, user=Depends(get_current_user)) -> dict:
     pipeline = _c(request).alert_pipeline()
     pipeline._fingerprints.clear()
     return {"success": True, "message": "Fingerprint cache cleared"}
 
 
 @router.get("/cache/analysis/stats")
-async def get_analysis_cache_stats(device_id: str = Query(None, alias="deviceId"), request: Request = None, user=Depends(get_current_user)) -> dict:
+async def get_analysis_cache_stats(device_id: str | None = Depends(get_device_id), request: Request = None, user=Depends(get_current_user)) -> dict:
     cache = _c(request).analysis_cache()
     return {"success": True, "data": cache.get_stats()}
 
 
 @router.post("/cache/analysis/clear")
-async def clear_analysis_cache(device_id: str = Query(None, alias="deviceId"), request: Request = None, user=Depends(get_current_user)) -> dict:
+async def clear_analysis_cache(device_id: str | None = Depends(get_device_id), request: Request = None, user=Depends(get_current_user)) -> dict:
     cache = _c(request).analysis_cache()
     cache.clear()
     return {"success": True, "message": "Analysis cache cleared"}
 
 
 @router.get("/cache/events/stats")
-async def get_events_cache_stats(device_id: str = Query(None, alias="deviceId"), request: Request = None, user=Depends(get_current_user)) -> dict:
+async def get_events_cache_stats(device_id: str | None = Depends(get_device_id), request: Request = None, user=Depends(get_current_user)) -> dict:
     pipeline = _c(request).alert_pipeline()
     return {"success": True, "data": pipeline.get_stats()}
 
@@ -1207,14 +1207,14 @@ async def get_events_cache_stats(device_id: str = Query(None, alias="deviceId"),
 # Pipeline Status — wired to AlertPipeline
 # ---------------------------------------------------------------------------
 @router.get("/pipeline/status")
-async def get_pipeline_status(device_id: str = Query(None, alias="deviceId"), request: Request = None, user=Depends(get_current_user)) -> dict:
+async def get_pipeline_status(device_id: str | None = Depends(get_device_id), request: Request = None, user=Depends(get_current_user)) -> dict:
     pipeline = _c(request).alert_pipeline()
     hc = await pipeline.health_check()
     return {"success": True, "data": hc}
 
 
 @router.get("/pipeline/concurrency")
-async def get_pipeline_concurrency_status(device_id: str = Query(None, alias="deviceId"), request: Request = None, user=Depends(get_current_user)) -> dict:
+async def get_pipeline_concurrency_status(device_id: str | None = Depends(get_device_id), request: Request = None, user=Depends(get_current_user)) -> dict:
     pipeline = _c(request).alert_pipeline()
     cc = _c(request).concurrency_controller()
     return {
@@ -1230,7 +1230,7 @@ async def get_pipeline_concurrency_status(device_id: str = Query(None, alias="de
 # Services Health — wired to service health checks
 # ---------------------------------------------------------------------------
 @router.get("/health")
-async def get_services_health(device_id: str = Query(None, alias="deviceId"), request: Request = None, user=Depends(get_current_user)) -> dict:
+async def get_services_health(device_id: str | None = Depends(get_device_id), request: Request = None, user=Depends(get_current_user)) -> dict:
     c = _c(request)
     services: dict[str, Any] = {}
     try:
@@ -1257,13 +1257,13 @@ async def get_services_health(device_id: str = Query(None, alias="deviceId"), re
 
 
 @router.get("/health/services")
-async def get_health_services(device_id: str = Query(None, alias="deviceId"), request: Request = None, user=Depends(get_current_user)) -> dict:
+async def get_health_services(device_id: str | None = Depends(get_device_id), request: Request = None, user=Depends(get_current_user)) -> dict:
     """Alias: frontend calls /health/services, delegates to get_services_health."""
     return await get_services_health(device_id=device_id, request=request, user=user)
 
 
 @router.get("/health/degradation")
-async def get_health_degradation(device_id: str = Query(None, alias="deviceId"), request: Request = None, user=Depends(get_current_user)) -> dict:
+async def get_health_degradation(device_id: str | None = Depends(get_device_id), request: Request = None, user=Depends(get_current_user)) -> dict:
     c = _c(request)
     degradations: list[dict[str, Any]] = []
     try:
@@ -1276,7 +1276,7 @@ async def get_health_degradation(device_id: str = Query(None, alias="deviceId"),
 
 
 @router.get("/health/current")
-async def get_health_current(device_id: str = Query(None, alias="deviceId"), request: Request = None, user=Depends(get_current_user)) -> dict:
+async def get_health_current(device_id: str | None = Depends(get_device_id), request: Request = None, user=Depends(get_current_user)) -> dict:
     hm = _c(request).health_monitor()
 
     # 单设备查询
@@ -1326,7 +1326,7 @@ async def get_health_current(device_id: str = Query(None, alias="deviceId"), req
 
 
 @router.get("/health/trend")
-async def get_health_trend(device_id: str = Query(None, alias="deviceId"), hours: int = Query(24, gt=0), range_: str = Query(None, alias="range"), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_health_trend(device_id: str | None = Depends(get_device_id), hours: int = Query(24, gt=0), range_: str = Query(None, alias="range"), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     # range 优先于 hours
     if range_:
         mapping = {"1h": 1, "6h": 6, "24h": 24, "7d": 168}
@@ -1341,7 +1341,7 @@ async def get_health_trend(device_id: str = Query(None, alias="deviceId"), hours
 
 
 @router.get("/health/{service_name}")
-async def get_service_health(device_id: str = Query(None, alias="deviceId"), service_name: str = "", request: Request = None, user=Depends(get_current_user)) -> dict:
+async def get_service_health(device_id: str | None = Depends(get_device_id), service_name: str = "", request: Request = None, user=Depends(get_current_user)) -> dict:
     c = _c(request)
     svc_map = {
         "alertEngine": lambda: c.alert_engine(),
@@ -1367,7 +1367,7 @@ async def get_service_health(device_id: str = Query(None, alias="deviceId"), ser
 
 
 @router.get("/lifecycle/config")
-async def get_lifecycle_config(device_id: str = Query(None, alias="deviceId"), request: Request = None, user=Depends(get_current_user)) -> dict:
+async def get_lifecycle_config(device_id: str | None = Depends(get_device_id), request: Request = None, user=Depends(get_current_user)) -> dict:
     return {
         "success": True,
         "data": {
@@ -1382,7 +1382,7 @@ async def get_lifecycle_config(device_id: str = Query(None, alias="deviceId"), r
 # Critic / Reflector / Iterations — wired to DataStore
 # ---------------------------------------------------------------------------
 @router.get("/iterations/active")
-async def list_iterations(device_id: str = Query(None, alias="deviceId"), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def list_iterations(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     rows = await ds.query(
         "SELECT * FROM iterations WHERE device_id=$1 AND status IN ('running','pending') ORDER BY created_at DESC",
         [device_id],
@@ -1391,7 +1391,7 @@ async def list_iterations(device_id: str = Query(None, alias="deviceId"), ds=Dep
 
 
 @router.get("/iterations/{iteration_id}")
-async def get_iteration_state(device_id: str = Query(None, alias="deviceId"), iteration_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_iteration_state(device_id: str | None = Depends(get_device_id), iteration_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     row = await ds.query_one("SELECT * FROM iterations WHERE id=$1 AND device_id=$2", [iteration_id, device_id])
     if not row:
         raise HTTPException(404, "Iteration not found")
@@ -1399,13 +1399,13 @@ async def get_iteration_state(device_id: str = Query(None, alias="deviceId"), it
 
 
 @router.post("/iterations/{iteration_id}/abort")
-async def abort_iteration(device_id: str = Query(None, alias="deviceId"), iteration_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def abort_iteration(device_id: str | None = Depends(get_device_id), iteration_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     await ds.execute("UPDATE iterations SET status='aborted' WHERE id=$1 AND device_id=$2", [iteration_id, device_id])
     return {"success": True, "message": "Iteration aborted"}
 
 
 @router.get("/evaluations/{plan_id}")
-async def get_evaluation_report(device_id: str = Query(None, alias="deviceId"), plan_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_evaluation_report(device_id: str | None = Depends(get_device_id), plan_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     row = await ds.query_one("SELECT * FROM evaluation_reports WHERE plan_id=$1", [plan_id])
     if not row:
         raise HTTPException(404, "Evaluation report not found")
@@ -1414,7 +1414,7 @@ async def get_evaluation_report(device_id: str = Query(None, alias="deviceId"), 
 
 @router.get("/learning")
 async def query_learning(
-    device_id: str = Query(None, alias="deviceId"), category: str = Query(None),
+    device_id: str | None = Depends(get_device_id), category: str = Query(None),
     page: int = Query(1, ge=1), limit: int = Query(50, ge=1, le=1000),
     ds=Depends(get_datastore), user=Depends(get_current_user),
 ) -> dict:
@@ -1435,7 +1435,7 @@ async def query_learning(
 
 
 @router.get("/stats/critic")
-async def get_critic_stats(device_id: str = Query(None, alias="deviceId"), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_critic_stats(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     row = await ds.query_one(
         "SELECT COUNT(*) as total, SUM(CASE WHEN result='pass' THEN 1 ELSE 0 END) as passed "
         "FROM critic_evaluations WHERE device_id=$1", [device_id]
@@ -1444,7 +1444,7 @@ async def get_critic_stats(device_id: str = Query(None, alias="deviceId"), ds=De
 
 
 @router.get("/stats/reflector")
-async def get_reflector_stats(device_id: str = Query(None, alias="deviceId"), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_reflector_stats(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     row = await ds.query_one(
         "SELECT COUNT(*) as total, SUM(CASE WHEN applied=true THEN 1 ELSE 0 END) as applied "
         "FROM reflector_suggestions WHERE device_id=$1", [device_id]
@@ -1453,7 +1453,7 @@ async def get_reflector_stats(device_id: str = Query(None, alias="deviceId"), ds
 
 
 @router.get("/stats/iterations")
-async def get_iteration_stats(device_id: str = Query(None, alias="deviceId"), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_iteration_stats(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     row = await ds.query_one(
         "SELECT COUNT(*) as total, "
         "SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) as completed, "
@@ -1464,13 +1464,13 @@ async def get_iteration_stats(device_id: str = Query(None, alias="deviceId"), ds
 
 
 @router.get("/critic/config")
-async def get_critic_reflector_config(device_id: str = Query(None, alias="deviceId"), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_critic_reflector_config(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     row = await ds.query_one("SELECT config FROM device_settings WHERE device_id=$1 AND key='critic_config'", [device_id])
     return {"success": True, "data": row["config"] if row else {"criticEnabled": True, "reflectorEnabled": True, "autoApply": False}}
 
 
 @router.post("/critic/config")
-async def update_critic_reflector_config(device_id: str = Query(None, alias="deviceId"), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def update_critic_reflector_config(device_id: str | None = Depends(get_device_id), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     body = await request.json()
     await ds.execute(
         "INSERT INTO device_settings (device_id, key, config) VALUES ($1, 'critic_config', $2) "
@@ -1484,13 +1484,26 @@ async def update_critic_reflector_config(device_id: str = Query(None, alias="dev
 # Evolution Config / Status — wired to DataStore
 # ---------------------------------------------------------------------------
 @router.get("/evolution/config")
-async def get_evolution_config(device_id: str = Query(None, alias="deviceId"), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_evolution_config(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     row = await ds.query_one("SELECT config FROM device_settings WHERE device_id=$1 AND key='evolution_config'", [device_id])
-    return {"success": True, "data": row["config"] if row else {"enabled": False, "capabilities": {}}}
+    if row:
+        return {"success": True, "data": row["config"]}
+    # No per-device config — read global default from evolution-config.json
+    from pathlib import Path as _Path
+    evo_path = _Path("data/ai-ops/evolution-config.json")
+    if evo_path.exists():
+        try:
+            text = await asyncio.to_thread(evo_path.read_text, encoding="utf-8")
+            data = json.loads(text)
+            return {"success": True, "data": data}
+        except Exception:
+            pass
+    # Ultimate fallback: everything enabled
+    return {"success": True, "data": {"enabled": True, "autonomousBrain": {"enabled": True}, "capabilities": {}}}
 
 
 @router.put("/evolution/config")
-async def update_evolution_config(device_id: str = Query(None, alias="deviceId"), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def update_evolution_config(device_id: str | None = Depends(get_device_id), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     body = await request.json()
     await ds.execute(
         "INSERT INTO device_settings (device_id, key, config) VALUES ($1, 'evolution_config', $2) "
@@ -1501,55 +1514,104 @@ async def update_evolution_config(device_id: str = Query(None, alias="deviceId")
 
 
 @router.get("/evolution/status")
-async def get_evolution_status(device_id: str = Query(None, alias="deviceId"), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_evolution_status(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     row = await ds.query_one("SELECT config FROM device_settings WHERE device_id=$1 AND key='evolution_config'", [device_id])
-    config = row["config"] if row else {}
-    capabilities = config.get("capabilities", {}) if isinstance(config, dict) else {}
+    if row:
+        config = row["config"]
+    else:
+        # Read global default
+        from pathlib import Path as _Path
+        evo_path = _Path("data/ai-ops/evolution-config.json")
+        if evo_path.exists():
+            try:
+                text = await asyncio.to_thread(evo_path.read_text, encoding="utf-8")
+                config = json.loads(text)
+            except Exception:
+                config = {}
+        else:
+            config = {}
+    if not isinstance(config, dict):
+        config = {}
+    # Build capabilities from config sub-modules (each has an "enabled" field)
+    # e.g. {"reflection": {"enabled": true, ...}, "experience": {"enabled": true, ...}}
+    capabilities: dict[str, bool] = {}
+    for key, val in config.items():
+        if isinstance(val, dict) and "enabled" in val:
+            capabilities[key] = val["enabled"]
+    enabled_count = sum(1 for v in capabilities.values() if v)
     return {
         "success": True,
         "data": {
-            "enabled": config.get("enabled", False) if isinstance(config, dict) else False,
+            "enabled": True,
             "capabilities": capabilities,
             "totalCapabilities": len(capabilities),
-            "enabledCapabilities": sum(1 for v in capabilities.values() if isinstance(v, dict) and v.get("enabled")),
+            "enabledCapabilities": enabled_count,
         },
     }
 
 
 @router.post("/evolution/capability/{name}/enable")
-async def enable_evolution_capability(device_id: str = Query(None, alias="deviceId"), name: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    row = await ds.query_one("SELECT config FROM device_settings WHERE device_id=$1 AND key='evolution_config'", [device_id])
-    config = row["config"] if row else {"enabled": True, "capabilities": {}}
-    if isinstance(config, str):
-        config = json.loads(config)
-    caps = config.setdefault("capabilities", {})
-    caps.setdefault(name, {})["enabled"] = True
-    await ds.execute(
-        "INSERT INTO device_settings (device_id, key, config) VALUES ($1, 'evolution_config', $2) "
-        "ON CONFLICT (device_id, key) DO UPDATE SET config=$2",
-        [device_id, json.dumps(config)],
-    )
+async def enable_evolution_capability(device_id: str | None = Depends(get_device_id), name: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+    async def _tx(tx):
+        row = await tx.query_one("SELECT config FROM device_settings WHERE device_id=$1 AND key='evolution_config' FOR UPDATE", [device_id])
+        if row:
+            config = row["config"]
+            if isinstance(config, str):
+                config = json.loads(config)
+        else:
+            # Read global default
+            from pathlib import Path as _Path
+            evo_path = _Path("data/ai-ops/evolution-config.json")
+            if evo_path.exists():
+                try:
+                    config = json.loads(evo_path.read_text(encoding="utf-8"))
+                except Exception:
+                    config = {}
+            else:
+                config = {}
+        # Config structure: {reflection: {enabled: true, ...}, experience: {enabled: true, ...}, ...}
+        config.setdefault(name, {})["enabled"] = True
+        await tx.execute(
+            "INSERT INTO device_settings (device_id, key, config) VALUES ($1, 'evolution_config', $2) "
+            "ON CONFLICT (device_id, key) DO UPDATE SET config=$2",
+            [device_id, json.dumps(config)],
+        )
+    await ds.transaction(_tx)
     return {"success": True, "message": f"Capability '{name}' enabled"}
 
 
 @router.post("/evolution/capability/{name}/disable")
-async def disable_evolution_capability(device_id: str = Query(None, alias="deviceId"), name: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    row = await ds.query_one("SELECT config FROM device_settings WHERE device_id=$1 AND key='evolution_config'", [device_id])
-    config = row["config"] if row else {"enabled": True, "capabilities": {}}
-    if isinstance(config, str):
-        config = json.loads(config)
-    caps = config.setdefault("capabilities", {})
-    caps.setdefault(name, {})["enabled"] = False
-    await ds.execute(
-        "INSERT INTO device_settings (device_id, key, config) VALUES ($1, 'evolution_config', $2) "
-        "ON CONFLICT (device_id, key) DO UPDATE SET config=$2",
-        [device_id, json.dumps(config)],
-    )
+async def disable_evolution_capability(device_id: str | None = Depends(get_device_id), name: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+    async def _tx(tx):
+        row = await tx.query_one("SELECT config FROM device_settings WHERE device_id=$1 AND key='evolution_config' FOR UPDATE", [device_id])
+        if row:
+            config = row["config"]
+            if isinstance(config, str):
+                config = json.loads(config)
+        else:
+            # Read global default
+            from pathlib import Path as _Path
+            evo_path = _Path("data/ai-ops/evolution-config.json")
+            if evo_path.exists():
+                try:
+                    config = json.loads(evo_path.read_text(encoding="utf-8"))
+                except Exception:
+                    config = {}
+            else:
+                config = {}
+        # Config structure: {reflection: {enabled: true, ...}, experience: {enabled: true, ...}, ...}
+        config.setdefault(name, {})["enabled"] = False
+        await tx.execute(
+            "INSERT INTO device_settings (device_id, key, config) VALUES ($1, 'evolution_config', $2) "
+            "ON CONFLICT (device_id, key) DO UPDATE SET config=$2",
+            [device_id, json.dumps(config)],
+        )
+    await ds.transaction(_tx)
     return {"success": True, "message": f"Capability '{name}' disabled"}
 
 
 @router.get("/evolution/tool-stats")
-async def get_tool_stats(device_id: str = Query(None, alias="deviceId"), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_tool_stats(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     rows = await ds.query(
         "SELECT tool_name, COUNT(*) as usage_count, AVG(duration_ms) as avg_duration "
         "FROM tool_usage WHERE device_id=$1 GROUP BY tool_name ORDER BY usage_count DESC",
@@ -1559,7 +1621,7 @@ async def get_tool_stats(device_id: str = Query(None, alias="deviceId"), ds=Depe
 
 
 @router.get("/anomaly/predictions")
-async def get_anomaly_predictions(device_id: str = Query(None, alias="deviceId"), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_anomaly_predictions(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     rows = await ds.query(
         "SELECT * FROM anomaly_predictions WHERE device_id=$1 ORDER BY created_at DESC LIMIT 20", [device_id]
     )
@@ -1570,7 +1632,7 @@ async def get_anomaly_predictions(device_id: str = Query(None, alias="deviceId")
 # SSE Streaming — wired to AutonomousBrain + EventBus
 # ---------------------------------------------------------------------------
 @router.get("/learning/stream")
-async def stream_learning_events(device_id: str = Query(None, alias="deviceId"), request: Request = None, user=Depends(get_current_user)):
+async def stream_learning_events(device_id: str | None = Depends(get_device_id), request: Request = None, user=Depends(get_current_user)):
     """SSE stream for learning events."""
     async def _generate():
         ds = _c(request).datastore()
@@ -1593,7 +1655,7 @@ async def stream_learning_events(device_id: str = Query(None, alias="deviceId"),
 
 
 @router.get("/iterations/{iteration_id}/stream")
-async def stream_iteration_events(device_id: str = Query(None, alias="deviceId"), iteration_id: str = Path(...), request: Request = None, user=Depends(get_current_user)):
+async def stream_iteration_events(device_id: str | None = Depends(get_device_id), iteration_id: str = Path(...), request: Request = None, user=Depends(get_current_user)):
     """SSE stream for iteration progress."""
     async def _generate():
         ds = _c(request).datastore()
@@ -1613,7 +1675,7 @@ async def stream_iteration_events(device_id: str = Query(None, alias="deviceId")
 
 
 @router.get("/intents/stream")
-async def stream_autonomous_intents(device_id: str = Query(None, alias="deviceId"), request: Request = None, user=Depends(get_current_user)):
+async def stream_autonomous_intents(device_id: str | None = Depends(get_device_id), request: Request = None, user=Depends(get_current_user)):
     """SSE stream for autonomous brain intents."""
     async def _generate():
         brain = _c(request).autonomous_brain()
@@ -1652,7 +1714,7 @@ async def stream_autonomous_intents(device_id: str = Query(None, alias="deviceId
 
 
 @router.get("/brain/thinking/stream")
-async def stream_brain_thinking(device_id: str = Query(None, alias="deviceId"), request: Request = None, user=Depends(get_current_user)):
+async def stream_brain_thinking(device_id: str | None = Depends(get_device_id), request: Request = None, user=Depends(get_current_user)):
     """SSE stream for brain OODA thinking process."""
     async def _generate():
         brain = _c(request).autonomous_brain()
@@ -1683,7 +1745,7 @@ async def stream_brain_thinking(device_id: str = Query(None, alias="deviceId"), 
 # Brain Intents — wired to AutonomousBrain
 # ---------------------------------------------------------------------------
 @router.get("/intents/pending")
-async def get_pending_intents(device_id: str = Query(None, alias="deviceId"), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_pending_intents(device_id: str | None = Depends(get_device_id), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     rows = await ds.query(
         "SELECT * FROM brain_intents WHERE device_id=$1 AND status='pending' ORDER BY created_at DESC",
         [device_id],
@@ -1692,7 +1754,7 @@ async def get_pending_intents(device_id: str = Query(None, alias="deviceId"), re
 
 
 @router.post("/intents/grant/{intent_id}")
-async def grant_intent(device_id: str = Query(None, alias="deviceId"), intent_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def grant_intent(device_id: str | None = Depends(get_device_id), intent_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     await ds.execute("UPDATE brain_intents SET status='granted', resolved_at=NOW() WHERE id=$1 AND device_id=$2", [intent_id, device_id])
     brain = _c(request).autonomous_brain()
     await brain.trigger_tick(reason="intent_granted", payload={"intent_id": intent_id})
@@ -1700,7 +1762,7 @@ async def grant_intent(device_id: str = Query(None, alias="deviceId"), intent_id
 
 
 @router.post("/intents/reject/{intent_id}")
-async def reject_intent(device_id: str = Query(None, alias="deviceId"), intent_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def reject_intent(device_id: str | None = Depends(get_device_id), intent_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
     reason = body.get("reason", "Rejected by operator")
     await ds.execute(
@@ -2044,7 +2106,7 @@ async def get_brain_metrics(request: Request = None, user=Depends(get_current_us
 @router.put("/decisions/rules/{rule_id}/weights")
 async def update_decision_rule_weights(
     rule_id: str = Path(...),
-    device_id: str = Query(None, alias="deviceId"),
+    device_id: str | None = Depends(get_device_id),
     request: Request = None,
     ds=Depends(get_datastore),
     user=Depends(get_current_user),
@@ -2208,7 +2270,7 @@ async def get_evolution_knowledge_stats(
 
 @router.get("/fault-patterns/pending")
 async def get_fault_patterns_pending(
-    device_id: str = Query(None, alias="deviceId"),
+    device_id: str | None = Depends(get_device_id),
     ds=Depends(get_datastore),
     user=Depends(get_current_user),
 ) -> dict:
@@ -2232,7 +2294,7 @@ async def get_fault_patterns_pending(
 @router.get("/fault-patterns/{pattern_id}/cases")
 async def get_fault_pattern_cases(
     pattern_id: str = Path(...),
-    device_id: str = Query(None, alias="deviceId"),
+    device_id: str | None = Depends(get_device_id),
     ds=Depends(get_datastore),
     user=Depends(get_current_user),
 ) -> dict:
@@ -2254,7 +2316,7 @@ async def get_fault_pattern_cases(
 
 @router.get("/repairs/history")
 async def get_repairs_history(
-    device_id: str = Query(None, alias="deviceId"),
+    device_id: str | None = Depends(get_device_id),
     ds=Depends(get_datastore),
     user=Depends(get_current_user),
 ) -> dict:
@@ -2340,7 +2402,7 @@ async def get_inspection_history(
 @router.post("/notifications/channels/{channel_id}/test")
 async def test_notification_channel_alias(
     channel_id: str = Path(...),
-    device_id: str = Query(None, alias="deviceId"),
+    device_id: str | None = Depends(get_device_id),
     ds=Depends(get_datastore),
     user=Depends(get_current_user),
 ) -> dict:

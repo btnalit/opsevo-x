@@ -49,7 +49,7 @@ services:
       - EMBEDDING_REMOTE_URL=${EMBEDDING_REMOTE_URL:-}
       - EMBEDDING_REMOTE_API_KEY=${EMBEDDING_REMOTE_API_KEY:-}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
-      - BRAIN_ENABLED=${BRAIN_ENABLED:-false}
+      - BRAIN_ENABLED=${BRAIN_ENABLED:-true}
     volumes:
       - opsevo-data:/app/data
       - opsevo-logs:/app/logs

@@ -217,7 +217,7 @@ class Settings(BaseSettings):
 
     # ── Brain (Autonomous OODA) ───────────────────────────────────────────
     brain_enabled: bool = Field(
-        default=False,
+        default=True,
         description="Enable the autonomous brain OODA loop",
     )
     brain_tick_interval: int = Field(
