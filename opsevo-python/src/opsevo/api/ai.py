@@ -1,8 +1,9 @@
 """
-AI API 路由
-/api/devices/{device_id}/ai/* 端点
+AI API 路由（全局）
+/api/ai/* 端点
 
 接入 ChatSessionService、AdapterPool、DataStore 真实逻辑。
+所有 AI 功能为全局架构，不绑定特定设备。
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from fastapi.responses import JSONResponse
 from .deps import get_current_user, get_datastore
 from .utils import snake_to_camel, snake_to_camel_list
 
-router = APIRouter(prefix="/api/devices/{device_id}/ai", tags=["ai"])
+router = APIRouter(prefix="/api/ai", tags=["ai"])
 
 
 def _get_container(request: Request):
@@ -52,7 +53,7 @@ def _format_config_row(row: dict[str, Any] | None) -> dict[str, Any] | None:
 
 # ==================== 提供商信息 ====================
 @router.get("/providers")
-async def get_providers(device_id: str, request: Request, user=Depends(get_current_user)) -> dict:
+async def get_providers(request: Request, user=Depends(get_current_user)) -> dict:
     provider_list = [
         {"id": "openai", "name": "OpenAI", "defaultEndpoint": "https://api.openai.com/v1",
          "defaultModels": ["gpt-5", "gpt-5-mini", "gpt-5.1", "gpt-4.1", "gpt-4.1-mini", "gpt-4o", "gpt-4o-mini", "o3", "o4-mini"]},
@@ -76,29 +77,27 @@ async def get_providers(device_id: str, request: Request, user=Depends(get_curre
 
 # ==================== API 配置管理 ====================
 @router.get("/configs/default")
-async def get_default_config(device_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    row = await ds.query_one(
-        "SELECT * FROM ai_configs WHERE device_id=$1 AND is_default=true", [device_id]
-    )
+async def get_default_config(ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+    row = await ds.query_one("SELECT * FROM ai_configs WHERE is_default=true LIMIT 1")
     return {"success": True, "data": _format_config_row(row)}
 
 
 @router.get("/configs")
-async def get_configs(device_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    rows = await ds.query("SELECT * FROM ai_configs WHERE device_id=$1 ORDER BY created_at DESC", [device_id])
+async def get_configs(ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+    rows = await ds.query("SELECT * FROM ai_configs ORDER BY created_at DESC")
     return {"success": True, "data": [_format_config_row(r) for r in rows]}
 
 
 @router.get("/configs/{config_id}")
-async def get_config_by_id(device_id: str, config_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    row = await ds.query_one("SELECT * FROM ai_configs WHERE id=$1 AND device_id=$2", [config_id, device_id])
+async def get_config_by_id(config_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+    row = await ds.query_one("SELECT * FROM ai_configs WHERE id=$1", [config_id])
     if not row:
         raise HTTPException(404, "Config not found")
     return {"success": True, "data": _format_config_row(row)}
 
 
 @router.post("/configs")
-async def create_config(device_id: str, request: Request, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def create_config(request: Request, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     body = await request.json()
     config_id = str(uuid.uuid4())
     provider = body.get("provider", "openai")
@@ -107,22 +106,21 @@ async def create_config(device_id: str, request: Request, ds=Depends(get_datasto
     base_url = body.get("endpoint") or body.get("baseUrl") or ""
     name = body.get("name", f"{provider} config")
     is_default = bool(body.get("isDefault", False))
-    # 如果设为默认，先取消其他默认
     if is_default:
-        await ds.execute("UPDATE ai_configs SET is_default=false WHERE device_id=$1", [device_id])
+        await ds.execute("UPDATE ai_configs SET is_default=false WHERE is_default=true")
     await ds.execute(
-        "INSERT INTO ai_configs (id, device_id, name, provider, model, api_key, base_url, is_default) "
-        "VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
-        (config_id, device_id, name, provider, model, api_key, base_url, is_default),
+        "INSERT INTO ai_configs (id, name, provider, model, api_key, base_url, is_default) "
+        "VALUES ($1,$2,$3,$4,$5,$6,$7)",
+        (config_id, name, provider, model, api_key, base_url, is_default),
     )
     row = await ds.query_one("SELECT * FROM ai_configs WHERE id=$1", [config_id])
     return {"success": True, "data": _format_config_row(row)}
 
 
 @router.put("/configs/{config_id}")
-async def update_config(device_id: str, config_id: str, request: Request, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def update_config(config_id: str, request: Request, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     body = await request.json()
-    existing = await ds.query_one("SELECT * FROM ai_configs WHERE id=$1 AND device_id=$2", [config_id, device_id])
+    existing = await ds.query_one("SELECT * FROM ai_configs WHERE id=$1", [config_id])
     if not existing:
         raise HTTPException(404, "Config not found")
     sets = []
@@ -144,18 +142,18 @@ async def update_config(device_id: str, config_id: str, request: Request, ds=Dep
 
 
 @router.delete("/configs/{config_id}")
-async def delete_config(device_id: str, config_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    rows = await ds.execute("DELETE FROM ai_configs WHERE id=$1 AND device_id=$2", [config_id, device_id])
+async def delete_config(config_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+    rows = await ds.execute("DELETE FROM ai_configs WHERE id=$1", [config_id])
     if rows == 0:
         raise HTTPException(404, "Config not found")
     return {"success": True, "message": "Config deleted"}
 
 
 @router.post("/configs/{config_id}/default")
-async def set_default_config(device_id: str, config_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def set_default_config(config_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     async def _set(tx):
-        await tx.execute("UPDATE ai_configs SET is_default=false WHERE device_id=$1", [device_id])
-        return await tx.execute("UPDATE ai_configs SET is_default=true WHERE id=$1 AND device_id=$2", [config_id, device_id])
+        await tx.execute("UPDATE ai_configs SET is_default=false WHERE is_default=true")
+        return await tx.execute("UPDATE ai_configs SET is_default=true WHERE id=$1", [config_id])
 
     rows = await ds.transaction(_set)
     if rows == 0:
@@ -164,8 +162,8 @@ async def set_default_config(device_id: str, config_id: str, ds=Depends(get_data
 
 
 @router.post("/configs/{config_id}/test")
-async def test_config_connection(device_id: str, config_id: str, request: Request, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    row = await ds.query_one("SELECT * FROM ai_configs WHERE id=$1 AND device_id=$2", [config_id, device_id])
+async def test_config_connection(config_id: str, request: Request, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+    row = await ds.query_one("SELECT * FROM ai_configs WHERE id=$1", [config_id])
     if not row:
         raise HTTPException(404, "Config not found")
     try:
@@ -179,21 +177,20 @@ async def test_config_connection(device_id: str, config_id: str, request: Reques
 
 # ==================== 聊天功能 ====================
 @router.post("/chat")
-async def chat(device_id: str, request: Request, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def chat(request: Request, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     body = await request.json()
     container = _get_container(request)
     agent = container.unified_agent()
     message = body.get("message", "")
     mode = body.get("mode", "general")
     session_id = body.get("sessionId")
-    result = await agent.chat(message=message, mode=mode, session_id=session_id, device_id=device_id)
+    result = await agent.chat(message=message, mode=mode, session_id=session_id)
     return {"success": True, "data": result}
 
 
 # ==================== 聊天功能（SSE 流式） ====================
 @router.post("/chat/stream")
 async def chat_stream(
-    device_id: str,
     request: Request,
     ds=Depends(get_datastore),
     user: dict = Depends(get_current_user),
@@ -217,7 +214,6 @@ async def chat_stream(
                 message,
                 mode=mode,
                 session_id=session_id or "",
-                device_id=device_id,
             ):
                 if isinstance(chunk, dict):
                     content = chunk.get("content", "")
@@ -245,21 +241,12 @@ async def chat_stream(
 
 # ==================== 设备上下文 ====================
 @router.get("/context")
-async def get_context(device_id: str, request: Request, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    try:
-        from opsevo.services.ai.context_builder import ContextBuilderService
-        container = _get_container(request)
-        pool = container.device_pool()
-        driver = await pool.get_driver(device_id)
-        builder = ContextBuilderService()
-        ctx = await builder.build_context(driver)
-        return {"success": True, "data": ctx}
-    except Exception:
-        return {"success": True, "data": {}}
+async def get_context(request: Request, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+    return {"success": True, "data": {}}
 
 
 @router.get("/context/sections")
-async def get_context_sections(device_id: str, user=Depends(get_current_user)) -> dict:
+async def get_context_sections(user=Depends(get_current_user)) -> dict:
     sections = [
         {"id": "device_info", "name": "Device Information"},
         {"id": "interfaces", "name": "Network Interfaces"},
@@ -271,36 +258,24 @@ async def get_context_sections(device_id: str, user=Depends(get_current_user)) -
 
 
 @router.get("/context/sections/{section}")
-async def get_context_section(device_id: str, section: str, request: Request, user=Depends(get_current_user)) -> dict:
-    try:
-        from opsevo.services.ai.context_builder import ContextBuilderService
-        container = _get_container(request)
-        pool = container.device_pool()
-        driver = await pool.get_driver(device_id)
-        builder = ContextBuilderService()
-        ctx = await builder.build_context(driver)
-        data = ctx.get(section)
-        if data is None:
-            raise HTTPException(404, f"Section '{section}' not found")
-        return {"success": True, "data": data}
-    except HTTPException:
-        raise
-    except Exception:
-        return {"success": True, "data": None}
+async def get_context_section(section: str, request: Request, user=Depends(get_current_user)) -> dict:
+    return {"success": True, "data": None}
 
 
 # ==================== 脚本执行 ====================
 @router.post("/scripts/execute")
-async def execute_script(device_id: str, request: Request, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def execute_script(request: Request, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     body = await request.json()
     script = body.get("script", "")
     session_id = body.get("sessionId")
+    device_id = body.get("deviceId", "")
     container = _get_container(request)
     pool = container.device_pool()
+    if not device_id:
+        return {"success": False, "error": "deviceId is required for script execution"}
     try:
         driver = await pool.get_driver(device_id)
         result = await driver.execute("run_script", {"script": script})
-        # Record to history
         history_id = str(uuid.uuid4())
         await ds.execute(
             "INSERT INTO script_history (id, device_id, session_id, script, output, success, timestamp) "
@@ -313,60 +288,56 @@ async def execute_script(device_id: str, request: Request, ds=Depends(get_datast
 
 
 @router.post("/scripts/validate")
-async def validate_script(device_id: str, request: Request, user=Depends(get_current_user)) -> dict:
+async def validate_script(request: Request, user=Depends(get_current_user)) -> dict:
     body = await request.json()
     script = body.get("script", "")
-    # Basic validation: check non-empty and no obvious syntax issues
     valid = bool(script and len(script.strip()) > 0)
     return {"success": True, "data": {"valid": valid, "errors": [] if valid else ["Script is empty"]}}
 
 
 @router.get("/scripts/history")
-async def get_script_history(device_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    rows = await ds.query(
-        "SELECT * FROM script_history WHERE device_id=$1 ORDER BY timestamp DESC LIMIT 100", [device_id]
-    )
+async def get_script_history(ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+    rows = await ds.query("SELECT * FROM script_history ORDER BY timestamp DESC LIMIT 100")
     return {"success": True, "data": snake_to_camel_list(rows or [])}
 
 
 @router.delete("/scripts/history/session/{session_id}")
-async def clear_session_script_history(device_id: str, session_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    await ds.execute("DELETE FROM script_history WHERE device_id=$1 AND session_id=$2", [device_id, session_id])
+async def clear_session_script_history(session_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+    await ds.execute("DELETE FROM script_history WHERE session_id=$1", [session_id])
     return {"success": True, "message": "Session script history cleared"}
 
 
 @router.delete("/scripts/history/{history_id}")
-async def delete_script_history(device_id: str, history_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    await ds.execute("DELETE FROM script_history WHERE id=$1 AND device_id=$2", [history_id, device_id])
+async def delete_script_history(history_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+    await ds.execute("DELETE FROM script_history WHERE id=$1", [history_id])
     return {"success": True, "message": "Script history deleted"}
 
 
 # ==================== 会话管理 ====================
 @router.get("/sessions/search")
-async def search_sessions(device_id: str, q: str = Query(""), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def search_sessions(q: str = Query(""), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     if q:
         rows = await ds.query(
-            "SELECT * FROM chat_sessions WHERE device_id=$1 AND (title ILIKE $2 OR mode ILIKE $2) ORDER BY updated_at DESC",
-            [device_id, f"%{q}%"],
+            "SELECT * FROM chat_sessions WHERE (title ILIKE $1 OR mode ILIKE $1) ORDER BY updated_at DESC",
+            [f"%{q}%"],
         )
     else:
-        rows = await ds.query("SELECT * FROM chat_sessions WHERE device_id=$1 ORDER BY updated_at DESC", [device_id])
+        rows = await ds.query("SELECT * FROM chat_sessions ORDER BY updated_at DESC")
     return {"success": True, "data": snake_to_camel_list(rows or [])}
 
 
 @router.get("/sessions")
-async def get_sessions(device_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    rows = await ds.query("SELECT * FROM chat_sessions WHERE device_id=$1 ORDER BY updated_at DESC", [device_id])
+async def get_sessions(ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+    rows = await ds.query("SELECT * FROM chat_sessions ORDER BY updated_at DESC")
     return {"success": True, "data": snake_to_camel_list(rows or [])}
 
 
 @router.post("/sessions")
-async def create_session(device_id: str, request: Request, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def create_session(request: Request, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     body = await request.json()
     from opsevo.services.ai.chat_session import ChatSessionService
     svc = ChatSessionService(ds)
     session = await svc.create_session(
-        device_id=device_id,
         title=body.get("title", ""),
         mode=body.get("mode", "general"),
     )
@@ -374,24 +345,30 @@ async def create_session(device_id: str, request: Request, ds=Depends(get_datast
 
 
 @router.delete("/sessions")
-async def delete_all_sessions(device_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    async def _delete(tx):
-        await tx.execute(
-            "DELETE FROM chat_messages WHERE session_id IN (SELECT id FROM chat_sessions WHERE device_id=$1)",
-            [device_id],
-        )
-        return await tx.execute("DELETE FROM chat_sessions WHERE device_id=$1", [device_id])
-
-    count = await ds.transaction(_delete)
+async def delete_all_sessions(ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+    await ds.execute("DELETE FROM chat_messages")
+    count = await ds.execute("DELETE FROM chat_sessions")
     return {"success": True, "message": f"Deleted {count} sessions"}
 
 
+@router.get("/sessions/with-collections")
+async def get_sessions_with_collections(ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+    rows = await ds.query(
+        """SELECT s.*, COUNT(cm.id) as collected_count
+           FROM chat_sessions s
+           LEFT JOIN chat_messages cm ON cm.session_id = s.id AND cm.collected = true
+           GROUP BY s.id
+           HAVING COUNT(cm.id) > 0
+           ORDER BY s.updated_at DESC"""
+    )
+    return {"success": True, "data": snake_to_camel_list(rows or [])}
+
+
 @router.get("/sessions/{session_id}")
-async def get_session_by_id(device_id: str, session_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    row = await ds.query_one("SELECT * FROM chat_sessions WHERE id=$1 AND device_id=$2", [session_id, device_id])
+async def get_session_by_id(session_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+    row = await ds.query_one("SELECT * FROM chat_sessions WHERE id=$1", [session_id])
     if not row:
         raise HTTPException(404, "Session not found")
-    # Include messages
     messages = await ds.query(
         "SELECT * FROM chat_messages WHERE session_id=$1 ORDER BY created_at ASC", [session_id]
     )
@@ -400,7 +377,7 @@ async def get_session_by_id(device_id: str, session_id: str, ds=Depends(get_data
 
 
 @router.put("/sessions/{session_id}")
-async def update_session(device_id: str, session_id: str, request: Request, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def update_session(session_id: str, request: Request, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     body = await request.json()
     from opsevo.services.ai.chat_session import ChatSessionService
     svc = ChatSessionService(ds)
@@ -411,8 +388,7 @@ async def update_session(device_id: str, session_id: str, request: Request, ds=D
 
 
 @router.delete("/sessions/{session_id}")
-async def delete_session(device_id: str, session_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    # Delete messages first
+async def delete_session(session_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     await ds.execute("DELETE FROM chat_messages WHERE session_id=$1", [session_id])
     from opsevo.services.ai.chat_session import ChatSessionService
     svc = ChatSessionService(ds)
@@ -423,7 +399,7 @@ async def delete_session(device_id: str, session_id: str, ds=Depends(get_datasto
 
 
 @router.put("/sessions/{session_id}/rename")
-async def rename_session(device_id: str, session_id: str, request: Request, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def rename_session(session_id: str, request: Request, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     body = await request.json()
     title = body.get("title", "")
     from opsevo.services.ai.chat_session import ChatSessionService
@@ -435,19 +411,19 @@ async def rename_session(device_id: str, session_id: str, request: Request, ds=D
 
 
 @router.post("/sessions/{session_id}/clear")
-async def clear_session_messages(device_id: str, session_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def clear_session_messages(session_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     await ds.execute("DELETE FROM chat_messages WHERE session_id=$1", [session_id])
     return {"success": True, "message": "Session messages cleared"}
 
 
 @router.get("/sessions/{session_id}/export")
-async def export_session(device_id: str, session_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    session = await ds.query_one("SELECT * FROM chat_sessions WHERE id=$1 AND device_id=$2", [session_id, device_id])
+async def export_session(session_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+    session = await ds.query_one("SELECT * FROM chat_sessions WHERE id=$1", [session_id])
     if not session:
         raise HTTPException(404, "Session not found")
     messages = await ds.query("SELECT role, content, created_at FROM chat_messages WHERE session_id=$1 ORDER BY created_at ASC", [session_id])
     export_text = f"# {session.get('title', 'Chat Export')}\n\n"
-    for msg in messages:
+    for msg in (messages or []):
         role = msg.get("role", "unknown").capitalize()
         content = msg.get("content", "")
         export_text += f"**{role}**: {content}\n\n"
@@ -455,30 +431,26 @@ async def export_session(device_id: str, session_id: str, ds=Depends(get_datasto
 
 
 @router.post("/sessions/{session_id}/duplicate")
-async def duplicate_session(device_id: str, session_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    original = await ds.query_one("SELECT * FROM chat_sessions WHERE id=$1 AND device_id=$2", [session_id, device_id])
+async def duplicate_session(session_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+    original = await ds.query_one("SELECT * FROM chat_sessions WHERE id=$1", [session_id])
     if not original:
         raise HTTPException(404, "Session not found")
     from opsevo.services.ai.chat_session import ChatSessionService
     svc = ChatSessionService(ds)
     new_session = await svc.create_session(
-        device_id=device_id,
         title=f"{original.get('title', 'Chat')} (copy)",
         mode=original.get("mode", "general"),
     )
-    # Copy messages
     messages = await ds.query("SELECT role, content FROM chat_messages WHERE session_id=$1 ORDER BY created_at ASC", [session_id])
-    for msg in messages:
+    for msg in (messages or []):
         await svc.add_message(new_session["id"], msg["role"], msg["content"])
     return {"success": True, "data": snake_to_camel(new_session)}
 
 
 # ==================== 会话配置管理 ====================
 @router.get("/sessions/{session_id}/config")
-async def get_session_config(device_id: str, session_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    row = await ds.query_one(
-        "SELECT config FROM chat_sessions WHERE id=$1 AND device_id=$2", [session_id, device_id]
-    )
+async def get_session_config(session_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+    row = await ds.query_one("SELECT config FROM chat_sessions WHERE id=$1", [session_id])
     if not row:
         raise HTTPException(404, "Session not found")
     config = row.get("config") or {}
@@ -489,13 +461,13 @@ async def get_session_config(device_id: str, session_id: str, ds=Depends(get_dat
 
 
 @router.put("/sessions/{session_id}/config")
-async def update_session_config(device_id: str, session_id: str, request: Request, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def update_session_config(session_id: str, request: Request, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     body = await request.json()
     import json as _json
     config_json = _json.dumps(body)
     rows = await ds.execute(
-        "UPDATE chat_sessions SET config=$1 WHERE id=$2 AND device_id=$3",
-        [config_json, session_id, device_id],
+        "UPDATE chat_sessions SET config=$1 WHERE id=$2",
+        [config_json, session_id],
     )
     if rows == 0:
         raise HTTPException(404, "Session not found")
@@ -503,7 +475,7 @@ async def update_session_config(device_id: str, session_id: str, request: Reques
 
 
 @router.get("/sessions/{session_id}/context-stats")
-async def get_context_stats(device_id: str, session_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_context_stats(session_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     msg_count = await ds.query_one(
         "SELECT COUNT(*) as count FROM chat_messages WHERE session_id=$1", [session_id]
     )
@@ -521,7 +493,7 @@ async def get_context_stats(device_id: str, session_id: str, ds=Depends(get_data
 
 
 @router.get("/sessions/{session_id}/context-messages")
-async def get_context_messages(device_id: str, session_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_context_messages(session_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     messages = await ds.query(
         "SELECT * FROM chat_messages WHERE session_id=$1 ORDER BY created_at ASC", [session_id]
     )
@@ -529,23 +501,8 @@ async def get_context_messages(device_id: str, session_id: str, ds=Depends(get_d
 
 
 # ==================== 对话收藏管理 ====================
-@router.get("/sessions/with-collections")
-async def get_sessions_with_collections(device_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    rows = await ds.query(
-        """SELECT s.*, COUNT(cm.id) as collected_count
-           FROM chat_sessions s
-           LEFT JOIN chat_messages cm ON cm.session_id = s.id AND cm.collected = true
-           WHERE s.device_id = $1
-           GROUP BY s.id
-           HAVING COUNT(cm.id) > 0
-           ORDER BY s.updated_at DESC""",
-        [device_id],
-    )
-    return {"success": True, "data": snake_to_camel_list(rows or [])}
-
-
 @router.post("/sessions/{session_id}/messages/{message_id}/collect")
-async def collect_message(device_id: str, session_id: str, message_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def collect_message(session_id: str, message_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     rows = await ds.execute(
         "UPDATE chat_messages SET collected=true WHERE id=$1 AND session_id=$2", [message_id, session_id]
     )
@@ -555,7 +512,7 @@ async def collect_message(device_id: str, session_id: str, message_id: str, ds=D
 
 
 @router.delete("/sessions/{session_id}/messages/{message_id}/collect")
-async def uncollect_message(device_id: str, session_id: str, message_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def uncollect_message(session_id: str, message_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     rows = await ds.execute(
         "UPDATE chat_messages SET collected=false WHERE id=$1 AND session_id=$2", [message_id, session_id]
     )
@@ -565,7 +522,7 @@ async def uncollect_message(device_id: str, session_id: str, message_id: str, ds
 
 
 @router.get("/sessions/{session_id}/collected")
-async def get_collected_messages(device_id: str, session_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def get_collected_messages(session_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     rows = await ds.query(
         "SELECT * FROM chat_messages WHERE session_id=$1 AND collected=true ORDER BY created_at ASC", [session_id]
     )
@@ -573,18 +530,18 @@ async def get_collected_messages(device_id: str, session_id: str, ds=Depends(get
 
 
 @router.get("/sessions/{session_id}/collected/export")
-async def export_collected_messages(device_id: str, session_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def export_collected_messages(session_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     rows = await ds.query(
         "SELECT role, content FROM chat_messages WHERE session_id=$1 AND collected=true ORDER BY created_at ASC",
         [session_id],
     )
-    export_text = "\n\n".join(f"**{r['role'].capitalize()}**: {r['content']}" for r in rows)
+    export_text = "\n\n".join(f"**{r['role'].capitalize()}**: {r['content']}" for r in (rows or []))
     return {"success": True, "data": export_text}
 
 
 # ==================== 对话转知识库 ====================
 @router.post("/conversations/convert")
-async def convert_to_knowledge(device_id: str, request: Request, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def convert_to_knowledge(request: Request, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     body = await request.json()
     message_ids = body.get("messageIds", [])
     title = body.get("title", "Converted from chat")
@@ -604,7 +561,7 @@ async def convert_to_knowledge(device_id: str, request: Request, ds=Depends(get_
 
 
 @router.post("/conversations/batch-convert")
-async def batch_convert_to_knowledge(device_id: str, request: Request, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def batch_convert_to_knowledge(request: Request, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     body = await request.json()
     items = body.get("items", [])
     results = []
@@ -628,10 +585,9 @@ async def batch_convert_to_knowledge(device_id: str, request: Request, ds=Depend
 
 
 @router.post("/conversations/suggest-tags")
-async def suggest_tags(device_id: str, request: Request, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+async def suggest_tags(request: Request, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     body = await request.json()
     content = body.get("content", "")
-    # Simple keyword extraction for tag suggestions
     words = content.lower().split()
     common_tags = {"network", "firewall", "routing", "interface", "vpn", "dns", "dhcp",
                    "security", "performance", "monitoring", "backup", "config"}

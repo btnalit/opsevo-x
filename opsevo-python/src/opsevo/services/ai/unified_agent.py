@@ -386,7 +386,7 @@ class UnifiedAgentService:
             existing = await self._session_svc.get_session(session_id)
             if existing:
                 return existing
-        return await self._session_svc.create_session(device_id or "default", mode=mode)
+        return await self._session_svc.create_session(device_id=device_id, mode=mode)
 
     async def _load_history(self, session_id: str, limit: int = 20) -> list[dict[str, str]]:
         """Load recent conversation history for context."""

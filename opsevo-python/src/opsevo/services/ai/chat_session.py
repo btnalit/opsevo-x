@@ -18,11 +18,11 @@ class ChatSessionService:
     def __init__(self, datastore: DataStore):
         self._ds = datastore
 
-    async def create_session(self, device_id: str, title: str = "", mode: str = "general") -> dict:
+    async def create_session(self, device_id: str = "", title: str = "", mode: str = "general") -> dict:
         sid = str(uuid.uuid4())
         await self._ds.execute(
             "INSERT INTO chat_sessions (id, device_id, title, mode) VALUES ($1, $2, $3, $4)",
-            (sid, device_id, title or "New Chat", mode),
+            (sid, device_id or None, title or "New Chat", mode),
         )
         return {"id": sid, "deviceId": device_id, "title": title or "New Chat", "mode": mode}
 

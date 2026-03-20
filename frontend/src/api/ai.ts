@@ -301,18 +301,10 @@ export const chatApi = {
     const controller = new AbortController()
     let isRetrying = false
 
-    const deviceStore = useDeviceStore()
-    const deviceId = deviceStore.currentDeviceId
-    if (!deviceId) {
-      // 拦截：无设备选中时不发送请求
-      callbacks.onError?.('请先选择一个设备后再发送消息')
-      return controller
-    }
-
     const doFetch = async () => {
       try {
         const authStore = useAuthStore()
-        const url = `/api/devices/${deviceId}/ai/chat/stream`
+        const url = `/api/ai/chat/stream`
 
         const headers: Record<string, string> = {
           'Content-Type': 'application/json'
@@ -962,12 +954,8 @@ export const unifiedAgentApi = {
         const authStore = useAuthStore()
         const deviceStore = useDeviceStore()
 
-        // 构造带设备前缀的 URL
+        // 构造全局 URL（AI 模块已全局化，不需要设备前缀）
         let url = '/api/ai/unified/chat/stream'
-        if (deviceStore.currentDeviceId) {
-          // 由于 fetch 不通过 axios 配置，需要手动加上正确的设备级上下文前缀
-          url = `/api/devices/${deviceStore.currentDeviceId}/ai/unified/chat/stream`
-        }
 
         const headers: Record<string, string> = {
           'Content-Type': 'application/json'
@@ -1171,9 +1159,6 @@ export const unifiedAgentApi = {
         const deviceStore = useDeviceStore()
 
         let url = '/api/ai/unified/scripts/execute/stream'
-        if (deviceStore.currentDeviceId) {
-          url = `/api/devices/${deviceStore.currentDeviceId}/ai/unified/scripts/execute/stream`
-        }
 
         const headers: Record<string, string> = {
           'Content-Type': 'application/json'

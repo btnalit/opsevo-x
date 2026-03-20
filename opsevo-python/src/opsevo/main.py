@@ -270,7 +270,6 @@ def create_app() -> FastAPI:
     from opsevo.api.dashboard import router as dashboard_router
     from opsevo.api.events import router as events_router
     from opsevo.api.ai import router as ai_router
-    from opsevo.api.ai_config import router as ai_config_router
     from opsevo.api.ai_ops import router as ai_ops_router
     from opsevo.api.unified_agent import router as unified_agent_router
     from opsevo.api.rag import router as rag_router
@@ -291,7 +290,6 @@ def create_app() -> FastAPI:
     app.include_router(dashboard_router)
     app.include_router(events_router)
     app.include_router(ai_router)
-    app.include_router(ai_config_router)
     app.include_router(ai_ops_router)
     app.include_router(unified_agent_router)
     app.include_router(rag_router)

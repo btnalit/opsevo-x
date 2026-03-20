@@ -1,6 +1,6 @@
-"""Unified Agent API routes.
+"""Unified Agent API routes (global).
 
-Provides all /api/devices/{device_id}/ai/unified/* endpoints:
+Provides all /api/ai/unified/* endpoints:
 - chat (stream + sync)
 - sessions CRUD
 - scripts execute (stream + sync)
@@ -24,7 +24,7 @@ from opsevo.api.utils import snake_to_camel, snake_to_camel_list
 from opsevo.models.ai import ChatRequest
 
 router = APIRouter(
-    prefix="/api/devices/{device_id}/ai/unified",
+    prefix="/api/ai/unified",
     tags=["unified-agent"],
 )
 
@@ -44,7 +44,6 @@ def _agent(request: Request):
 
 @router.post("/chat/stream")
 async def chat_stream(
-    device_id: str,
     body: ChatRequest,
     request: Request,
     user: dict = Depends(get_current_user),
@@ -57,7 +56,6 @@ async def chat_stream(
                 body.message,
                 mode=body.mode,
                 session_id=body.session_id or "",
-                device_id=device_id,
             ):
                 data = json.dumps(chunk, ensure_ascii=False)
                 yield f"data: {data}\n\n"
@@ -84,7 +82,6 @@ async def chat_stream(
 
 @router.post("/chat")
 async def chat(
-    device_id: str,
     body: ChatRequest,
     request: Request,
     user: dict = Depends(get_current_user),
@@ -94,7 +91,6 @@ async def chat(
         body.message,
         mode=body.mode,
         session_id=body.session_id or "",
-        device_id=device_id,
     )
     return {"success": True, "data": result}
 
@@ -103,27 +99,24 @@ async def chat(
 
 @router.get("/sessions")
 async def get_sessions(
-    device_id: str,
     mode: str | None = Query(None),
     ds=Depends(get_datastore),
     user: dict = Depends(get_current_user),
 ):
     if mode:
         rows = await ds.query(
-            "SELECT * FROM chat_sessions WHERE device_id=$1 AND mode=$2 ORDER BY updated_at DESC",
-            [device_id, mode],
+            "SELECT * FROM chat_sessions WHERE mode=$1 ORDER BY updated_at DESC",
+            [mode],
         )
     else:
         rows = await ds.query(
-            "SELECT * FROM chat_sessions WHERE device_id=$1 ORDER BY updated_at DESC",
-            [device_id],
+            "SELECT * FROM chat_sessions ORDER BY updated_at DESC"
         )
     return {"success": True, "data": snake_to_camel_list(rows or [])}
 
 
 @router.post("/sessions")
 async def create_session(
-    device_id: str,
     request: Request,
     ds=Depends(get_datastore),
     user: dict = Depends(get_current_user),
@@ -132,7 +125,6 @@ async def create_session(
     from opsevo.services.ai.chat_session import ChatSessionService
     svc = ChatSessionService(ds)
     session = await svc.create_session(
-        device_id=device_id,
         title=body.get("title", ""),
         mode=body.get("mode", "standard"),
     )
@@ -141,7 +133,6 @@ async def create_session(
 
 @router.get("/sessions-with-collections")
 async def get_sessions_with_collections(
-    device_id: str,
     ds=Depends(get_datastore),
     user: dict = Depends(get_current_user),
 ):
@@ -149,25 +140,22 @@ async def get_sessions_with_collections(
         """SELECT s.*, COUNT(cm.id) as collected_count
            FROM chat_sessions s
            LEFT JOIN chat_messages cm ON cm.session_id = s.id AND cm.collected = true
-           WHERE s.device_id = $1
            GROUP BY s.id
            HAVING COUNT(cm.id) > 0
-           ORDER BY s.updated_at DESC""",
-        [device_id],
+           ORDER BY s.updated_at DESC"""
     )
     return {"success": True, "data": snake_to_camel_list(rows or [])}
 
 
 @router.get("/sessions/{session_id}")
 async def get_session(
-    device_id: str,
     session_id: str,
     ds=Depends(get_datastore),
     user: dict = Depends(get_current_user),
 ):
     row = await ds.query_one(
-        "SELECT * FROM chat_sessions WHERE id=$1 AND device_id=$2",
-        [session_id, device_id],
+        "SELECT * FROM chat_sessions WHERE id=$1",
+        [session_id],
     )
     if not row:
         raise HTTPException(404, "Session not found")
@@ -181,7 +169,6 @@ async def get_session(
 
 @router.put("/sessions/{session_id}")
 async def update_session(
-    device_id: str,
     session_id: str,
     request: Request,
     ds=Depends(get_datastore),
@@ -198,7 +185,6 @@ async def update_session(
 
 @router.delete("/sessions/{session_id}")
 async def delete_session(
-    device_id: str,
     session_id: str,
     ds=Depends(get_datastore),
     user: dict = Depends(get_current_user),
@@ -214,14 +200,13 @@ async def delete_session(
 
 @router.get("/sessions/{session_id}/export")
 async def export_session(
-    device_id: str,
     session_id: str,
     ds=Depends(get_datastore),
     user: dict = Depends(get_current_user),
 ):
     session = await ds.query_one(
-        "SELECT * FROM chat_sessions WHERE id=$1 AND device_id=$2",
-        [session_id, device_id],
+        "SELECT * FROM chat_sessions WHERE id=$1",
+        [session_id],
     )
     if not session:
         raise HTTPException(404, "Session not found")
@@ -230,7 +215,7 @@ async def export_session(
         [session_id],
     )
     export_text = f"# {session.get('title', 'Chat Export')}\n\n"
-    for msg in messages:
+    for msg in (messages or []):
         role = msg.get("role", "unknown").capitalize()
         content = msg.get("content", "")
         export_text += f"**{role}**: {content}\n\n"
@@ -241,7 +226,6 @@ async def export_session(
 
 @router.post("/scripts/execute")
 async def execute_script(
-    device_id: str,
     request: Request,
     ds=Depends(get_datastore),
     user: dict = Depends(get_current_user),
@@ -249,9 +233,12 @@ async def execute_script(
     body = await request.json()
     script = body.get("script", "")
     session_id = body.get("sessionId")
+    device_id = body.get("deviceId", "")
     analyze = body.get("analyze", False)
     container = _c(request)
     pool = container.device_pool()
+    if not device_id:
+        return {"success": False, "error": "deviceId is required for script execution"}
     try:
         driver = await pool.get_driver(device_id)
         result = await driver.execute("run_script", {"script": script})
@@ -269,7 +256,6 @@ async def execute_script(
 
 @router.post("/scripts/execute/stream")
 async def execute_script_stream(
-    device_id: str,
     request: Request,
     ds=Depends(get_datastore),
     user: dict = Depends(get_current_user),
@@ -277,10 +263,14 @@ async def execute_script_stream(
     body = await request.json()
     script = body.get("script", "")
     session_id = body.get("sessionId")
+    device_id = body.get("deviceId", "")
     container = _c(request)
     pool = container.device_pool()
 
     async def event_generator():
+        if not device_id:
+            yield f"data: {json.dumps({'type': 'error', 'error': 'deviceId is required'})}\n\n"
+            return
         try:
             yield f"data: {json.dumps({'type': 'status', 'message': 'Executing script...'})}\n\n"
             driver = await pool.get_driver(device_id)
@@ -304,7 +294,6 @@ async def execute_script_stream(
 
 @router.get("/history")
 async def get_history(
-    device_id: str,
     session_id: str | None = Query(None, alias="sessionId"),
     type: str | None = Query(None),
     limit: int = Query(100),
@@ -312,9 +301,9 @@ async def get_history(
     ds=Depends(get_datastore),
     user: dict = Depends(get_current_user),
 ):
-    base = "SELECT * FROM script_history WHERE device_id=$1"
-    params: list = [device_id]
-    idx = 2
+    base = "SELECT * FROM script_history WHERE 1=1"
+    params: list = []
+    idx = 1
     if session_id:
         base += f" AND session_id=${idx}"
         params.append(session_id)
@@ -327,15 +316,14 @@ async def get_history(
 
 @router.get("/history/stats")
 async def get_history_stats(
-    device_id: str,
     session_id: str | None = Query(None, alias="sessionId"),
     ds=Depends(get_datastore),
     user: dict = Depends(get_current_user),
 ):
-    where = "WHERE device_id=$1"
-    params: list = [device_id]
+    where = "WHERE 1=1"
+    params: list = []
     if session_id:
-        where += " AND session_id=$2"
+        where += " AND session_id=$1"
         params.append(session_id)
     row = await ds.query_one(
         f"SELECT COUNT(*) as total, SUM(CASE WHEN success THEN 1 ELSE 0 END) as succeeded FROM script_history {where}",
@@ -357,18 +345,17 @@ async def get_history_stats(
 
 @router.delete("/history")
 async def clear_history(
-    device_id: str,
     session_id: str | None = Query(None, alias="sessionId"),
     ds=Depends(get_datastore),
     user: dict = Depends(get_current_user),
 ):
     if session_id:
         await ds.execute(
-            "DELETE FROM script_history WHERE device_id=$1 AND session_id=$2",
-            [device_id, session_id],
+            "DELETE FROM script_history WHERE session_id=$1",
+            [session_id],
         )
     else:
-        await ds.execute("DELETE FROM script_history WHERE device_id=$1", [device_id])
+        await ds.execute("DELETE FROM script_history")
     return {"success": True, "message": "History cleared"}
 
 
@@ -376,7 +363,6 @@ async def clear_history(
 
 @router.post("/sessions/{session_id}/messages/{message_id}/collect")
 async def collect_message(
-    device_id: str,
     session_id: str,
     message_id: str,
     ds=Depends(get_datastore),
@@ -393,7 +379,6 @@ async def collect_message(
 
 @router.delete("/sessions/{session_id}/messages/{message_id}/collect")
 async def uncollect_message(
-    device_id: str,
     session_id: str,
     message_id: str,
     ds=Depends(get_datastore),
@@ -410,7 +395,6 @@ async def uncollect_message(
 
 @router.get("/sessions/{session_id}/collected")
 async def get_collected_messages(
-    device_id: str,
     session_id: str,
     ds=Depends(get_datastore),
     user: dict = Depends(get_current_user),
@@ -424,7 +408,6 @@ async def get_collected_messages(
 
 @router.get("/sessions/{session_id}/collected/export")
 async def export_collected_messages(
-    device_id: str,
     session_id: str,
     ds=Depends(get_datastore),
     user: dict = Depends(get_current_user),
@@ -433,7 +416,7 @@ async def export_collected_messages(
         "SELECT role, content FROM chat_messages WHERE session_id=$1 AND collected=true ORDER BY created_at ASC",
         [session_id],
     )
-    export_text = "\n\n".join(f"**{r['role'].capitalize()}**: {r['content']}" for r in rows)
+    export_text = "\n\n".join(f"**{r['role'].capitalize()}**: {r['content']}" for r in (rows or []))
     return {"success": True, "data": export_text}
 
 
@@ -441,7 +424,6 @@ async def export_collected_messages(
 
 @router.post("/conversations/convert")
 async def convert_to_knowledge(
-    device_id: str,
     request: Request,
     ds=Depends(get_datastore),
     user: dict = Depends(get_current_user),
@@ -465,7 +447,6 @@ async def convert_to_knowledge(
 
 @router.post("/conversations/batch-convert")
 async def batch_convert_to_knowledge(
-    device_id: str,
     request: Request,
     ds=Depends(get_datastore),
     user: dict = Depends(get_current_user),
@@ -493,7 +474,6 @@ async def batch_convert_to_knowledge(
 
 @router.post("/conversations/suggest-tags")
 async def suggest_tags(
-    device_id: str,
     request: Request,
     ds=Depends(get_datastore),
     user: dict = Depends(get_current_user),

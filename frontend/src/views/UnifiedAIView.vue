@@ -618,7 +618,7 @@ const sendStandardMessage = async (message: string) => {
   setAbortControllerForSession(sessionId, controller)
 
   try {
-    const response = await fetch(`/api/devices/${currentDeviceId.value}/ai/unified/chat/stream`, {
+    const response = await fetch(`/api/ai/unified/chat/stream`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -725,7 +725,7 @@ const sendKnowledgeEnhancedMessage = async (message: string) => {
   let confidence = 0.5
 
   try {
-    const response = await fetch(`/api/devices/${currentDeviceId.value}/ai/unified/chat/stream`, {
+    const response = await fetch(`/api/ai/unified/chat/stream`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

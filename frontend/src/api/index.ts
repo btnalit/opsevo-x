@@ -37,7 +37,6 @@ const DEVICE_SCOPED_PREFIXES = [
   '/dashboard',
   '/firewall',
   '/container',
-  '/ai',
   '/monitoring',
 ]
 
@@ -52,8 +51,7 @@ const NON_DEVICE_PREFIXES = [
   '/drivers',
   '/profiles',
   '/ai-ops',
-  '/ai/configs',
-  '/ai/providers',
+  '/ai',
   '/prompt-templates',
   '/skills',
   '/monitoring/overview',
