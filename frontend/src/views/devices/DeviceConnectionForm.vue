@@ -28,8 +28,15 @@
       <el-form-item label="使用 TLS">
         <el-switch v-model="form.useTLS" />
       </el-form-item>
-      <el-form-item label="Profile ID">
-        <el-input v-model="form.profileId" placeholder="可选，API Profile ID" />
+      <el-form-item label="Profile ID" prop="profileId">
+        <el-select v-model="form.profileId" placeholder="选择 Profile" style="width: 100%">
+          <el-option
+            v-for="p in filteredProfiles"
+            :key="p.name"
+            :label="p.label"
+            :value="p.name"
+          />
+        </el-select>
       </el-form-item>
     </template>
 
@@ -43,6 +50,16 @@
       </el-form-item>
       <el-form-item label="私钥">
         <el-input v-model="form.privateKey" type="textarea" :rows="3" placeholder="SSH 私钥内容（可选）" />
+      </el-form-item>
+      <el-form-item label="Profile ID" prop="profileId">
+        <el-select v-model="form.profileId" placeholder="选择 Profile" style="width: 100%">
+          <el-option
+            v-for="p in filteredProfiles"
+            :key="p.name"
+            :label="p.label"
+            :value="p.name"
+          />
+        </el-select>
       </el-form-item>
     </template>
 
@@ -74,6 +91,16 @@
           </el-select>
         </el-form-item>
       </template>
+      <el-form-item label="Profile ID" prop="profileId">
+        <el-select v-model="form.profileId" placeholder="选择 Profile" style="width: 100%">
+          <el-option
+            v-for="p in filteredProfiles"
+            :key="p.name"
+            :label="p.label"
+            :value="p.name"
+          />
+        </el-select>
+      </el-form-item>
     </template>
 
     <el-form-item label="标签">
@@ -92,10 +119,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, watch } from 'vue'
+import { ref, reactive, computed, watch, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
-import { deviceApi, type CreateDeviceRequest } from '@/api/device'
+import { deviceApi, driverApi, type CreateDeviceRequest, type DriverProfile } from '@/api/device'
 
 defineOptions({ name: 'DeviceConnectionForm' })
 
@@ -105,6 +132,19 @@ const emit = defineEmits<{ submit: [data: CreateDeviceRequest]; cancel: [] }>()
 const formRef = ref<FormInstance>()
 const submitting = ref(false)
 const testing = ref(false)
+const availableDrivers = ref<DriverProfile[]>([])
+
+onMounted(async () => {
+  try {
+    const res = await driverApi.listProfiles()
+    if (res.data.success && res.data.data) {
+      availableDrivers.value = res.data.data
+    }
+  } catch (e: unknown) {
+    ElMessage.error('获取驱动 Profile 列表失败，请刷新重试')
+    console.error('Failed to load profiles:', e)
+  }
+})
 
 const form = reactive({
   name: '',
@@ -130,10 +170,15 @@ watch(() => props.initialData, (val) => {
 }, { immediate: true })
 
 watch(() => form.driverType, (t) => {
+  form.profileId = ''
   if (t === 'api') form.port = 8728
   else if (t === 'ssh') form.port = 22
   else if (t === 'snmp') form.port = 161
 })
+
+const filteredProfiles = computed(() =>
+  availableDrivers.value.filter(d => d.driver_type === form.driverType)
+)
 
 const rules: FormRules = {
   name: [{ required: true, message: '请输入设备名称', trigger: 'blur' }],
@@ -142,6 +187,7 @@ const rules: FormRules = {
   driverType: [{ required: true, message: '请选择驱动类型', trigger: 'change' }],
   username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
   password: [{ required: true, message: '请输入密码', trigger: 'blur' }],
+  profileId: [{ required: true, message: '请选择 Profile', trigger: 'change' }],
 }
 
 async function handleTestConnection() {

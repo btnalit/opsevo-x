@@ -19,6 +19,7 @@
             <el-descriptions-item label="驱动类型">
               <el-tag size="small">{{ device.driver_type || 'api' }}</el-tag>
             </el-descriptions-item>
+            <el-descriptions-item label="Profile ID">{{ device.profile_id || '-' }}</el-descriptions-item>
             <el-descriptions-item label="状态">
               <el-tag :type="statusTagType(device.status)" size="small" effect="dark">
                 {{ statusLabel(device.status) }}

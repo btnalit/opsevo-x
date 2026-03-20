@@ -102,6 +102,14 @@ export interface CapabilityManifest {
   commandPatterns?: Array<{ name: string; description: string }>
 }
 
+export interface DriverProfile {
+  name: string
+  driver_type: 'api' | 'ssh' | 'snmp'
+  vendor: string
+  model: string
+  label: string
+}
+
 export interface ApiProfile {
   id: string
   name: string
@@ -153,6 +161,9 @@ export const deviceApi = {
 export const driverApi = {
   list: () =>
     api.get<{ success: boolean; data?: Driver[]; error?: string }>('/drivers'),
+
+  listProfiles: () =>
+    api.get<{ success: boolean; data?: DriverProfile[]; error?: string }>('/drivers/profiles'),
 
   getManifest: (type: string) =>
     api.get<{ success: boolean; data?: CapabilityManifest; error?: string }>(`/drivers/${type}/manifest`),

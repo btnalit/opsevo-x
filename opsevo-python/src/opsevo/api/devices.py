@@ -21,6 +21,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from opsevo.api.deps import get_current_user
+from opsevo.drivers.types import DeviceConnectionConfig
 from opsevo.models.common import MessageResponse, SuccessResponse
 from opsevo.models.device import DeviceCreate, DeviceResponse, DeviceUpdate
 
@@ -33,6 +34,37 @@ def _get_device_manager(request: Request):
 
 def _get_device_pool(request: Request):
     return request.app.state.container.device_pool()
+
+
+async def _resolve_driver(request: Request, device_id: str):
+    """Resolve device_id → connected DeviceDriver via DevicePool.
+
+    Follows the same pattern as device_context.py middleware:
+    fetch device record → build DeviceConnectionConfig → get/create driver.
+    """
+    dm = _get_device_manager(request)
+    pool = _get_device_pool(request)
+
+    device = await dm.get_device(device_id)
+    if not device:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Device {device_id} not found")
+
+    profile_name = device.get("profile_id", "")
+    if not profile_name:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Device has no profile_id")
+
+    config = DeviceConnectionConfig(
+        host=device.get("host", ""),
+        port=device.get("port", 443),
+        username=device.get("username", ""),
+        password=device.get("password", ""),
+        use_tls=device.get("use_tls", False),
+        timeout=device.get("timeout", 30000),
+        driver_type=device.get("driver_type", "api"),
+        profile_name=profile_name,
+    )
+
+    return await pool.get_driver(device_id, config, profile_name)
 
 
 @router.get("")
@@ -105,13 +137,14 @@ async def connect_device(
     request: Request,
     user: dict = Depends(get_current_user),
 ):
-    pool = _get_device_pool(request)
     try:
-        driver = await pool.get_driver(device_id)
+        driver = await _resolve_driver(request, device_id)
         await driver.connect()
         dm = _get_device_manager(request)
         await dm.update_device(device_id, {"status": "online"})
         return SuccessResponse(data={"connected": True}).model_dump()
+    except HTTPException:
+        raise
     except Exception as exc:
         return {"success": False, "error": str(exc)}
 
@@ -122,13 +155,14 @@ async def disconnect_device(
     request: Request,
     user: dict = Depends(get_current_user),
 ):
-    pool = _get_device_pool(request)
     try:
-        driver = await pool.get_driver(device_id)
+        driver = await _resolve_driver(request, device_id)
         await driver.disconnect()
         dm = _get_device_manager(request)
         await dm.update_device(device_id, {"status": "offline"})
         return SuccessResponse(data={"connected": False}).model_dump()
+    except HTTPException:
+        raise
     except Exception as exc:
         return {"success": False, "error": str(exc)}
 
@@ -140,11 +174,12 @@ async def test_device_connection_alias(
     user: dict = Depends(get_current_user),
 ):
     """Alias for /test to match frontend deviceApi.testConnection()."""
-    pool = _get_device_pool(request)
     try:
-        driver = await pool.get_driver(device_id)
+        driver = await _resolve_driver(request, device_id)
         result = await driver.health_check()
         return SuccessResponse(data=result.model_dump()).model_dump()
+    except HTTPException:
+        raise
     except Exception as exc:
         return {"success": False, "error": str(exc)}
 
@@ -155,11 +190,12 @@ async def test_device_connection(
     request: Request,
     user: dict = Depends(get_current_user),
 ):
-    pool = _get_device_pool(request)
     try:
-        driver = await pool.get_driver(device_id)
+        driver = await _resolve_driver(request, device_id)
         result = await driver.health_check()
         return SuccessResponse(data=result.model_dump()).model_dump()
+    except HTTPException:
+        raise
     except Exception as exc:
         return {"success": False, "error": str(exc)}
 
@@ -171,11 +207,12 @@ async def get_device_metrics(
     user: dict = Depends(get_current_user),
 ):
     """GET /api/devices/{device_id}/metrics — frontend deviceApi.getMetrics()."""
-    pool = _get_device_pool(request)
     try:
-        driver = await pool.get_driver(device_id)
+        driver = await _resolve_driver(request, device_id)
         metrics = await driver.collect_metrics()
         return SuccessResponse(data=metrics.model_dump()).model_dump()
+    except HTTPException:
+        raise
     except Exception as exc:
         return {"success": False, "error": str(exc)}
 
@@ -187,11 +224,12 @@ async def get_device_health(
     user: dict = Depends(get_current_user),
 ):
     """GET /api/devices/{device_id}/health — frontend deviceApi.getHealth()."""
-    pool = _get_device_pool(request)
     try:
-        driver = await pool.get_driver(device_id)
+        driver = await _resolve_driver(request, device_id)
         result = await driver.health_check()
         return SuccessResponse(data=result.model_dump()).model_dump()
+    except HTTPException:
+        raise
     except Exception as exc:
         return {"success": False, "error": str(exc)}
 
@@ -203,13 +241,14 @@ async def execute_device_command(
     user: dict = Depends(get_current_user),
 ):
     """POST /api/devices/{device_id}/execute — frontend deviceApi.execute()."""
-    pool = _get_device_pool(request)
     body = await request.json()
     command = body.get("command", "")
     params = body.get("params", {})
     try:
-        driver = await pool.get_driver(device_id)
+        driver = await _resolve_driver(request, device_id)
         result = await driver.execute(command, params)
         return SuccessResponse(data=result.data if hasattr(result, "data") else result).model_dump()
+    except HTTPException:
+        raise
     except Exception as exc:
         return {"success": False, "error": str(exc)}

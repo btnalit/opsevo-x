@@ -19,8 +19,16 @@
         </div>
       </template>
 
+      <!-- No Device Selected -->
+      <el-empty
+        v-if="!deviceStore.currentDeviceId"
+        description="请先选择设备"
+      >
+        <el-button type="primary" @click="$router.push('/devices')">前往设备管理</el-button>
+      </el-empty>
+
       <!-- Loading State -->
-      <el-skeleton v-if="loading && !resource" :rows="5" animated />
+      <el-skeleton v-else-if="loading && !resource" :rows="5" animated />
 
       <!-- Error State -->
       <el-alert
@@ -261,11 +269,15 @@ const diskPercent = computed(() => {
 
 // Load resource data
 const loadResource = async () => {
+  const currentId = deviceStore.currentDeviceId
+  if (!currentId) return
   loading.value = true
   error.value = ''
 
   try {
     const response = await dashboardApi.getResource()
+    // 如果等待期间设备已切换，丢弃该响应
+    if (currentId !== deviceStore.currentDeviceId) return
     const result = response.data
     if (result.success && result.data) {
       resource.value = result.data
@@ -273,13 +285,16 @@ const loadResource = async () => {
       throw new Error(result.error || '获取资源信息失败')
     }
   } catch (err: unknown) {
+    if (currentId !== deviceStore.currentDeviceId) return
     const message = err instanceof Error ? err.message : '获取系统资源信息失败'
     error.value = message
     if (!resource.value) {
       ElMessage.error(message)
     }
   } finally {
-    loading.value = false
+    if (currentId === deviceStore.currentDeviceId) {
+      loading.value = false
+    }
   }
 }
 
@@ -391,16 +406,23 @@ watch(
       resource.value = null
       error.value = ''
       
-      // 重新加载新设备的数据
-      loadResource()
+      // 仅在有设备时重新加载并启动定时器
+      if (newDeviceId) {
+        loadResource()
+        startAutoRefresh()
+      } else {
+        stopAutoRefresh()
+      }
     }
   }
 )
 
 // Lifecycle hooks
 onMounted(() => {
-  loadResource()
-  startAutoRefresh()
+  if (deviceStore.currentDeviceId) {
+    loadResource()
+    startAutoRefresh()
+  }
 })
 
 onUnmounted(() => {

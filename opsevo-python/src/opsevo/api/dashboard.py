@@ -7,9 +7,10 @@ Requirements: 3.1
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from opsevo.api.deps import get_current_user
+from opsevo.api.devices import _resolve_driver
 
 router = APIRouter(tags=["dashboard"])
 
@@ -21,10 +22,8 @@ async def dashboard_resource(
     user: dict = Depends(get_current_user),
 ):
     """Alias matching frontend dashboardApi.getResource()."""
-    container = request.app.state.container
-    pool = container.device_pool()
     try:
-        driver = await pool.get_driver(device_id)
+        driver = await _resolve_driver(request, device_id)
         metrics = await driver.collect_metrics()
         health = await driver.health_check()
         return {
@@ -34,6 +33,8 @@ async def dashboard_resource(
                 "health": health.model_dump(),
             },
         }
+    except HTTPException:
+        raise
     except Exception as exc:
         return {"success": False, "error": str(exc)}
 
@@ -44,10 +45,8 @@ async def dashboard_data(
     request: Request,
     user: dict = Depends(get_current_user),
 ):
-    container = request.app.state.container
-    pool = container.device_pool()
     try:
-        driver = await pool.get_driver(device_id)
+        driver = await _resolve_driver(request, device_id)
         metrics = await driver.collect_metrics()
         health = await driver.health_check()
         return {
@@ -57,5 +56,7 @@ async def dashboard_data(
                 "health": health.model_dump(),
             },
         }
+    except HTTPException:
+        raise
     except Exception as exc:
         return {"success": False, "error": str(exc)}

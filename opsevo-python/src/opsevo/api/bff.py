@@ -9,6 +9,7 @@ SnmpTrapReceiver, DataStore 等真实服务。
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from typing import Any
 
@@ -18,6 +19,8 @@ from .deps import get_current_user, get_datastore
 
 router = APIRouter(prefix="/api", tags=["bff"])
 
+logger = logging.getLogger(__name__)
+
 
 def _c(request: Request):
     return request.app.state.container
@@ -26,20 +29,6 @@ def _c(request: Request):
 # ---------------------------------------------------------------------------
 # Device Operations — wired to DevicePool
 # ---------------------------------------------------------------------------
-@router.post("/devices/{device_id}/execute")
-async def device_execute(device_id: str, request: Request, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    body = await request.json()
-    pool = _c(request).device_pool()
-    try:
-        driver = await pool.get_driver(device_id)
-        command = body.get("command", "")
-        params = body.get("params", {})
-        result = await driver.execute(command, params)
-        return {"success": True, "data": result.data if hasattr(result, "data") else result}
-    except Exception as exc:
-        return {"success": False, "error": str(exc)}
-
-
 @router.get("/devices/{device_id}/metrics")
 async def device_metrics(device_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     row = await ds.query_one(
@@ -64,36 +53,8 @@ async def device_health(device_id: str, request: Request, ds=Depends(get_datasto
 
 
 # ---------------------------------------------------------------------------
-# Drivers & Profiles — wired to DriverManager + DataStore
+# Drivers & Profiles — see drivers.py for GET /api/drivers and manifest routes
 # ---------------------------------------------------------------------------
-@router.get("/drivers")
-async def get_drivers(request: Request, user=Depends(get_current_user)) -> dict:
-    dm = _c(request).driver_manager()
-    profiles = dm.profiles
-    drivers = [
-        {"name": name, "driverType": p.driver_type, "vendor": p.vendor, "model": p.model}
-        for name, p in profiles.items()
-    ]
-    return {"success": True, "data": drivers}
-
-
-@router.get("/drivers/{driver_type}/manifest")
-async def get_driver_manifest(driver_type: str, request: Request, user=Depends(get_current_user)) -> dict:
-    dm = _c(request).driver_manager()
-    profiles = dm.profiles
-    profile = profiles.get(driver_type)
-    if not profile:
-        from fastapi import HTTPException
-        raise HTTPException(404, f"Driver type '{driver_type}' not found")
-    manifest = {
-        "driverType": profile.driver_type,
-        "vendor": profile.vendor,
-        "model": profile.model,
-        "capabilities": getattr(profile, "capabilities", {}),
-        "actionTypes": getattr(profile, "action_types", []),
-    }
-    return {"success": True, "data": manifest}
-
 
 @router.get("/profiles")
 async def get_profiles(ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
@@ -110,15 +71,22 @@ async def export_profiles(ds=Depends(get_datastore), user=Depends(get_current_us
 @router.post("/profiles/import")
 async def import_profile(request: Request, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     body = await request.json()
-    imported = []
     profiles = body if isinstance(body, list) else [body]
-    for p in profiles:
-        pid = str(uuid.uuid4())
-        await ds.execute(
-            "INSERT INTO device_profiles (id, name, vendor, model, config, created_at) VALUES ($1,$2,$3,$4,$5,NOW())",
-            [pid, p.get("name", ""), p.get("vendor", ""), p.get("model", ""), json.dumps(p.get("config", {}))],
-        )
-        imported.append(pid)
+    if not profiles or not all(isinstance(p, dict) for p in profiles):
+        raise HTTPException(400, "Invalid profile format. Expected JSON object or list of objects.")
+
+    async def _do_import(tx):
+        imported = []
+        for p in profiles:
+            pid = str(uuid.uuid4())
+            await tx.execute(
+                "INSERT INTO device_profiles (id, name, vendor, model, config, created_at) VALUES ($1,$2,$3,$4,$5,NOW())",
+                [pid, p.get("name", ""), p.get("vendor", ""), p.get("model", ""), json.dumps(p.get("config", {}))],
+            )
+            imported.append(pid)
+        return imported
+
+    imported = await ds.transaction(_do_import)
     return {"success": True, "data": {"imported": len(imported), "ids": imported}}
 
 
@@ -225,8 +193,9 @@ async def get_tools(request: Request, user=Depends(get_current_user)) -> dict:
                 for t in all_tools
             ],
         }
-    except Exception:
-        return {"success": True, "data": []}
+    except Exception as exc:
+        logger.error("Failed to get tools: %s", exc, exc_info=True)
+        return {"success": False, "error": "Failed to load tools", "data": []}
 
 
 # ---------------------------------------------------------------------------
@@ -273,7 +242,8 @@ async def search_knowledge(request: Request, ds=Depends(get_datastore), user=Dep
         kb = _c(request).knowledge_base()
         results = await kb.search(query) if hasattr(kb, "search") else []
         return {"success": True, "data": results}
-    except Exception:
+    except Exception as exc:
+        logger.warning("Knowledge base search failed, falling back to DB: %s", exc, exc_info=True)
         # Fallback to simple DB search
         rows = await ds.query(
             "SELECT * FROM knowledge_entries WHERE content ILIKE $1 LIMIT 20", [f"%{query}%"]

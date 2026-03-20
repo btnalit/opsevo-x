@@ -73,13 +73,6 @@ router.beforeEach((to, _from, next) => {
   }
 
   // Check if a device is selected for routes that require it
-  // Relaxed check: Allow navigation to /ai-ops even if check fails temporarily
-  // This prevents the "loop" issue where user selects device but router kicks them back
-  if (to.path === '/ai-ops' || to.path === '/ai-ops/') {
-    next()
-    return
-  }
-
   const currentDeviceId = localStorage.getItem('current_device_id')
   if (!currentDeviceId) {
     next('/devices')

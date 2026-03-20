@@ -81,6 +81,31 @@ async def list_drivers(
     return {"success": True, "data": drivers}
 
 
+@router.get("/drivers/profiles")
+async def list_driver_profiles(
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    """Return per-profile records keyed by YAML filename stem.
+
+    This is what the frontend needs for the Profile ID dropdown:
+    create_driver(profile_name) looks up by YAML stem, so the dropdown
+    value must be the stem (e.g. 'mikrotik-routeros'), not the driver_type.
+    """
+    dm = _get_driver_manager(request)
+    profiles = dm.profiles
+    result = []
+    for name, profile in profiles.items():
+        result.append({
+            "name": name,
+            "driver_type": profile.driver_type,
+            "vendor": profile.vendor,
+            "model": profile.model,
+            "label": f"{profile.vendor} {profile.model}",
+        })
+    return {"success": True, "data": result}
+
+
 @router.get("/drivers/{driver_type}/manifest")
 async def get_driver_manifest(
     driver_type: str,

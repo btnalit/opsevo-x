@@ -34,11 +34,11 @@ async def get_device_context(request: Request, device_id: str) -> DeviceDriver:
         use_tls=device.get("use_tls", False),
         timeout=device.get("timeout", 30000),
         driver_type=device.get("driver_type", "api"),
-        profile_name=device.get("profile_name", ""),
+        profile_name=device.get("profile_id", ""),
     )
 
     profile_name = config.profile_name
     if not profile_name:
-        raise HTTPException(status_code=400, detail="Device has no profile_name")
+        raise HTTPException(status_code=400, detail="Device has no profile_id")
 
     return await device_pool.get_driver(device_id, config, profile_name)
