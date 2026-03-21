@@ -7,6 +7,7 @@ SkillLoader — 从文件系统加载技能定义
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -145,3 +146,131 @@ class SkillLoader:
         if HAS_YAML and path.suffix in (".yaml", ".yml"):
             return yaml.safe_load(text)
         raise ValueError(f"Unsupported file type: {path.suffix}")
+
+    # ------------------------------------------------------------------
+    # CRUD methods (used by skills API)
+    # ------------------------------------------------------------------
+
+    async def create_skill(
+        self,
+        name: str,
+        description: str = "",
+        content: str | None = None,
+        config: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Create a new custom skill on disk and return its definition."""
+        skill_dir = self._dir / "custom" / name
+        skill_dir.mkdir(parents=True, exist_ok=True)
+
+        cfg: dict[str, Any] = {
+            "name": name,
+            "description": description,
+            **(config or {}),
+        }
+        (skill_dir / "config.json").write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
+
+        md_content = content or f"---\nname: {name}\ndescription: {description}\n---\n"
+        (skill_dir / "SKILL.md").write_text(md_content, encoding="utf-8")
+
+        defn = self._load_skill_dir(skill_dir) or cfg
+        defn["isBuiltin"] = False
+        defn["path"] = str(skill_dir)
+        defn["files"] = [f.name for f in skill_dir.iterdir() if f.is_file()]
+        logger.info("Skill created", name=name)
+        return defn
+
+    async def update_skill(
+        self,
+        name: str,
+        description: str | None = None,
+        content: str | None = None,
+        config: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Update an existing custom skill."""
+        skill_dir = self._dir / "custom" / name
+        if not skill_dir.exists():
+            raise FileNotFoundError(f"Skill directory not found: {name}")
+
+        cfg_path = skill_dir / "config.json"
+        if cfg_path.exists():
+            existing = json.loads(cfg_path.read_text(encoding="utf-8"))
+        else:
+            existing = {"name": name}
+
+        if description is not None:
+            existing["description"] = description
+        if config is not None:
+            existing.update(config)
+        cfg_path.write_text(json.dumps(existing, indent=2, ensure_ascii=False), encoding="utf-8")
+
+        if content is not None:
+            (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
+
+        defn = self._load_skill_dir(skill_dir) or existing
+        defn["isBuiltin"] = False
+        defn["path"] = str(skill_dir)
+        defn["files"] = [f.name for f in skill_dir.iterdir() if f.is_file()]
+        logger.info("Skill updated", name=name)
+        return defn
+
+    async def delete_skill(self, name: str) -> None:
+        """Delete a custom skill from disk."""
+        skill_dir = self._dir / "custom" / name
+        if skill_dir.exists():
+            shutil.rmtree(skill_dir)
+            logger.info("Skill deleted", name=name)
+
+    async def clone_skill(self, source_name: str, new_name: str) -> dict[str, Any]:
+        """Clone a skill (builtin or custom) into a new custom skill."""
+        # Try custom first, then builtin
+        source_dir = self._dir / "custom" / source_name
+        if not source_dir.exists():
+            source_dir = self._dir / "builtin" / source_name
+        if not source_dir.exists():
+            raise FileNotFoundError(f"Source skill not found: {source_name}")
+
+        dest_dir = self._dir / "custom" / new_name
+        shutil.copytree(source_dir, dest_dir)
+
+        # Update name in config.json
+        cfg_path = dest_dir / "config.json"
+        if cfg_path.exists():
+            cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+            cfg["name"] = new_name
+            cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
+
+        defn = self._load_skill_dir(dest_dir) or {"name": new_name}
+        defn["isBuiltin"] = False
+        defn["path"] = str(dest_dir)
+        defn["files"] = [f.name for f in dest_dir.iterdir() if f.is_file()]
+        logger.info("Skill cloned", source=source_name, target=new_name)
+        return defn
+
+    async def read_skill_file(self, name: str, filename: str) -> str:
+        """Read a file from a skill directory."""
+        for sub in ("custom", "builtin"):
+            fp = self._dir / sub / name / filename
+            if fp.exists():
+                return fp.read_text(encoding="utf-8")
+        raise FileNotFoundError(f"File not found: {name}/{filename}")
+
+    async def write_skill_file(self, name: str, filename: str, content: str) -> None:
+        """Write a file in a custom skill directory."""
+        fp = self._dir / "custom" / name / filename
+        if not fp.parent.exists():
+            raise FileNotFoundError(f"Skill directory not found: {name}")
+        fp.write_text(content, encoding="utf-8")
+        logger.info("Skill file written", name=name, filename=filename)
+
+    async def reload_skill(self, name: str) -> dict[str, Any] | None:
+        """Reload a skill definition from disk."""
+        for sub in ("custom", "builtin"):
+            skill_dir = self._dir / sub / name
+            if skill_dir.exists():
+                defn = self._load_skill_dir(skill_dir)
+                if defn:
+                    defn["isBuiltin"] = sub == "builtin"
+                    defn["path"] = str(skill_dir)
+                    defn["files"] = [f.name for f in skill_dir.iterdir() if f.is_file()]
+                return defn
+        return None

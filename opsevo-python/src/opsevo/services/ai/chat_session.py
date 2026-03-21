@@ -18,23 +18,52 @@ class ChatSessionService:
     def __init__(self, datastore: DataStore):
         self._ds = datastore
 
-    async def create_session(self, device_id: str = "", title: str = "", mode: str = "general") -> dict:
+    async def create_session(
+        self,
+        device_id: str = "",
+        title: str = "",
+        mode: str = "general",
+        user_id: str = "",
+    ) -> dict:
         sid = str(uuid.uuid4())
         await self._ds.execute(
-            "INSERT INTO chat_sessions (id, device_id, title, mode) VALUES ($1, $2, $3, $4)",
-            (sid, device_id or None, title or "New Chat", mode),
+            "INSERT INTO chat_sessions (id, user_id, device_id, title, mode) VALUES ($1, $2, $3, $4, $5)",
+            (sid, user_id or None, device_id or None, title or "New Chat", mode),
         )
-        return {"id": sid, "deviceId": device_id, "title": title or "New Chat", "mode": mode}
+        return {
+            "id": sid,
+            "userId": user_id or "",
+            "deviceId": device_id,
+            "title": title or "New Chat",
+            "mode": mode,
+        }
 
-    async def get_session(self, session_id: str) -> dict | None:
-        return await self._ds.query_one("SELECT * FROM chat_sessions WHERE id = $1", (session_id,))
-
-    async def list_sessions(self, device_id: str) -> list[dict]:
-        return await self._ds.query(
-            "SELECT * FROM chat_sessions WHERE device_id = $1 ORDER BY updated_at DESC", (device_id,)
+    async def get_session(self, session_id: str, user_id: str | None = None) -> dict | None:
+        if user_id is None:
+            return await self._ds.query_one("SELECT * FROM chat_sessions WHERE id = $1", (session_id,))
+        return await self._ds.query_one(
+            "SELECT * FROM chat_sessions WHERE id = $1 AND user_id = $2",
+            (session_id, user_id),
         )
 
-    async def update_session(self, session_id: str, data: dict) -> dict | None:
+    async def list_sessions(self, device_id: str = "", user_id: str | None = None) -> list[dict]:
+        where = []
+        params: list[Any] = []
+        idx = 1
+        if user_id is not None:
+            where.append(f"user_id = ${idx}")
+            params.append(user_id)
+            idx += 1
+        if device_id:
+            where.append(f"device_id = ${idx}")
+            params.append(device_id)
+        sql = "SELECT * FROM chat_sessions"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY updated_at DESC"
+        return await self._ds.query(sql, tuple(params))
+
+    async def update_session(self, session_id: str, data: dict, user_id: str | None = None) -> dict | None:
         sets = []
         params: list[Any] = []
         idx = 1
@@ -44,15 +73,27 @@ class ChatSessionService:
                 params.append(v)
                 idx += 1
         if not sets:
-            return await self.get_session(session_id)
+            return await self.get_session(session_id, user_id=user_id)
         params.append(session_id)
+        where = f"id = ${idx}"
+        if user_id is not None:
+            idx += 1
+            params.append(user_id)
+            where += f" AND user_id = ${idx}"
         await self._ds.execute(
-            f"UPDATE chat_sessions SET {', '.join(sets)} WHERE id = ${idx}", tuple(params)
+            f"UPDATE chat_sessions SET {', '.join(sets)} WHERE {where}",
+            tuple(params),
         )
-        return await self.get_session(session_id)
+        return await self.get_session(session_id, user_id=user_id)
 
-    async def delete_session(self, session_id: str) -> bool:
-        rows = await self._ds.execute("DELETE FROM chat_sessions WHERE id = $1", (session_id,))
+    async def delete_session(self, session_id: str, user_id: str | None = None) -> bool:
+        if user_id is None:
+            rows = await self._ds.execute("DELETE FROM chat_sessions WHERE id = $1", (session_id,))
+        else:
+            rows = await self._ds.execute(
+                "DELETE FROM chat_sessions WHERE id = $1 AND user_id = $2",
+                (session_id, user_id),
+            )
         return rows > 0
 
     async def add_message(self, session_id: str, role: str, content: str, metadata: dict | None = None) -> dict:

@@ -690,7 +690,12 @@ async def agent_chat(
     # Use UnifiedAgentService in agent mode if available
     try:
         agent = request.app.state.container.unified_agent()
-        result = await agent.chat(message, session_id=session_id, mode="agent")
+        result = await agent.chat(
+            message,
+            session_id=session_id,
+            mode="agent",
+            user_id=str(user["id"]),
+        )
         return {"success": True, "data": result}
     except Exception as exc:
         logger.warning("agent_chat_fallback", error=str(exc))
@@ -718,7 +723,7 @@ async def agent_execute_task(
         raise HTTPException(400, "task is required")
     try:
         agent = request.app.state.container.unified_agent()
-        result = await agent.chat(task, mode="agent")
+        result = await agent.chat(task, mode="agent", user_id=str(user["id"]))
         return {"success": True, "data": result}
     except Exception as exc:
         return {
@@ -739,7 +744,8 @@ async def get_agent_sessions(
 ):
     ds: DataStore = get_datastore(request)
     rows = await ds.query(
-        "SELECT id as session_id, title, message_count, created_at, updated_at FROM chat_sessions WHERE type='agent' ORDER BY updated_at DESC LIMIT 50"
+        "SELECT id as session_id, title, message_count, created_at, updated_at FROM chat_sessions WHERE type='agent' AND user_id=$1 ORDER BY updated_at DESC LIMIT 50",
+        (str(user["id"]),),
     )
     return {"success": True, "data": snake_to_camel_list(rows or [])}
 
@@ -751,7 +757,10 @@ async def get_agent_session(
     user: dict = Depends(get_current_user),
 ):
     ds: DataStore = get_datastore(request)
-    session = await ds.query_one("SELECT * FROM chat_sessions WHERE id=$1 AND type='agent'", (session_id,))
+    session = await ds.query_one(
+        "SELECT * FROM chat_sessions WHERE id=$1 AND type='agent' AND user_id=$2",
+        (session_id, str(user["id"])),
+    )
     if not session:
         raise HTTPException(404, "Agent session not found")
     messages = await ds.query("SELECT * FROM chat_messages WHERE session_id=$1 ORDER BY created_at ASC", (session_id,))
@@ -768,8 +777,8 @@ async def create_agent_session(
     sid = str(uuid.uuid4())
     now = time.time()
     await ds.execute(
-        "INSERT INTO chat_sessions (id, type, title, message_count, created_at, updated_at) VALUES ($1,'agent','New Agent Session',0,$2,$2)",
-        (sid, now),
+        "INSERT INTO chat_sessions (id, user_id, type, title, message_count, created_at, updated_at) VALUES ($1,$2,'agent','New Agent Session',0,$3,$3)",
+        (sid, str(user["id"]), now),
     )
     return {"success": True, "data": {"sessionId": sid, "createdAt": now}}
 
@@ -781,8 +790,14 @@ async def delete_agent_session(
     user: dict = Depends(get_current_user),
 ):
     ds: DataStore = get_datastore(request)
-    await ds.execute("DELETE FROM chat_messages WHERE session_id=$1", (session_id,))
-    await ds.execute("DELETE FROM chat_sessions WHERE id=$1 AND type='agent'", (session_id,))
+    await ds.execute(
+        "DELETE FROM chat_messages WHERE session_id IN (SELECT id FROM chat_sessions WHERE id=$1 AND type='agent' AND user_id=$2)",
+        (session_id, str(user["id"])),
+    )
+    await ds.execute(
+        "DELETE FROM chat_sessions WHERE id=$1 AND type='agent' AND user_id=$2",
+        (session_id, str(user["id"])),
+    )
     return {"success": True}
 
 

@@ -38,6 +38,10 @@ class Settings(BaseSettings):
         default="info",
         description="Log level: debug | info | warn | error",
     )
+    cors_origins: str = Field(
+        default="http://localhost:5173,http://localhost:3099",
+        description="Comma-separated list of allowed CORS origins. Use '*' only in development.",
+    )
 
     # ── Database ──────────────────────────────────────────────────────────
     database_url: str = Field(

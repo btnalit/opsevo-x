@@ -74,12 +74,18 @@ class UnifiedAgentService:
         mode: str = "general",
         session_id: str = "",
         device_id: str = "",
+        user_id: str = "",
         context: dict[str, Any] | None = None,
         rag_options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Non-streaming chat. Routes to the appropriate handler by mode."""
         start = time.monotonic()
-        session = await self._get_or_create_session(session_id, device_id, mode)
+        session = await self._get_or_create_session(
+            session_id,
+            device_id=device_id,
+            mode=mode,
+            user_id=user_id,
+        )
         sid = session["id"]
 
         try:
@@ -108,11 +114,17 @@ class UnifiedAgentService:
         mode: str = "general",
         session_id: str = "",
         device_id: str = "",
+        user_id: str = "",
         context: dict[str, Any] | None = None,
         rag_options: dict[str, Any] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Streaming chat. Yields SSE-compatible chunks."""
-        session = await self._get_or_create_session(session_id, device_id, mode)
+        session = await self._get_or_create_session(
+            session_id,
+            device_id=device_id,
+            mode=mode,
+            user_id=user_id,
+        )
         sid = session["id"]
 
         if mode == "knowledge-enhanced":
@@ -380,13 +392,22 @@ class UnifiedAgentService:
     # ------------------------------------------------------------------
 
     async def _get_or_create_session(
-        self, session_id: str, device_id: str = "", mode: str = "general",
+        self,
+        session_id: str,
+        *,
+        device_id: str = "",
+        mode: str = "general",
+        user_id: str = "",
     ) -> dict[str, Any]:
         if session_id:
-            existing = await self._session_svc.get_session(session_id)
+            existing = await self._session_svc.get_session(session_id, user_id=user_id or None)
             if existing:
                 return existing
-        return await self._session_svc.create_session(device_id=device_id, mode=mode)
+        return await self._session_svc.create_session(
+            device_id=device_id,
+            mode=mode,
+            user_id=user_id,
+        )
 
     async def _load_history(self, session_id: str, limit: int = 20) -> list[dict[str, str]]:
         """Load recent conversation history for context."""

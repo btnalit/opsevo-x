@@ -25,6 +25,19 @@ def _get_container(request: Request):
     return request.app.state.container
 
 
+def _uid(user: dict[str, Any]) -> str:
+    return str(user["id"])
+
+
+async def _ensure_session_owned(ds, session_id: str, user_id: str) -> None:
+    row = await ds.query_one(
+        "SELECT id FROM chat_sessions WHERE id=$1 AND user_id=$2",
+        [session_id, user_id],
+    )
+    if not row:
+        raise HTTPException(404, "Session not found")
+
+
 def _mask_api_key(key: str | None) -> str:
     """Mask API key for display: show last 4 chars only."""
     if not key:
@@ -191,7 +204,12 @@ async def chat(request: Request, ds=Depends(get_datastore), user=Depends(get_cur
     message = body.get("message", "")
     mode = body.get("mode", "general")
     session_id = body.get("sessionId")
-    result = await agent.chat(message=message, mode=mode, session_id=session_id)
+    result = await agent.chat(
+        message=message,
+        mode=mode,
+        session_id=session_id,
+        user_id=_uid(user),
+    )
     return {"success": True, "data": result}
 
 
@@ -221,6 +239,7 @@ async def chat_stream(
                 message,
                 mode=mode,
                 session_id=session_id or "",
+                user_id=_uid(user),
             ):
                 if isinstance(chunk, dict):
                     content = chunk.get("content", "")
@@ -323,19 +342,26 @@ async def delete_script_history(history_id: str, ds=Depends(get_datastore), user
 # ==================== 会话管理 ====================
 @router.get("/sessions/search")
 async def search_sessions(q: str = Query(""), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+    user_id = _uid(user)
     if q:
         rows = await ds.query(
-            "SELECT * FROM chat_sessions WHERE (title ILIKE $1 OR mode ILIKE $1) ORDER BY updated_at DESC",
-            [f"%{q}%"],
+            "SELECT * FROM chat_sessions WHERE user_id=$1 AND (title ILIKE $2 OR mode ILIKE $2) ORDER BY updated_at DESC",
+            [user_id, f"%{q}%"],
         )
     else:
-        rows = await ds.query("SELECT * FROM chat_sessions ORDER BY updated_at DESC")
+        rows = await ds.query(
+            "SELECT * FROM chat_sessions WHERE user_id=$1 ORDER BY updated_at DESC",
+            [user_id],
+        )
     return {"success": True, "data": snake_to_camel_list(rows or [])}
 
 
 @router.get("/sessions")
 async def get_sessions(ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    rows = await ds.query("SELECT * FROM chat_sessions ORDER BY updated_at DESC")
+    rows = await ds.query(
+        "SELECT * FROM chat_sessions WHERE user_id=$1 ORDER BY updated_at DESC",
+        [_uid(user)],
+    )
     return {"success": True, "data": snake_to_camel_list(rows or [])}
 
 
@@ -347,14 +373,22 @@ async def create_session(request: Request, ds=Depends(get_datastore), user=Depen
     session = await svc.create_session(
         title=body.get("title", ""),
         mode=body.get("mode", "general"),
+        user_id=_uid(user),
     )
     return {"success": True, "data": snake_to_camel(session)}
 
 
 @router.delete("/sessions")
 async def delete_all_sessions(ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    await ds.execute("DELETE FROM chat_messages")
-    count = await ds.execute("DELETE FROM chat_sessions")
+    user_id = _uid(user)
+    await ds.execute(
+        "DELETE FROM chat_messages WHERE session_id IN (SELECT id FROM chat_sessions WHERE user_id=$1)",
+        [user_id],
+    )
+    count = await ds.execute(
+        "DELETE FROM chat_sessions WHERE user_id=$1",
+        [user_id],
+    )
     return {"success": True, "message": f"Deleted {count} sessions"}
 
 
@@ -364,16 +398,22 @@ async def get_sessions_with_collections(ds=Depends(get_datastore), user=Depends(
         """SELECT s.*, COUNT(cm.id) as collected_count
            FROM chat_sessions s
            LEFT JOIN chat_messages cm ON cm.session_id = s.id AND cm.collected = true
+           WHERE s.user_id = $1
            GROUP BY s.id
            HAVING COUNT(cm.id) > 0
-           ORDER BY s.updated_at DESC"""
+           ORDER BY s.updated_at DESC""",
+        [_uid(user)],
     )
     return {"success": True, "data": snake_to_camel_list(rows or [])}
 
 
 @router.get("/sessions/{session_id}")
 async def get_session_by_id(session_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    row = await ds.query_one("SELECT * FROM chat_sessions WHERE id=$1", [session_id])
+    user_id = _uid(user)
+    row = await ds.query_one(
+        "SELECT * FROM chat_sessions WHERE id=$1 AND user_id=$2",
+        [session_id, user_id],
+    )
     if not row:
         raise HTTPException(404, "Session not found")
     messages = await ds.query(
@@ -388,7 +428,7 @@ async def update_session(session_id: str, request: Request, ds=Depends(get_datas
     body = await request.json()
     from opsevo.services.ai.chat_session import ChatSessionService
     svc = ChatSessionService(ds)
-    result = await svc.update_session(session_id, body)
+    result = await svc.update_session(session_id, body, user_id=_uid(user))
     if not result:
         raise HTTPException(404, "Session not found")
     return {"success": True, "data": snake_to_camel(result)}
@@ -396,10 +436,12 @@ async def update_session(session_id: str, request: Request, ds=Depends(get_datas
 
 @router.delete("/sessions/{session_id}")
 async def delete_session(session_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+    user_id = _uid(user)
+    await _ensure_session_owned(ds, session_id, user_id)
     await ds.execute("DELETE FROM chat_messages WHERE session_id=$1", [session_id])
     from opsevo.services.ai.chat_session import ChatSessionService
     svc = ChatSessionService(ds)
-    deleted = await svc.delete_session(session_id)
+    deleted = await svc.delete_session(session_id, user_id=user_id)
     if not deleted:
         raise HTTPException(404, "Session not found")
     return {"success": True, "message": "Session deleted"}
@@ -411,7 +453,7 @@ async def rename_session(session_id: str, request: Request, ds=Depends(get_datas
     title = body.get("title", "")
     from opsevo.services.ai.chat_session import ChatSessionService
     svc = ChatSessionService(ds)
-    result = await svc.update_session(session_id, {"title": title})
+    result = await svc.update_session(session_id, {"title": title}, user_id=_uid(user))
     if not result:
         raise HTTPException(404, "Session not found")
     return {"success": True, "data": snake_to_camel(result)}
@@ -419,13 +461,17 @@ async def rename_session(session_id: str, request: Request, ds=Depends(get_datas
 
 @router.post("/sessions/{session_id}/clear")
 async def clear_session_messages(session_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+    await _ensure_session_owned(ds, session_id, _uid(user))
     await ds.execute("DELETE FROM chat_messages WHERE session_id=$1", [session_id])
     return {"success": True, "message": "Session messages cleared"}
 
 
 @router.get("/sessions/{session_id}/export")
 async def export_session(session_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    session = await ds.query_one("SELECT * FROM chat_sessions WHERE id=$1", [session_id])
+    session = await ds.query_one(
+        "SELECT * FROM chat_sessions WHERE id=$1 AND user_id=$2",
+        [session_id, _uid(user)],
+    )
     if not session:
         raise HTTPException(404, "Session not found")
     messages = await ds.query("SELECT role, content, created_at FROM chat_messages WHERE session_id=$1 ORDER BY created_at ASC", [session_id])
@@ -439,7 +485,11 @@ async def export_session(session_id: str, ds=Depends(get_datastore), user=Depend
 
 @router.post("/sessions/{session_id}/duplicate")
 async def duplicate_session(session_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    original = await ds.query_one("SELECT * FROM chat_sessions WHERE id=$1", [session_id])
+    user_id = _uid(user)
+    original = await ds.query_one(
+        "SELECT * FROM chat_sessions WHERE id=$1 AND user_id=$2",
+        [session_id, user_id],
+    )
     if not original:
         raise HTTPException(404, "Session not found")
     from opsevo.services.ai.chat_session import ChatSessionService
@@ -447,6 +497,7 @@ async def duplicate_session(session_id: str, ds=Depends(get_datastore), user=Dep
     new_session = await svc.create_session(
         title=f"{original.get('title', 'Chat')} (copy)",
         mode=original.get("mode", "general"),
+        user_id=user_id,
     )
     messages = await ds.query("SELECT role, content FROM chat_messages WHERE session_id=$1 ORDER BY created_at ASC", [session_id])
     for msg in (messages or []):
@@ -457,7 +508,10 @@ async def duplicate_session(session_id: str, ds=Depends(get_datastore), user=Dep
 # ==================== 会话配置管理 ====================
 @router.get("/sessions/{session_id}/config")
 async def get_session_config(session_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
-    row = await ds.query_one("SELECT config FROM chat_sessions WHERE id=$1", [session_id])
+    row = await ds.query_one(
+        "SELECT config FROM chat_sessions WHERE id=$1 AND user_id=$2",
+        [session_id, _uid(user)],
+    )
     if not row:
         raise HTTPException(404, "Session not found")
     config = row.get("config") or {}
@@ -469,12 +523,14 @@ async def get_session_config(session_id: str, ds=Depends(get_datastore), user=De
 
 @router.put("/sessions/{session_id}/config")
 async def update_session_config(session_id: str, request: Request, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+    user_id = _uid(user)
+    await _ensure_session_owned(ds, session_id, user_id)
     body = await request.json()
     import json as _json
     config_json = _json.dumps(body)
     rows = await ds.execute(
-        "UPDATE chat_sessions SET config=$1 WHERE id=$2",
-        [config_json, session_id],
+        "UPDATE chat_sessions SET config=$1 WHERE id=$2 AND user_id=$3",
+        [config_json, session_id, user_id],
     )
     if rows == 0:
         raise HTTPException(404, "Session not found")
@@ -483,6 +539,7 @@ async def update_session_config(session_id: str, request: Request, ds=Depends(ge
 
 @router.get("/sessions/{session_id}/context-stats")
 async def get_context_stats(session_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+    await _ensure_session_owned(ds, session_id, _uid(user))
     msg_count = await ds.query_one(
         "SELECT COUNT(*) as count FROM chat_messages WHERE session_id=$1", [session_id]
     )
@@ -501,6 +558,7 @@ async def get_context_stats(session_id: str, ds=Depends(get_datastore), user=Dep
 
 @router.get("/sessions/{session_id}/context-messages")
 async def get_context_messages(session_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+    await _ensure_session_owned(ds, session_id, _uid(user))
     messages = await ds.query(
         "SELECT * FROM chat_messages WHERE session_id=$1 ORDER BY created_at ASC", [session_id]
     )
@@ -510,6 +568,7 @@ async def get_context_messages(session_id: str, ds=Depends(get_datastore), user=
 # ==================== 对话收藏管理 ====================
 @router.post("/sessions/{session_id}/messages/{message_id}/collect")
 async def collect_message(session_id: str, message_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+    await _ensure_session_owned(ds, session_id, _uid(user))
     rows = await ds.execute(
         "UPDATE chat_messages SET collected=true WHERE id=$1 AND session_id=$2", [message_id, session_id]
     )
@@ -520,6 +579,7 @@ async def collect_message(session_id: str, message_id: str, ds=Depends(get_datas
 
 @router.delete("/sessions/{session_id}/messages/{message_id}/collect")
 async def uncollect_message(session_id: str, message_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+    await _ensure_session_owned(ds, session_id, _uid(user))
     rows = await ds.execute(
         "UPDATE chat_messages SET collected=false WHERE id=$1 AND session_id=$2", [message_id, session_id]
     )
@@ -530,6 +590,7 @@ async def uncollect_message(session_id: str, message_id: str, ds=Depends(get_dat
 
 @router.get("/sessions/{session_id}/collected")
 async def get_collected_messages(session_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+    await _ensure_session_owned(ds, session_id, _uid(user))
     rows = await ds.query(
         "SELECT * FROM chat_messages WHERE session_id=$1 AND collected=true ORDER BY created_at ASC", [session_id]
     )
@@ -538,6 +599,7 @@ async def get_collected_messages(session_id: str, ds=Depends(get_datastore), use
 
 @router.get("/sessions/{session_id}/collected/export")
 async def export_collected_messages(session_id: str, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+    await _ensure_session_owned(ds, session_id, _uid(user))
     rows = await ds.query(
         "SELECT role, content FROM chat_messages WHERE session_id=$1 AND collected=true ORDER BY created_at ASC",
         [session_id],
@@ -556,10 +618,17 @@ async def convert_to_knowledge(request: Request, ds=Depends(get_datastore), user
     if not message_ids:
         raise HTTPException(400, "messageIds required")
     placeholders = ", ".join(f"${i+1}" for i in range(len(message_ids)))
+    user_id = _uid(user)
     messages = await ds.query(
-        f"SELECT role, content FROM chat_messages WHERE id IN ({placeholders}) ORDER BY created_at ASC",
-        message_ids,
+        f"""SELECT cm.role, cm.content
+            FROM chat_messages cm
+            JOIN chat_sessions cs ON cs.id = cm.session_id
+            WHERE cm.id IN ({placeholders}) AND cs.user_id = ${len(message_ids) + 1}
+            ORDER BY cm.created_at ASC""",
+        [*message_ids, user_id],
     )
+    if len(messages or []) != len(set(message_ids)):
+        raise HTTPException(404, "Some messages not found")
     content = "\n\n".join(f"{m['role']}: {m['content']}" for m in messages)
     container = _get_container(request)
     kb = container.knowledge_base()
@@ -574,6 +643,7 @@ async def batch_convert_to_knowledge(request: Request, ds=Depends(get_datastore)
     results = []
     container = _get_container(request)
     kb = container.knowledge_base()
+    user_id = _uid(user)
     for item in items:
         message_ids = item.get("messageIds", [])
         title = item.get("title", "Converted from chat")
@@ -582,9 +652,15 @@ async def batch_convert_to_knowledge(request: Request, ds=Depends(get_datastore)
             continue
         placeholders = ", ".join(f"${i+1}" for i in range(len(message_ids)))
         messages = await ds.query(
-            f"SELECT role, content FROM chat_messages WHERE id IN ({placeholders}) ORDER BY created_at ASC",
-            message_ids,
+            f"""SELECT cm.role, cm.content
+                FROM chat_messages cm
+                JOIN chat_sessions cs ON cs.id = cm.session_id
+                WHERE cm.id IN ({placeholders}) AND cs.user_id = ${len(message_ids) + 1}
+                ORDER BY cm.created_at ASC""",
+            [*message_ids, user_id],
         )
+        if len(messages or []) != len(set(message_ids)):
+            raise HTTPException(404, "Some messages not found")
         content = "\n\n".join(f"{m['role']}: {m['content']}" for m in messages)
         doc_id = await kb.add_entry(content=content, metadata={"title": title, "source": "chat_conversion"}, tags=tags)
         results.append({"id": doc_id, "title": title})
@@ -600,3 +676,86 @@ async def suggest_tags(request: Request, ds=Depends(get_datastore), user=Depends
                    "security", "performance", "monitoring", "backup", "config"}
     suggested = [w for w in set(words) if w in common_tags][:5]
     return {"success": True, "data": suggested}
+
+
+# ==================== 收藏消息（兼容前端 /chat/favorites 契约） ====================
+@router.get("/chat/favorites")
+async def get_favorites(
+    search: str | None = Query(None),
+    sessionId: str | None = Query(None, alias="sessionId"),
+    ds=Depends(get_datastore),
+    user=Depends(get_current_user),
+) -> dict:
+    """Return all collected/favorited messages across sessions."""
+    base = """
+        SELECT cm.id, cm.role, cm.content, cm.session_id, cm.created_at,
+               cs.title AS session_title
+        FROM chat_messages cm
+        JOIN chat_sessions cs ON cs.id = cm.session_id
+        WHERE cm.collected = true AND cs.user_id = $1
+    """
+    params: list[Any] = [_uid(user)]
+    idx = 2
+
+    if sessionId:
+        base += f" AND cm.session_id = ${idx}"
+        params.append(sessionId)
+        idx += 1
+
+    if search:
+        base += f" AND cm.content ILIKE ${idx}"
+        params.append(f"%{search}%")
+        idx += 1
+
+    base += " ORDER BY cm.created_at DESC"
+
+    rows = await ds.query(base, params)
+    data = [
+        {
+            "id": str(r["id"]),
+            "content": r["content"],
+            "role": r["role"],
+            "sessionId": str(r["session_id"]),
+            "sessionTitle": r.get("session_title") or "",
+            "collectedAt": r["created_at"].isoformat() if r.get("created_at") else "",
+            "converted": False,
+        }
+        for r in (rows or [])
+    ]
+    return {"success": True, "data": data}
+
+
+@router.delete("/chat/favorites/{message_id}")
+async def remove_favorite(
+    message_id: str,
+    ds=Depends(get_datastore),
+    user=Depends(get_current_user),
+) -> dict:
+    """Uncollect a message by its ID (across all sessions)."""
+    user_id = _uid(user)
+    rows = await ds.execute(
+        """UPDATE chat_messages cm
+           SET collected=false
+           WHERE cm.id=$1 AND cm.collected=true
+             AND EXISTS (
+               SELECT 1 FROM chat_sessions cs
+               WHERE cs.id = cm.session_id AND cs.user_id = $2
+             )""",
+        [message_id, user_id],
+    )
+    if rows == 0:
+        raise HTTPException(404, "Favorite message not found")
+    return {"success": True, "message": "Favorite removed"}
+
+
+@router.get("/chat/sessions")
+async def get_chat_sessions_alias(
+    ds=Depends(get_datastore),
+    user=Depends(get_current_user),
+) -> dict:
+    """Alias for /sessions — used by FavoriteMessages page."""
+    rows = await ds.query(
+        "SELECT * FROM chat_sessions WHERE user_id=$1 ORDER BY updated_at DESC",
+        [_uid(user)],
+    )
+    return {"success": True, "data": snake_to_camel_list(rows or [])}

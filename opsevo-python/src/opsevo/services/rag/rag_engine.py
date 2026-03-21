@@ -884,6 +884,8 @@ class RAGEngine:
                     root_causes[0]["confidence"] = 75
             except Exception as exc:
                 logger.warning("rag_root_cause_ai_failed", event_id=event_id, error=str(exc))
+
+        similar_incidents = [
             {"id": d.get("id", ""), "similarity": d.get("score", 0)}
             for d in docs
         ]

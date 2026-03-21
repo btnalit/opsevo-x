@@ -70,6 +70,17 @@ async def lifespan(app: FastAPI):
     app.state.container = container
     app.state.settings = settings
 
+    # Phase 0 — Production safety check
+    if not settings.is_development():
+        problems = settings.validate_production_requirements()
+        if problems:
+            for p in problems:
+                logger.error("production_config_problem", problem=p)
+            raise RuntimeError(
+                f"Refusing to start: {len(problems)} production config problem(s): "
+                + "; ".join(problems)
+            )
+
     # Phase 1 — Core data layer
     logger.info("startup_phase_1", msg="Initializing data layer")
     ds = container.datastore()
@@ -252,10 +263,16 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    # CORS: read allowed origins from settings; fall back to dev defaults
+    from opsevo.settings import Settings
+    _settings = Settings()
+    _origins = [o.strip() for o in _settings.cors_origins.split(",") if o.strip()]
+    _allow_credentials = "*" not in _origins
+
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
+        allow_origins=_origins,
+        allow_credentials=_allow_credentials,
         allow_methods=["*"],
         allow_headers=["*"],
     )

@@ -31,11 +31,11 @@ import math
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from opsevo.api.deps import get_current_user
 
-router = APIRouter(prefix="/api/ai-ops/skills", tags=["skills"])
+router = APIRouter(prefix="/api/skills", tags=["skills"])
 
 
 # ------------------------------------------------------------------
@@ -60,9 +60,11 @@ class ToggleRequest(BaseModel):
 
 
 class FromTemplateRequest(BaseModel):
-    template_id: str
+    template_id: str = Field(alias="templateId")
     name: str
     description: str
+
+    model_config = {"populate_by_name": True}
 
 
 class TestSkillRequest(BaseModel):
@@ -70,7 +72,9 @@ class TestSkillRequest(BaseModel):
 
 
 class CloneRequest(BaseModel):
-    new_name: str
+    new_name: str = Field(alias="newName")
+
+    model_config = {"populate_by_name": True}
 
 
 class UpdateFileRequest(BaseModel):

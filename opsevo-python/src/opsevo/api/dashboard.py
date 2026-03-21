@@ -23,7 +23,7 @@ async def dashboard_resource(
 ):
     """Alias matching frontend dashboardApi.getResource()."""
     try:
-        driver, _ = await _resolve_driver(request, device_id)
+        driver, _ = await _resolve_driver(request, device_id, tenant_id=str(user["id"]))
         metrics = await driver.collect_metrics()
         health = await driver.health_check()
         return {
@@ -46,7 +46,7 @@ async def dashboard_data(
     user: dict = Depends(get_current_user),
 ):
     try:
-        driver, _ = await _resolve_driver(request, device_id)
+        driver, _ = await _resolve_driver(request, device_id, tenant_id=str(user["id"]))
         metrics = await driver.collect_metrics()
         health = await driver.health_check()
         return {

@@ -48,7 +48,11 @@ def _get_device_pool(request: Request):
     return request.app.state.container.device_pool()
 
 
-async def _resolve_driver(request: Request, device_id: str):
+def _tenant_id(user: dict) -> str:
+    return str(user["id"])
+
+
+async def _resolve_driver(request: Request, device_id: str, tenant_id: str | None = None):
     """Resolve device_id → connected DeviceDriver via DevicePool.
 
     Follows the same pattern as device_context.py middleware:
@@ -57,7 +61,7 @@ async def _resolve_driver(request: Request, device_id: str):
     dm = _get_device_manager(request)
     pool = _get_device_pool(request)
 
-    device = await dm.get_device(device_id)
+    device = await dm.get_device(device_id, tenant_id=tenant_id)
     if not device:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Device {device_id} not found")
 
@@ -220,7 +224,7 @@ async def get_device(
     user: dict = Depends(get_current_user),
 ):
     dm = _get_device_manager(request)
-    device = await dm.get_device(device_id)
+    device = await dm.get_device(device_id, tenant_id=_tenant_id(user))
     if device is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Device not found")
     
@@ -245,7 +249,7 @@ async def update_device(
 ):
     dm = _get_device_manager(request)
     changes = body.model_dump(exclude_none=True)
-    updated = await dm.update_device(device_id, changes)
+    updated = await dm.update_device(device_id, changes, tenant_id=_tenant_id(user))
     if updated is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Device not found")
     # Sync changes to orchestrator registry (handles reconnect on host/port change)
@@ -264,13 +268,17 @@ async def delete_device(
     orchestrator=Depends(get_device_orchestrator),
     user: dict = Depends(get_current_user),
 ):
+    dm = _get_device_manager(request)
+    tenant_id = _tenant_id(user)
+    owned_device = await dm.get_device(device_id, tenant_id=tenant_id)
+    if owned_device is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Device not found")
     try:
         # orchestrator.remove_device internally deletes from DB + cleans registry
         await orchestrator.remove_device(device_id)
     except KeyError:
         # Device not in registry — fallback to direct DB delete
-        dm = _get_device_manager(request)
-        ok = await dm.delete_device(device_id)
+        ok = await dm.delete_device(device_id, tenant_id=tenant_id)
         if not ok:
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Device not found")
     return MessageResponse(message="Device deleted").model_dump()
@@ -283,21 +291,23 @@ async def connect_device(
     orchestrator=Depends(get_device_orchestrator),
     user: dict = Depends(get_current_user),
 ):
+    tenant_id = _tenant_id(user)
+    dm = _get_device_manager(request)
+    owned_device = await dm.get_device(device_id, tenant_id=tenant_id)
+    if not owned_device:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Device not found")
     try:
         success = await orchestrator.connect_device_manual(device_id)
     except KeyError:
         # Device not in registry — try loading from DB and registering first
-        dm = _get_device_manager(request)
-        device = await dm.get_device(device_id)
-        if not device:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Device not found")
-        await orchestrator.register_device(device)
+        await orchestrator.register_device(owned_device)
         success = await orchestrator.connect_device_manual(device_id)
     try:
         if not success:
             return {"success": False, "error": "Connection failed"}
-        dm = _get_device_manager(request)
-        device = await dm.get_device(device_id)
+        device = await dm.get_device(device_id, tenant_id=tenant_id)
+        if not device:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Device not found")
         return SuccessResponse(data=device).model_dump()
     except Exception as exc:
         return {"success": False, "error": str(exc)}
@@ -310,10 +320,16 @@ async def disconnect_device(
     orchestrator=Depends(get_device_orchestrator),
     user: dict = Depends(get_current_user),
 ):
+    tenant_id = _tenant_id(user)
+    dm = _get_device_manager(request)
+    owned_device = await dm.get_device(device_id, tenant_id=tenant_id)
+    if not owned_device:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Device not found")
     try:
         await orchestrator.disconnect_device_manual(device_id)
-        dm = _get_device_manager(request)
-        device = await dm.get_device(device_id)
+        device = await dm.get_device(device_id, tenant_id=tenant_id)
+        if not device:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Device not found")
         return SuccessResponse(data=device).model_dump()
     except KeyError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc))
@@ -329,7 +345,7 @@ async def test_device_connection_alias(
 ):
     """Alias for /test to match frontend deviceApi.testConnection()."""
     try:
-        driver, _ = await _resolve_driver(request, device_id)
+        driver, _ = await _resolve_driver(request, device_id, tenant_id=_tenant_id(user))
         result = await driver.health_check()
         return SuccessResponse(data=result.model_dump()).model_dump()
     except HTTPException:
@@ -345,7 +361,7 @@ async def test_device_connection(
     user: dict = Depends(get_current_user),
 ):
     try:
-        driver, _ = await _resolve_driver(request, device_id)
+        driver, _ = await _resolve_driver(request, device_id, tenant_id=_tenant_id(user))
         result = await driver.health_check()
         return SuccessResponse(data=result.model_dump()).model_dump()
     except HTTPException:
@@ -362,7 +378,7 @@ async def get_device_metrics(
 ):
     """GET /api/devices/{device_id}/metrics — frontend deviceApi.getMetrics()."""
     try:
-        driver, _ = await _resolve_driver(request, device_id)
+        driver, _ = await _resolve_driver(request, device_id, tenant_id=_tenant_id(user))
         metrics = await driver.collect_metrics()
         return SuccessResponse(data=metrics.model_dump()).model_dump()
     except HTTPException:
@@ -379,7 +395,7 @@ async def get_device_health(
 ):
     """GET /api/devices/{device_id}/health — frontend deviceApi.getHealth()."""
     try:
-        driver, _ = await _resolve_driver(request, device_id)
+        driver, _ = await _resolve_driver(request, device_id, tenant_id=_tenant_id(user))
         result = await driver.health_check()
         return SuccessResponse(data=result.model_dump()).model_dump()
     except HTTPException:
@@ -399,7 +415,7 @@ async def execute_device_command(
     command = body.get("command", "")
     params = body.get("params", {})
     try:
-        driver, _ = await _resolve_driver(request, device_id)
+        driver, _ = await _resolve_driver(request, device_id, tenant_id=_tenant_id(user))
         result = await driver.execute(command, params)
         return SuccessResponse(data=result.data if hasattr(result, "data") else result).model_dump()
     except HTTPException:
