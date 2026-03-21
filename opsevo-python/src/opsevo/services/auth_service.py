@@ -42,11 +42,13 @@ class AuthService:
         except jwt.InvalidTokenError as e:
             raise ValueError(f"Invalid token: {e}")
 
-    def generate_access_token(self, user_id: str, username: str) -> str:
-        return self.generate_token(
-            {"sub": user_id, "username": username, "type": "access"},
-            self._access_expiry,
-        )
+    def generate_access_token(
+        self, user_id: str, username: str, tenant_id: str | None = None,
+    ) -> str:
+        payload: dict[str, Any] = {"sub": user_id, "username": username, "type": "access"}
+        if tenant_id:
+            payload["tenant_id"] = tenant_id
+        return self.generate_token(payload, self._access_expiry)
 
     def generate_refresh_token(self, user_id: str) -> str:
         return self.generate_token(
@@ -94,21 +96,30 @@ class AuthService:
     # ── User Management (full-stack-audit) ────────────────────────────
 
     async def list_users(
-        self, limit: int = 100, offset: int = 0, include_inactive: bool = False,
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        include_inactive: bool = False,
+        tenant_id: str | None = None,
     ) -> list[dict]:
-        if include_inactive:
-            rows = await self._ds.query(
-                "SELECT id, username, email, role, is_active, created_at "
-                "FROM users ORDER BY created_at DESC LIMIT $1 OFFSET $2",
-                (limit, offset),
-            )
-        else:
-            rows = await self._ds.query(
-                "SELECT id, username, email, role, is_active, created_at "
-                "FROM users WHERE is_active = TRUE ORDER BY created_at DESC LIMIT $1 OFFSET $2",
-                (limit, offset),
-            )
-        return rows
+        base = (
+            "SELECT id, username, email, role, is_active, created_at FROM users"
+        )
+        conditions: list[str] = []
+        params: list[Any] = []
+        idx = 1
+
+        if not include_inactive:
+            conditions.append("is_active = TRUE")
+        if tenant_id:
+            conditions.append(f"tenant_id = ${idx}")
+            params.append(tenant_id)
+            idx += 1
+
+        where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+        params.extend([limit, offset])
+        sql = f"{base}{where} ORDER BY created_at DESC LIMIT ${idx} OFFSET ${idx + 1}"
+        return await self._ds.query(sql, tuple(params))
 
     async def update_user(self, user_id: str, data: dict) -> dict | None:
         allowed = {"username", "email", "role"}

@@ -131,7 +131,6 @@ declare module 'vue' {
     IEpRefreshRight: typeof import('~icons/ep/refresh-right')['default']
     IEpRight: typeof import('~icons/ep/right')['default']
     IEpSearch: typeof import('~icons/ep/search')['default']
-    IEpSetting: typeof import('~icons/ep/setting')['default']
     IEpShare: typeof import('~icons/ep/share')['default']
     IEpStar: typeof import('~icons/ep/star')['default']
     IEpSuccessFilled: typeof import('~icons/ep/success-filled')['default']

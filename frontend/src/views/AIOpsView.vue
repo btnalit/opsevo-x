@@ -74,7 +74,7 @@
       >
         <template #title>
           <div class="alert-banner-content">
-            <span>暂无指标数据，请确保已连接路由器并启用指标采集</span>
+            <span>暂无指标数据，请确保已连接设备并启用指标采集</span>
             <el-button type="primary" size="small" text @click="goToMetricsConfig">
               配置指标采集 →
             </el-button>
@@ -110,7 +110,7 @@
         </el-col>
         <el-col :xs="24" :sm="12" :md="8" :lg="4">
           <div class="info-card">
-            <div class="info-label">RouterOS 版本</div>
+            <div class="info-label">系统版本</div>
             <div class="info-value">{{ systemInfo?.version || '-' }}</div>
           </div>
         </el-col>
@@ -287,7 +287,7 @@
             <el-icon class="is-loading" :size="24"><i-ep-loading /></el-icon>
             <span>{{ getTrafficLoadingMessage() }}</span>
           </div>
-          <el-empty v-else description="暂无接口数据，请确保已连接路由器并启用指标采集" />
+          <el-empty v-else description="暂无接口数据，请确保已连接设备并启用指标采集" />
         </div>
       </el-card>
 
@@ -773,7 +773,7 @@ const getTrafficLoadingMessage = (): string => {
   }
   
   if (!trafficStatus.value.isRouterConnected) {
-    return '路由器未连接，无法采集流量数据'
+    return '设备未连接，无法采集流量数据'
   }
   
   if (!trafficStatus.value.isRunning) {
@@ -825,7 +825,7 @@ const formatNextRun = (timestamp?: number): string => {
   return `${Math.floor(diff / 86400000)} 天后`
 }
 
-// Format uptime from RouterOS format (1w6d7h24m25s) to readable format
+// Format uptime (1w6d7h24m25s) to readable format
 const formatUptime = (uptime?: string): string => {
   if (!uptime) return '-'
   

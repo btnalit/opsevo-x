@@ -106,7 +106,7 @@
           </el-col>
           <el-col :xs="24" :sm="12" :md="8" :lg="6">
             <div class="info-card">
-              <div class="info-label">RouterOS 版本</div>
+              <div class="info-label">系统版本</div>
               <div class="info-value">{{ resource.version || '-' }}</div>
             </div>
           </el-col>
@@ -347,11 +347,11 @@ const formatBytes = (bytes: number): string => {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
 }
 
-// Format uptime from RouterOS format (1w6d7h24m25s) to readable format
+// Format uptime (1w6d7h24m25s) to readable format
 const formatUptime = (uptime: string): string => {
   if (!uptime) return '-'
   
-  // Parse RouterOS uptime format: 1w6d7h24m25s
+  // Parse uptime format: 1w6d7h24m25s
   const weeks = uptime.match(/(\d+)w/)
   const days = uptime.match(/(\d+)d/)
   const hours = uptime.match(/(\d+)h/)
@@ -378,7 +378,7 @@ const formatUptime = (uptime: string): string => {
 const calculateBootTime = (uptime: string): string => {
   if (!uptime) return '-'
   
-  // Parse RouterOS uptime format: 1w6d7h24m25s
+  // Parse uptime format: 1w6d7h24m25s
   const weeks = uptime.match(/(\d+)w/)
   const days = uptime.match(/(\d+)d/)
   const hours = uptime.match(/(\d+)h/)

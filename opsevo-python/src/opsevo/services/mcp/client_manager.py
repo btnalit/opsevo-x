@@ -8,6 +8,8 @@ McpClientManager — 外部 MCP Server 连接管理
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -51,6 +53,9 @@ class McpConnection:
     last_health_check: float = 0.0
     consecutive_failures: int = 0
     _http_client: httpx.AsyncClient | None = None
+    _process: asyncio.subprocess.Process | None = None
+    _stdio_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    _stdio_id_counter: int = 0
 
 
 class ToolCallInterceptor(Protocol):
@@ -103,6 +108,11 @@ class McpClientManager:
     async def connect_server(self, config: McpServerConfig) -> None:
         """连接到单个外部 MCP Server。"""
         sid = config.server_id
+
+        # Disconnect existing connection first to avoid orphaning processes
+        if sid in self._connections:
+            await self.disconnect_server(sid)
+
         conn = McpConnection(server_id=sid, config=config, status="connecting")
         self._connections[sid] = conn
 
@@ -152,18 +162,18 @@ class McpClientManager:
                     self._tool_registry.register_external_tools(sid, conn.discovered_tools)
                 logger.info("MCP server connected", server_id=sid, tools=len(conn.discovered_tools))
             elif config.transport == "stdio":
-                # stdio 传输：启动子进程
-                logger.info("MCP stdio transport not yet implemented", server_id=sid)
-                conn.status = "disconnected"
+                await self._connect_stdio(conn, config)
             elif config.transport == "sse":
-                logger.info("MCP SSE transport not yet implemented", server_id=sid)
-                conn.status = "disconnected"
+                await self._connect_sse(conn, config)
             else:
                 logger.warn("Unknown MCP transport", transport=config.transport)
                 conn.status = "disconnected"
         except Exception as exc:
             conn.status = "disconnected"
             conn.consecutive_failures += 1
+            # Kill any subprocess that was started but failed to complete handshake
+            if conn._process and conn._process.returncode is None:
+                await self._kill_process(conn._process)
             logger.error("Failed to connect MCP server", server_id=sid, error=str(exc))
 
     async def disconnect_server(self, server_id: str) -> None:
@@ -172,6 +182,12 @@ class McpClientManager:
             return
         if conn._http_client:
             await conn._http_client.aclose()
+        if conn._process and conn._process.returncode is None:
+            try:
+                conn._process.terminate()
+                await asyncio.wait_for(conn._process.wait(), timeout=5)
+            except (asyncio.TimeoutError, ProcessLookupError):
+                conn._process.kill()
         if self._tool_registry:
             self._tool_registry.unregister_external_tools(server_id)
         logger.info("MCP server disconnected", server_id=server_id)
@@ -193,20 +209,25 @@ class McpClientManager:
         for interceptor in self._interceptors:
             intercepted_args = await interceptor.intercept(server_id, tool_name, intercepted_args)
 
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": tool_name, "arguments": intercepted_args},
+        }
+
+        # stdio transport
+        if conn._process and conn._process.stdin and conn._process.stdout:
+            return await self._stdio_request(conn, payload)
+
+        # http / sse transport (both use _http_client)
         if conn._http_client:
-            resp = await conn._http_client.post(
-                "/",
-                json={
-                    "jsonrpc": "2.0",
-                    "id": 1,
-                    "method": "tools/call",
-                    "params": {"name": tool_name, "arguments": intercepted_args},
-                },
-            )
+            resp = await conn._http_client.post("/", json=payload)
             data = resp.json()
             if "error" in data:
                 raise RuntimeError(data["error"].get("message", "Unknown MCP error"))
             return data.get("result")
+
         raise RuntimeError(f"No transport available for server: {server_id}")
 
     def register_interceptor(self, interceptor: ToolCallInterceptor) -> None:
@@ -288,8 +309,195 @@ class McpClientManager:
         logger.info("McpClientManager shutdown")
 
     # ------------------------------------------------------------------
+    # stdio 传输
+    # ------------------------------------------------------------------
+
+    async def _connect_stdio(self, conn: McpConnection, config: McpServerConfig) -> None:
+        """启动子进程并通过 stdin/stdout JSON-RPC 通信。"""
+        sid = config.server_id
+        command = config.connection_params.get("command", "")
+        args = config.connection_params.get("args", [])
+        env_overrides = config.connection_params.get("env", {})
+
+        if not command:
+            logger.error("MCP stdio: no command specified", server_id=sid)
+            conn.status = "disconnected"
+            return
+
+        # 构建环境变量：继承当前环境 + 覆盖
+        env = {**os.environ, **env_overrides}
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                command, *args,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
+            )
+            conn._process = proc
+        except (FileNotFoundError, OSError) as exc:
+            logger.error("MCP stdio: failed to start process", server_id=sid, error=str(exc))
+            conn.status = "disconnected"
+            return
+
+        # 发送 initialize
+        init_resp = await self._stdio_request(conn, {
+            "jsonrpc": "2.0", "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "opsevo-client", "version": "1.0.0"},
+            },
+        })
+        if init_resp is None:
+            await self._kill_process(proc)
+            conn.status = "disconnected"
+            return
+
+        # 发送 initialized 通知
+        if proc.stdin:
+            notif = json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n"
+            proc.stdin.write(notif.encode())
+            await proc.stdin.drain()
+
+        # 发现工具
+        tools_resp = await self._stdio_request(conn, {
+            "jsonrpc": "2.0", "id": 2,
+            "method": "tools/list", "params": {},
+        })
+        tools = (tools_resp or {}).get("tools", [])
+        conn.discovered_tools = [
+            McpToolDefinition(
+                name=t["name"],
+                description=t.get("description", ""),
+                input_schema=t.get("inputSchema", {}),
+                server_id=sid,
+            )
+            for t in tools
+        ]
+        conn.status = "connected"
+        if self._tool_registry:
+            self._tool_registry.register_external_tools(sid, conn.discovered_tools)
+        logger.info("MCP stdio server connected", server_id=sid, tools=len(conn.discovered_tools))
+
+    async def _stdio_request(
+        self, conn: McpConnection, payload: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """通过 stdin/stdout 发送 JSON-RPC 请求并读取响应。"""
+        proc = conn._process
+        if not proc or not proc.stdin or not proc.stdout:
+            return None
+
+        async with conn._stdio_lock:
+            conn._stdio_id_counter += 1
+            payload["id"] = conn._stdio_id_counter
+            line = json.dumps(payload) + "\n"
+            try:
+                proc.stdin.write(line.encode())
+                await proc.stdin.drain()
+                raw = await asyncio.wait_for(
+                    proc.stdout.readline(),
+                    timeout=self._forward_timeout_ms / 1000,
+                )
+                if not raw:
+                    return None
+                data = json.loads(raw.decode())
+                if "error" in data:
+                    logger.warning("MCP stdio error", error=data["error"])
+                    return None
+                return data.get("result")
+            except asyncio.TimeoutError:
+                logger.warning("MCP stdio request timeout", server_id=conn.server_id)
+                return None
+            except Exception as exc:
+                logger.warning("MCP stdio request failed", error=str(exc))
+                return None
+
+    # ------------------------------------------------------------------
+    # SSE 传输
+    # ------------------------------------------------------------------
+
+    async def _connect_sse(self, conn: McpConnection, config: McpServerConfig) -> None:
+        """通过 SSE 连接到 MCP Server（HTTP POST 发送，SSE 接收）。"""
+        sid = config.server_id
+        url = config.connection_params.get("url", "")
+        headers = config.connection_params.get("headers", {})
+
+        if not url:
+            logger.error("MCP SSE: no url specified", server_id=sid)
+            conn.status = "disconnected"
+            return
+
+        try:
+            client = httpx.AsyncClient(
+                base_url=url,
+                headers=headers,
+                timeout=self._forward_timeout_ms / 1000,
+            )
+            conn._http_client = client
+
+            # SSE 模式下仍然用 HTTP POST 发送 JSON-RPC
+            # 大多数 SSE MCP server 在 /sse 端点提供事件流，/message 端点接收请求
+            # 先尝试标准 initialize
+            resp = await client.post(
+                "/message",
+                json={
+                    "jsonrpc": "2.0", "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {},
+                        "clientInfo": {"name": "opsevo-client", "version": "1.0.0"},
+                    },
+                },
+            )
+            resp.raise_for_status()
+
+            # 发现工具
+            tools_resp = await client.post(
+                "/message",
+                json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+            )
+            tools_data = tools_resp.json()
+            tools = tools_data.get("result", {}).get("tools", [])
+            conn.discovered_tools = [
+                McpToolDefinition(
+                    name=t["name"],
+                    description=t.get("description", ""),
+                    input_schema=t.get("inputSchema", {}),
+                    server_id=sid,
+                )
+                for t in tools
+            ]
+            conn.status = "connected"
+            if self._tool_registry:
+                self._tool_registry.register_external_tools(sid, conn.discovered_tools)
+            logger.info("MCP SSE server connected", server_id=sid, tools=len(conn.discovered_tools))
+        except Exception as exc:
+            conn.status = "disconnected"
+            conn.consecutive_failures += 1
+            logger.error("MCP SSE connect failed", server_id=sid, error=str(exc))
+
+    # ------------------------------------------------------------------
     # 辅助
     # ------------------------------------------------------------------
+
+    @staticmethod
+    async def _kill_process(proc: asyncio.subprocess.Process) -> None:
+        """Terminate a subprocess gracefully, falling back to kill."""
+        if proc.returncode is not None:
+            return
+        try:
+            proc.terminate()
+            await asyncio.wait_for(proc.wait(), timeout=5)
+        except (asyncio.TimeoutError, ProcessLookupError):
+            try:
+                proc.kill()
+                await proc.wait()
+            except ProcessLookupError:
+                pass
 
     @staticmethod
     def _resolve_env_vars(config: McpServerConfig) -> McpServerConfig:

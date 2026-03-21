@@ -184,7 +184,15 @@ async def update_knowledge(
 ):
     ds: DataStore = get_datastore(request)
     content = body.get("content")
-    metadata = body.get("metadata")
+    metadata = body.get("metadata") or {}
+    # 前端会把 type/title 作为顶层字段传过来，合并进 metadata
+    top_type = body.get("type")
+    top_title = body.get("title")
+    if top_type is not None:
+        metadata["type"] = top_type
+    if top_title is not None:
+        metadata["title"] = top_title
+
     sets: list[str] = []
     params: list[Any] = []
     idx = 1
@@ -192,7 +200,7 @@ async def update_knowledge(
         sets.append(f"content = ${idx}")
         params.append(content)
         idx += 1
-    if metadata is not None:
+    if metadata:
         import json
         sets.append(f"metadata = ${idx}")
         params.append(json.dumps(metadata, ensure_ascii=False))
@@ -344,11 +352,23 @@ async def submit_feedback(
 ):
     ds: DataStore = get_datastore(request)
     score = body.get("score", 0)
+    # 读取当前 metadata 计算累计均值
+    row = await ds.query_one("SELECT metadata FROM knowledge_embeddings WHERE id = $1", (entry_id,))
+    if not row:
+        raise HTTPException(404, "Entry not found")
+    meta = row.get("metadata") or {}
+    if isinstance(meta, str):
+        import json as _json
+        meta = _json.loads(meta)
+    old_score = meta.get("feedbackScore", 0) or 0
+    old_count = meta.get("feedbackCount", 0) or 0
+    new_count = old_count + 1
+    new_score = round((old_score * old_count + score) / new_count, 2)
     await ds.execute(
-        "UPDATE knowledge_embeddings SET metadata = jsonb_set(COALESCE(metadata,'{}')::jsonb, '{feedbackScore}', $1::jsonb) WHERE id = $2",
-        (str(score), entry_id),
+        "UPDATE knowledge_embeddings SET metadata = jsonb_set(jsonb_set(COALESCE(metadata,'{}')::jsonb, '{feedbackScore}', $1::jsonb), '{feedbackCount}', $2::jsonb) WHERE id = $3",
+        (str(new_score), str(new_count), entry_id),
     )
-    return {"success": True}
+    return {"success": True, "data": {"feedbackScore": new_score, "feedbackCount": new_count}}
 
 
 @router.post("/knowledge/reindex")
@@ -541,17 +561,7 @@ async def get_embedding_config(
     user: dict = Depends(get_current_user),
 ):
     emb = _get_embedding_service(request)
-    return {
-        "success": True,
-        "data": {
-            "provider": getattr(emb, "provider", "local"),
-            "model": getattr(emb, "model_name", "all-MiniLM-L6-v2"),
-            "dimensions": getattr(emb, "dimension", 384),
-            "batchSize": getattr(emb, "batch_size", 32),
-            "cacheEnabled": False,
-            "cacheTtlMs": 0,
-        },
-    }
+    return {"success": True, "data": emb.get_config()}
 
 
 @router.put("/embedding/config")
@@ -560,16 +570,9 @@ async def update_embedding_config(
     body: dict[str, Any],
     user: dict = Depends(get_current_user),
 ):
-    # Embedding config is set via environment; return current config
     emb = _get_embedding_service(request)
-    return {
-        "success": True,
-        "data": {
-            "provider": getattr(emb, "provider", "local"),
-            "model": getattr(emb, "model_name", "all-MiniLM-L6-v2"),
-            "dimensions": getattr(emb, "dimension", 384),
-        },
-    }
+    await emb.update_config(body)
+    return {"success": True, "data": emb.get_config()}
 
 
 @router.get("/embedding/cache/stats")
@@ -577,7 +580,8 @@ async def embedding_cache_stats(
     request: Request,
     user: dict = Depends(get_current_user),
 ):
-    return {"success": True, "data": {"size": 0, "hitRate": 0.0}}
+    emb = _get_embedding_service(request)
+    return {"success": True, "data": emb.get_cache_stats()}
 
 
 @router.post("/embedding/cache/clear")
@@ -585,6 +589,8 @@ async def clear_embedding_cache(
     request: Request,
     user: dict = Depends(get_current_user),
 ):
+    emb = _get_embedding_service(request)
+    emb.clear_cache()
     return {"success": True, "message": "Cache cleared"}
 
 

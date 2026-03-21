@@ -8,7 +8,7 @@ const EXECUTABLE_LANGUAGES = new Set<string>(DEVICE_SCRIPT_LANGUAGES)
 
 /**
  * Detect the language of a fenced code block string.
- * @param block - Raw fenced code block (e.g., "```routeros\n...\n```")
+ * @param block - Raw fenced code block (e.g., "```bash\n...\n```")
  * @returns The detected language identifier, or 'plaintext' if unknown
  */
 export function detectCodeBlockLanguage(block: string): string {

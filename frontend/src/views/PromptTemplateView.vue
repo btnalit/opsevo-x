@@ -452,7 +452,7 @@ const MODULAR_MANAGED_TEMPLATES = [
   'ReAct 循环基础提示词',
   '知识优先 ReAct 提示词',
   '并行执行 ReAct 提示词',
-  'RouterOS 系统提示词',
+  '设备系统提示词',
   '告警分析提示词',
 ]
 

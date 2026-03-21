@@ -135,6 +135,7 @@
           <el-select v-model="uploadForm.deviceTypes" multiple placeholder="留空表示通用" style="width:100%">
             <el-option label="RouterOS" value="routeros" />
             <el-option label="Linux" value="linux" />
+            <el-option label="OpenWrt" value="openwrt" />
             <el-option label="SNMP" value="snmp" />
           </el-select>
         </el-form-item>

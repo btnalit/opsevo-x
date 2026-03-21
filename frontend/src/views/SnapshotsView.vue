@@ -96,7 +96,7 @@
             </el-tooltip>
           </template>
         </el-table-column>
-        <el-table-column label="路由器信息" min-width="180">
+        <el-table-column label="设备信息" min-width="180">
           <template #default="{ row }">
             <div v-if="row.metadata">
               <span v-if="row.metadata.routerModel">{{ row.metadata.routerModel }}</span>
@@ -171,10 +171,10 @@
         <el-descriptions-item label="校验和 (SHA256)" :span="2">
           <code class="checksum-full">{{ selectedSnapshot.checksum }}</code>
         </el-descriptions-item>
-        <el-descriptions-item label="路由器型号" v-if="selectedSnapshot.metadata?.routerModel">
+        <el-descriptions-item label="设备型号" v-if="selectedSnapshot.metadata?.routerModel">
           {{ selectedSnapshot.metadata.routerModel }}
         </el-descriptions-item>
-        <el-descriptions-item label="RouterOS 版本" v-if="selectedSnapshot.metadata?.routerVersion">
+        <el-descriptions-item label="系统版本" v-if="selectedSnapshot.metadata?.routerVersion">
           {{ selectedSnapshot.metadata.routerVersion }}
         </el-descriptions-item>
       </el-descriptions>
@@ -208,7 +208,7 @@
           <span class="warning-title">危险操作警告</span>
         </template>
         <template #default>
-          <p>恢复配置将会覆盖当前路由器的所有配置，此操作不可撤销！</p>
+          <p>恢复配置将会覆盖当前设备的所有配置，此操作不可撤销！</p>
           <p>请确保您了解以下风险：</p>
           <ul>
             <li>当前配置将被完全替换</li>

@@ -35,7 +35,7 @@ from pydantic import BaseModel
 
 from opsevo.api.deps import get_current_user
 
-router = APIRouter(prefix="/api/skills", tags=["skills"])
+router = APIRouter(prefix="/api/ai-ops/skills", tags=["skills"])
 
 
 # ------------------------------------------------------------------

@@ -350,7 +350,7 @@
             v-model="formData.remediationScript"
             type="textarea"
             :rows="5"
-            placeholder="输入 RouterOS 修复脚本"
+            placeholder="输入修复脚本（由 AI 根据设备类型自动生成）"
           />
         </el-form-item>
 

@@ -53,7 +53,7 @@ class EvolutionConfigManager:
                                 try:
                                     cb(self._config)
                                 except Exception:
-                                    pass
+                                    logger.warning("evolution_config_watcher_callback_failed", exc_info=True)
             self._watch_task = asyncio.create_task(_watch())
             logger.info("evolution_config_watching_started")
         except ImportError:

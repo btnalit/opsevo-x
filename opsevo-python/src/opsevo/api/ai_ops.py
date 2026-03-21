@@ -19,7 +19,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from fastapi.responses import StreamingResponse
 
-from .deps import get_current_user, get_datastore, get_device_id, get_feature_flag_manager, get_tracing_service
+from .deps import get_current_user, get_datastore, get_device_id, get_feature_flag_manager, get_rag_engine, get_tracing_service
 from .dependencies import get_device_orchestrator
 from .utils import snake_to_camel, snake_to_camel_list, camel_to_snake_keys
 
@@ -800,9 +800,17 @@ async def disable_auto_heal(device_id: str | None = Depends(get_device_id), patt
 @router.get("/remediations")
 async def get_remediations(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
     if device_id:
-        rows = await ds.query("SELECT * FROM remediation_executions WHERE device_id=$1 ORDER BY timestamp DESC", [device_id])
+        rows = await ds.query("SELECT * FROM remediations WHERE device_id=$1 ORDER BY created_at DESC", [device_id])
     else:
-        rows = await ds.query("SELECT * FROM remediation_executions ORDER BY timestamp DESC")
+        rows = await ds.query("SELECT * FROM remediations ORDER BY created_at DESC")
+    return {"success": True, "data": snake_to_camel_list(rows)}
+
+@router.get("/remediations/history")
+async def get_remediation_history(device_id: str | None = Depends(get_device_id), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+    if device_id:
+        rows = await ds.query("SELECT * FROM remediation_executions WHERE device_id=$1 ORDER BY timestamp DESC LIMIT 50", [device_id])
+    else:
+        rows = await ds.query("SELECT * FROM remediation_executions ORDER BY timestamp DESC LIMIT 50")
     return {"success": True, "data": snake_to_camel_list(rows)}
 
 
@@ -2133,6 +2141,34 @@ async def create_syslog_filter(request: Request = None, ds=Depends(get_datastore
     return {"success": True, "data": snake_to_camel(row)}
 
 
+@router.put("/syslog/filters/{filter_id}")
+async def update_syslog_filter(filter_id: str = Path(...), request: Request = None, ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+    _ALLOWED = {"name", "condition", "action", "enabled"}
+    body = await request.json()
+    sets, params, idx = [], [], 1
+    for k, v in body.items():
+        if k not in _ALLOWED:
+            continue
+        if k == "condition" and isinstance(v, dict):
+            v = json.dumps(v)
+        sets.append(f"{k} = ${idx}")
+        params.append(v)
+        idx += 1
+    if sets:
+        params.append(filter_id)
+        await ds.execute(f"UPDATE syslog_filters SET {', '.join(sets)} WHERE id = ${idx}", tuple(params))
+    row = await ds.query_one("SELECT * FROM syslog_filters WHERE id=$1", [filter_id])
+    if not row:
+        raise HTTPException(404, "Syslog filter not found")
+    return {"success": True, "data": snake_to_camel(row)}
+
+
+@router.delete("/syslog/filters/{filter_id}")
+async def delete_syslog_filter(filter_id: str = Path(...), ds=Depends(get_datastore), user=Depends(get_current_user)) -> dict:
+    await ds.execute("DELETE FROM syslog_filters WHERE id=$1", [filter_id])
+    return {"success": True, "message": "Syslog filter deleted"}
+
+
 # ---------------------------------------------------------------------------
 # SNMP Trap Management — wired to SnmpTrapReceiver + DataStore (GAP-12 fix)
 # ---------------------------------------------------------------------------
@@ -2330,6 +2366,45 @@ async def get_knowledge_graph_nodes(
         for r in rows
     ]
     return {"success": True, "data": data}
+
+
+@router.get("/knowledge-graph/edges")
+async def get_knowledge_graph_edges(
+    source: str = Query(None),
+    target: str = Query(None),
+    limit: int = Query(500, le=2000),
+    ds=Depends(get_datastore),
+    user=Depends(get_current_user),
+) -> dict:
+    """知识图谱关系边 — 前端拓扑视图画线用。"""
+    base = "SELECT * FROM knowledge_graph_edges WHERE 1=1"
+    params: list = []
+    idx = 1
+    if source:
+        base += f" AND source_id=${idx}"
+        params.append(source)
+        idx += 1
+    if target:
+        base += f" AND target_id=${idx}"
+        params.append(target)
+        idx += 1
+    base += f" LIMIT ${idx}"
+    params.append(limit)
+    rows = await ds.query(base, params)
+    return {"success": True, "data": snake_to_camel_list(rows or [])}
+
+
+@router.get("/topology/changes")
+async def get_topology_changes(
+    limit: int = Query(50, le=200),
+    request: Request = None,
+    user=Depends(get_current_user),
+) -> dict:
+    """拓扑变更历史 — 前端 TopologyView Change History 选项卡。"""
+    from dataclasses import asdict
+    svc = _c(request).topology_discovery()
+    diffs = svc.get_diff_history(limit=limit)
+    return {"success": True, "data": [asdict(d) for d in diffs]}
 
 
 @router.get("/knowledge/stats")
@@ -3025,3 +3100,123 @@ async def get_ai_providers_usage(
             "errorCount": r.get("error_count", 0),
         })
     return {"success": True, "data": result}
+
+
+# ---------------------------------------------------------------------------
+# RAG Engine
+# ---------------------------------------------------------------------------
+
+@router.post("/rag/query")
+async def rag_query(
+    request: Request,
+    rag=Depends(get_rag_engine),
+    user=Depends(get_current_user),
+) -> dict:
+    """通用 RAG 查询。"""
+    body = await request.json()
+    question = body.get("question", "")
+    if not question:
+        raise HTTPException(status_code=400, detail="question is required")
+    if not rag.is_initialized():
+        await rag.initialize()
+    result = await rag.query(question, body.get("context"))
+    return {"success": True, "data": result}
+
+
+@router.post("/rag/analyze-alert")
+async def rag_analyze_alert(
+    request: Request,
+    rag=Depends(get_rag_engine),
+    user=Depends(get_current_user),
+) -> dict:
+    """增强告警分析 (Agentic RAG)。"""
+    body = await request.json()
+    alert_event = body.get("alertEvent", {})
+    metrics = body.get("metrics")
+    if not alert_event:
+        raise HTTPException(status_code=400, detail="alertEvent is required")
+    if not rag.is_initialized():
+        await rag.initialize()
+    result = await rag.analyze_alert(alert_event, metrics)
+    return {"success": True, "data": result}
+
+
+@router.post("/rag/generate-remediation")
+async def rag_generate_remediation(
+    request: Request,
+    rag=Depends(get_rag_engine),
+    user=Depends(get_current_user),
+) -> dict:
+    """增强修复方案生成。"""
+    body = await request.json()
+    analysis = body.get("analysis", {})
+    if not analysis:
+        raise HTTPException(status_code=400, detail="analysis is required")
+    if not rag.is_initialized():
+        await rag.initialize()
+    result = await rag.generate_remediation(analysis)
+    return {"success": True, "data": result}
+
+
+@router.post("/rag/assess-config-risk")
+async def rag_assess_config_risk(
+    request: Request,
+    rag=Depends(get_rag_engine),
+    user=Depends(get_current_user),
+) -> dict:
+    """配置变更风险评估。"""
+    body = await request.json()
+    diff = body.get("diff", {})
+    if not diff:
+        raise HTTPException(status_code=400, detail="diff is required")
+    if not rag.is_initialized():
+        await rag.initialize()
+    result = await rag.assess_config_risk(diff)
+    return {"success": True, "data": result}
+
+
+@router.post("/rag/analyze-root-cause")
+async def rag_analyze_root_cause(
+    request: Request,
+    rag=Depends(get_rag_engine),
+    user=Depends(get_current_user),
+) -> dict:
+    """增强根因分析 (带并发控制)。"""
+    body = await request.json()
+    event = body.get("event", {})
+    if not event:
+        raise HTTPException(status_code=400, detail="event is required")
+    if not rag.is_initialized():
+        await rag.initialize()
+    result = await rag.analyze_root_cause(event)
+    return {"success": True, "data": result}
+
+
+@router.get("/rag/stats")
+async def rag_get_stats(
+    rag=Depends(get_rag_engine),
+    user=Depends(get_current_user),
+) -> dict:
+    """RAG Engine 统计信息。"""
+    return {
+        "success": True,
+        "data": {
+            "stats": rag.get_stats(),
+            "config": rag.get_config(),
+            "concurrency": rag.get_rag_concurrency_stats(),
+            "analysisCache": rag.get_analysis_cache_stats(),
+            "rootCauseCache": rag.get_root_cause_cache_stats(),
+        },
+    }
+
+
+@router.put("/rag/config")
+async def rag_update_config(
+    request: Request,
+    rag=Depends(get_rag_engine),
+    user=Depends(get_current_user),
+) -> dict:
+    """更新 RAG Engine 配置。"""
+    body = await request.json()
+    rag.update_config(**body)
+    return {"success": True, "data": rag.get_config()}

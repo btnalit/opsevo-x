@@ -104,7 +104,9 @@ class PgDataStore(DataStore):
         async with pool.connection() as conn:
             async with conn.cursor() as cur:
                 await cur.execute(sql, params)
-                return cur.rowcount if cur.rowcount >= 0 else 0
+                rowcount = cur.rowcount if cur.rowcount >= 0 else 0
+            await conn.commit()
+            return rowcount
 
     async def transaction(self, fn: Callable[[DataStoreTransaction], Awaitable[T]]) -> T:
         """Run *fn* inside a BEGIN / COMMIT block.

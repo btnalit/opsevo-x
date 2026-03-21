@@ -25,7 +25,17 @@ _RUNTIME_INTERPRETERS: dict[str, str] = {
 
 
 class CapsuleRunner:
-    """通过 subprocess 执行 capsule 入口脚本。"""
+    """通过 subprocess 执行 capsule 入口脚本。
+
+    安全措施：
+    - 路径校验：entrypoint 必须在 capsule_dir 内
+    - 环境变量清理：只传递白名单环境变量
+    - 超时控制：默认 30s
+    - 工作目录隔离到 capsule_dir
+    """
+
+    # 允许传递给子进程的环境变量白名单
+    _ENV_WHITELIST = {"PATH", "HOME", "LANG", "LC_ALL", "PYTHONPATH", "NODE_PATH", "TERM"}
 
     async def run(
         self,
@@ -50,8 +60,31 @@ class CapsuleRunner:
         effective_runtime = capsule_meta.get("runtime", runtime)
 
         interpreter = self._resolve_interpreter(effective_runtime)
-        entrypoint_path = str(capsule_dir / entrypoint)
+        entrypoint_path = capsule_dir / entrypoint
+
+        # 安全校验：entrypoint 必须在 capsule_dir 内（防止路径穿越）
+        try:
+            entrypoint_resolved = entrypoint_path.resolve()
+            capsule_resolved = capsule_dir.resolve()
+            if not str(entrypoint_resolved).startswith(str(capsule_resolved)):
+                msg = f"Path traversal detected: {entrypoint} escapes capsule directory"
+                logger.error("capsule_path_traversal", entrypoint=entrypoint, capsule_dir=str(capsule_dir))
+                return {"status": "error", "error": msg}
+        except (OSError, ValueError) as exc:
+            return {"status": "error", "error": f"Path validation failed: {exc}"}
+
+        if not entrypoint_resolved.is_file():
+            return {"status": "error", "error": f"Entrypoint not found: {entrypoint}"}
+
         stdin_bytes = json.dumps(input_data, ensure_ascii=False).encode("utf-8")
+
+        # 构建受限环境变量（仅白名单）
+        import os
+        safe_env = {k: v for k, v in os.environ.items() if k in self._ENV_WHITELIST}
+        # 追加 capsule.json 中声明的额外环境变量
+        capsule_env = capsule_meta.get("env", {})
+        if isinstance(capsule_env, dict):
+            safe_env.update(capsule_env)
 
         logger.info(
             "capsule_run_start",
@@ -65,11 +98,12 @@ class CapsuleRunner:
         try:
             proc = await asyncio.create_subprocess_exec(
                 interpreter,
-                entrypoint_path,
+                str(entrypoint_resolved),
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                cwd=str(capsule_dir),
+                cwd=str(capsule_resolved),
+                env=safe_env,
             )
         except FileNotFoundError:
             msg = f"Interpreter not found: {interpreter}"

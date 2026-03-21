@@ -114,6 +114,7 @@ class JsonParser(FileParser):
             data = json.loads(text)
             pretty = json.dumps(data, ensure_ascii=False, indent=2)
         except Exception:
+            logger.warning("json_parse_failed_using_raw_text", filename=filename)
             pretty = text
         return [KnowledgeEntrySchema(title=filename, content=pretty, tags=["json"])]
 

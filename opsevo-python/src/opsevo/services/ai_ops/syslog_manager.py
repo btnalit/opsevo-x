@@ -16,6 +16,7 @@ Requirements: 15.3, 15.4, 1.6
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import time
 import uuid
@@ -782,10 +783,89 @@ class SyslogManager:
 
     # ─── CRUD helpers ───
 
+    async def update_parse_rule(self, rule_id: str, **kwargs: Any) -> ParseRule | None:
+        """Update a parse rule by id. Accepts any combination of: name, pattern, pattern_type, extract_fields, priority, enabled."""
+        _ALLOWED = {"name", "pattern", "pattern_type", "extract_fields", "priority", "enabled"}
+        sets, params, idx = [], [], 1
+        for k, v in kwargs.items():
+            if k not in _ALLOWED:
+                continue
+            if k == "extract_fields" and isinstance(v, list):
+                v = json.dumps(v)
+            sets.append(f"{k} = ${idx}")
+            params.append(v)
+            idx += 1
+        if not sets:
+            return None
+        params.append(rule_id)
+        await self._data_store.execute(
+            f"UPDATE syslog_parse_rules SET {', '.join(sets)} WHERE id = ${idx} AND pattern_type != 'filter'",
+            tuple(params),
+        )
+        await self.load_parse_rules()
+        return next((r for r in self._parse_rules if r.id == rule_id), None)
+
+    async def update_source_mapping(self, mapping_id: str, **kwargs: Any) -> SourceMapping | None:
+        """Update a source mapping by id. Accepts: source_ip, source_cidr, device_id, description."""
+        _ALLOWED = {"source_ip", "source_cidr", "device_id", "description"}
+        sets, params, idx = [], [], 1
+        for k, v in kwargs.items():
+            if k not in _ALLOWED:
+                continue
+            sets.append(f"{k} = ${idx}")
+            params.append(v)
+            idx += 1
+        if not sets:
+            return None
+        params.append(mapping_id)
+        await self._data_store.execute(
+            f"UPDATE syslog_source_mappings SET {', '.join(sets)} WHERE id = ${idx}",
+            tuple(params),
+        )
+        await self.load_source_mappings()
+        return next((m for m in self._source_mappings if m.id == mapping_id), None)
+
+    async def update_filter_rule(self, rule_id: str, **kwargs: Any) -> FilterRule | None:
+        """Update a filter rule by id. Accepts: name, source_ip, facility, severity_min, severity_max, keyword, action, enabled."""
+        _NAME_FIELDS = {"name", "enabled"}
+        _FILTER_FIELDS = {"source_ip", "facility", "severity_min", "severity_max", "keyword", "action"}
+        # For filter rules stored in syslog_parse_rules with pattern_type='filter',
+        # name/enabled are direct columns; the rest are packed in extract_fields JSON.
+        direct_sets, direct_params, idx = [], [], 1
+        filter_updates: dict[str, Any] = {}
+        for k, v in kwargs.items():
+            if k in _NAME_FIELDS:
+                direct_sets.append(f"{k} = ${idx}")
+                direct_params.append(v)
+                idx += 1
+            elif k in _FILTER_FIELDS:
+                filter_updates[k] = v
+        if filter_updates:
+            # Read current extract_fields, merge, then update
+            row = await self._data_store.query_one(
+                "SELECT extract_fields FROM syslog_parse_rules WHERE id = $1 AND pattern_type = 'filter'",
+                (rule_id,),
+            )
+            if row is None:
+                return None
+            current = row["extract_fields"] if isinstance(row["extract_fields"], dict) else {}
+            current.update(filter_updates)
+            direct_sets.append(f"extract_fields = ${idx}")
+            direct_params.append(json.dumps(current))
+            idx += 1
+        if not direct_sets:
+            return None
+        direct_params.append(rule_id)
+        await self._data_store.execute(
+            f"UPDATE syslog_parse_rules SET {', '.join(direct_sets)} WHERE id = ${idx} AND pattern_type = 'filter'",
+            tuple(direct_params),
+        )
+        await self.load_filter_rules()
+        return next((r for r in self._filter_rules if r.id == rule_id), None)
+
     async def add_parse_rule(self, name: str, pattern: str, pattern_type: str,
                              extract_fields: list[str], priority: int, enabled: bool = True) -> ParseRule:
         rule_id = str(uuid.uuid4())
-        import json
         await self._data_store.execute(
             "INSERT INTO syslog_parse_rules (id, name, pattern, pattern_type, extract_fields, priority, enabled) "
             "VALUES ($1, $2, $3, $4, $5, $6, $7)",
@@ -833,7 +913,6 @@ class SyslogManager:
                               severity_max: int | None = None, keyword: str | None = None,
                               action: str = "drop", enabled: bool = True) -> FilterRule:
         rule_id = str(uuid.uuid4())
-        import json
         fields = {
             "source_ip": source_ip, "facility": facility,
             "severity_min": severity_min, "severity_max": severity_max,

@@ -24,6 +24,7 @@
         <el-select v-model="form.deviceTypes" multiple placeholder="留空表示通用" style="width:100%">
           <el-option label="RouterOS" value="routeros" />
           <el-option label="Linux" value="linux" />
+          <el-option label="OpenWrt" value="openwrt" />
           <el-option label="SNMP 设备" value="snmp" />
           <el-option label="API 设备" value="api" />
         </el-select>

@@ -177,7 +177,7 @@ const loadSupportedTypes = async () => {
     supportedTypes.value = [
       { extension: '.md', mimeTypes: ['text/markdown'], description: 'Markdown 文档', maxSize: 10 * 1024 * 1024 },
       { extension: '.txt', mimeTypes: ['text/plain'], description: '纯文本文件', maxSize: 5 * 1024 * 1024 },
-      { extension: '.rsc', mimeTypes: ['text/plain'], description: 'RouterOS 配置', maxSize: 5 * 1024 * 1024 },
+      { extension: '.rsc', mimeTypes: ['text/plain'], description: '设备配置脚本 (.rsc)', maxSize: 5 * 1024 * 1024 },
       { extension: '.json', mimeTypes: ['application/json'], description: 'JSON 文件', maxSize: 10 * 1024 * 1024 }
     ]
   }

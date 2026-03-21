@@ -377,7 +377,7 @@ class McpServerHandler:
                     },
                 })
             except Exception:
-                pass
+                logger.warning("mcp_audit_log_failed", tool=tool_name, exc_info=True)
 
     def get_tool_names(self) -> list[str]:
         return list(self._tools.keys())

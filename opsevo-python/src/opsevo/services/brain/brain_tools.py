@@ -33,6 +33,12 @@ class BrainTools:
         skill_registry: Any = None,
         mcp_client_manager: Any = None,
         device_orchestrator: Any = None,
+        # Evolution dependencies
+        alert_engine: Any = None,
+        rule_evolution_service: Any = None,
+        knowledge_distiller: Any = None,
+        fault_healer: Any = None,
+        pattern_learner: Any = None,
     ) -> None:
         self._device_pool = device_pool
         self._datastore = datastore
@@ -44,6 +50,12 @@ class BrainTools:
         self._skill_registry = skill_registry
         self._mcp_client_manager = mcp_client_manager
         self._device_orchestrator = device_orchestrator
+        # Evolution services
+        self._alert_engine = alert_engine
+        self._rule_evolution_service = rule_evolution_service
+        self._knowledge_distiller = knowledge_distiller
+        self._fault_healer = fault_healer
+        self._pattern_learner = pattern_learner
 
         # Rate limiting state for AI self-creation operations
         self._skill_creates_this_tick: int = 0
@@ -320,6 +332,106 @@ class BrainTools:
         except Exception as exc:
             return {"error": str(exc)}
 
+    # ------------------------------------------------------------------
+    # Evolution tools — 自主进化闭环
+    # ------------------------------------------------------------------
+    async def _tool_evolve_alert_rule(self, params: dict, **_: Any) -> dict:
+        """Auto-tune an alert rule's threshold based on recent metrics, then apply."""
+        rule_id = params.get("rule_id", "")
+        if not rule_id:
+            return {"error": "rule_id required"}
+        if not self._rule_evolution_service:
+            return {"error": "rule_evolution_service not available"}
+        if not self._alert_engine:
+            return {"error": "alert_engine not available"}
+        try:
+            # Gather recent metric values for this rule from DB
+            metrics: list[dict] = []
+            if self._datastore:
+                rows = await self._datastore.query(
+                    "SELECT value, timestamp FROM metric_samples WHERE rule_id=$1 ORDER BY timestamp DESC LIMIT 100",
+                    [rule_id],
+                )
+                metrics = rows if rows else []
+            if not metrics:
+                # Fallback: use params-provided metrics
+                metrics = params.get("metrics", [])
+            result = await self._rule_evolution_service.auto_tune(rule_id, metrics)
+            if not result.get("tuned"):
+                return {"success": False, "reason": "insufficient data to tune"}
+            # Apply the tuned threshold to the alert rule
+            new_threshold = result["suggested_threshold"]
+            await self._alert_engine.update_rule(rule_id, {"threshold": new_threshold})
+            logger.info("evolve_alert_rule_applied", rule_id=rule_id, threshold=new_threshold, clamped=result.get("clamped"))
+            return {"success": True, "rule_id": rule_id, "new_threshold": new_threshold, **result}
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    async def _tool_distill_knowledge(self, params: dict, **_: Any) -> dict:
+        """Trigger knowledge distillation from accumulated Brain experiences."""
+        if not self._knowledge_distiller:
+            return {"error": "knowledge_distiller not available"}
+        try:
+            distilled = await self._knowledge_distiller.distill()
+            return {
+                "success": True,
+                "distilled_count": len(distilled),
+                "titles": [d.title for d in distilled[:10]],
+            }
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    async def _tool_auto_heal(self, params: dict, device_id: str | None = None) -> dict:
+        """Auto-remediate an alert using FaultHealer + DeviceDriver."""
+        alert_id = params.get("alert_id", "")
+        did = params.get("device_id") or device_id
+        if not alert_id:
+            return {"error": "alert_id required"}
+        if not self._fault_healer:
+            return {"error": "fault_healer not available"}
+        if not did or not self._device_pool:
+            return {"error": "device_id and device_pool required for auto-heal"}
+        try:
+            # Fetch alert data
+            alert: dict = {}
+            if self._datastore:
+                row = await self._datastore.query_one(
+                    "SELECT * FROM alert_events WHERE id=$1", [alert_id],
+                )
+                if row:
+                    alert = dict(row)
+            if not alert:
+                alert = {"id": alert_id, "message": params.get("message", ""), "severity": params.get("severity", "unknown")}
+            driver = await self._device_pool.get_driver(did)
+            result = await self._fault_healer.heal(alert, driver)
+            logger.info("auto_heal_executed", alert_id=alert_id, device_id=did, success=result.get("success"))
+            return {"success": True, **result}
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    async def _tool_learn_patterns(self, params: dict, **_: Any) -> dict:
+        """Feed recent alert events to PatternLearner for pattern recognition."""
+        if not self._pattern_learner:
+            return {"error": "pattern_learner not available"}
+        try:
+            events: list[dict] = params.get("events", [])
+            if not events and self._datastore:
+                rows = await self._datastore.query(
+                    "SELECT severity, type, message, timestamp FROM alert_events ORDER BY timestamp DESC LIMIT 200",
+                )
+                events = rows if rows else []
+            if not events:
+                return {"success": False, "reason": "no events to learn from"}
+            self._pattern_learner.learn(events)
+            top = self._pattern_learner.get_top_patterns(10)
+            return {
+                "success": True,
+                "events_learned": len(events),
+                "top_patterns": [{"pattern": p, "count": c} for p, c in top],
+            }
+        except Exception as exc:
+            return {"error": str(exc)}
+
     async def _tool_collect_metrics(self, params: dict, device_id: str | None = None) -> dict:
         """Collect metrics from a device via DeviceDriver."""
         did = params.get("device_id") or device_id
@@ -540,5 +652,42 @@ class BrainTools:
                     {"device_id": "router-01"},
                 ],
                 "negative_constraint": "仅用于采集设备指标数据，不要用于修改设备配置",
+            },
+            # ── Evolution tools ──────────────────────────────────────────
+            "evolve_alert_rule": {
+                "name": "evolve_alert_rule",
+                "description": "Auto-tune an alert rule threshold based on recent metrics using statistical analysis (IQR outlier filtering + guardrails), then apply the new threshold to the rule",
+                "parameters": {"rule_id": "string", "metrics": "array?"},
+                "input_examples": [
+                    {"rule_id": "rule-cpu-high"},
+                    {"rule_id": "rule-mem-usage", "metrics": [{"value": 75}, {"value": 80}, {"value": 78}]},
+                ],
+                "negative_constraint": "仅用于自动调优告警规则阈值，不要用于创建新规则或手动设置阈值",
+            },
+            "distill_knowledge": {
+                "name": "distill_knowledge",
+                "description": "Trigger knowledge distillation — extract reusable knowledge from accumulated Brain experiences and store into knowledge base",
+                "parameters": {},
+                "input_examples": [{}],
+                "negative_constraint": "仅用于提炼经验为知识，不要用于搜索知识库（搜索请用 search_knowledge）",
+            },
+            "auto_heal": {
+                "name": "auto_heal",
+                "description": "Auto-remediate an alert by generating and executing a remediation script via FaultHealer + DeviceDriver. Uses profile remediation templates or AI-generated scripts",
+                "parameters": {"alert_id": "string", "device_id": "string", "message": "string?", "severity": "string?"},
+                "input_examples": [
+                    {"alert_id": "alert-2024-001", "device_id": "router-01"},
+                ],
+                "negative_constraint": "仅用于自动修复已知告警，不要用于手动执行命令（手动请用 execute_command）；修复操作不可逆，请确认告警真实性",
+            },
+            "learn_patterns": {
+                "name": "learn_patterns",
+                "description": "Feed recent alert events to PatternLearner for pattern recognition and frequency analysis. Returns top recurring patterns",
+                "parameters": {"events": "array?"},
+                "input_examples": [
+                    {},
+                    {"events": [{"severity": "high", "type": "cpu_spike"}, {"severity": "medium", "type": "mem_leak"}]},
+                ],
+                "negative_constraint": "仅用于学习告警模式，不要用于分析单个告警（分析请用 analyze_alert）",
             },
         }

@@ -62,12 +62,20 @@ class VectorStore:
 
     async def search(self, query: str, top_k: int = 5, threshold: float = 0.0) -> list[dict[str, Any]]:
         vec = await self._emb.embed_single(query)
-        rows = await self._ds.query(
-            f"SELECT id, content, metadata, 1 - (embedding <=> $1::vector) AS score "
-            f"FROM {self.TABLE} ORDER BY embedding <=> $1::vector LIMIT $2",
-            (vec, top_k),
-        )
-        return [r for r in rows if r.get("score", 0) >= threshold]
+        if threshold > 0:
+            rows = await self._ds.query(
+                f"SELECT id, content, metadata, 1 - (embedding <=> $1::vector) AS score "
+                f"FROM {self.TABLE} WHERE 1 - (embedding <=> $1::vector) >= $3 "
+                f"ORDER BY embedding <=> $1::vector LIMIT $2",
+                (vec, top_k, threshold),
+            )
+        else:
+            rows = await self._ds.query(
+                f"SELECT id, content, metadata, 1 - (embedding <=> $1::vector) AS score "
+                f"FROM {self.TABLE} ORDER BY embedding <=> $1::vector LIMIT $2",
+                (vec, top_k),
+            )
+        return rows
 
     async def delete(self, doc_id: str) -> bool:
         return (await self._ds.execute(f"DELETE FROM {self.TABLE} WHERE id = $1", (doc_id,))) > 0

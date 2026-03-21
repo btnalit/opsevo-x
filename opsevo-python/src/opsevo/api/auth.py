@@ -54,7 +54,9 @@ async def login(
         return ErrorResponse(error="用户名或密码错误", code="INVALID_CREDENTIALS").model_dump()
 
     try:
-        access = auth.generate_access_token(str(user["id"]), user["username"])
+        access = auth.generate_access_token(
+            str(user["id"]), user["username"], tenant_id=user.get("tenant_id"),
+        )
         refresh = auth.generate_refresh_token(str(user["id"]))
     except Exception as exc:
         logger.error("login_token_generation_error", user_id=str(user["id"]), error=str(exc), exc_info=True)
@@ -118,7 +120,9 @@ async def refresh(
     if user is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="User not found")
 
-    access = auth.generate_access_token(user_id, user["username"])
+    access = auth.generate_access_token(
+        user_id, user["username"], tenant_id=user.get("tenant_id"),
+    )
     new_refresh = auth.generate_refresh_token(user_id)
 
     return RefreshResponse(

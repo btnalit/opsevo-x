@@ -24,8 +24,8 @@
 
       <div class="description-section">
         <p>
-          OPSEVO 是一个专为 RouterOS 设计的高级智能运维管理平台。
-          致力于通过 AI 技术提升网络运维效率，实现自动化监控、故障自愈和智能分析。
+          OPSEVO 是一个通用智能运维管理平台（AIOps）。
+          致力于通过 AI 技术提升运维效率，实现自动化监控、故障自愈和智能分析。
         </p>
       </div>
       

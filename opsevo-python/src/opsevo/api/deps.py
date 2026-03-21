@@ -90,3 +90,7 @@ def get_device_id(
     reading the query param directly.
     """
     return deviceId.strip() if deviceId and deviceId.strip() else None
+
+
+def get_rag_engine(request: Request):
+    return _get_container(request).rag_engine()

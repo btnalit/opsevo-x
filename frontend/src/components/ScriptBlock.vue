@@ -4,7 +4,7 @@
     <div class="script-header">
       <div class="script-info">
         <el-icon :size="16" color="#67c23a"><i-ep-document /></el-icon>
-        <span class="script-language">RouterOS Script</span>
+        <span class="script-language">Device Script</span>
         <el-tag v-if="lineCount > 1" type="info" size="small">
           {{ lineCount }} 行
         </el-tag>
@@ -64,7 +64,7 @@
           show-icon
         >
           <template #default>
-            执行脚本可能会修改 RouterOS 配置，请确保您了解脚本的作用。
+            执行脚本可能会修改设备配置，请确保您了解脚本的作用。
           </template>
         </el-alert>
 
@@ -123,7 +123,7 @@ import { scriptApi, type ScriptExecuteResult, type ScriptValidationResult } from
 // ==================== Props ====================
 
 interface Props {
-  /** The RouterOS script content */
+  /** The device script content */
   script: string
   /** Session ID for tracking execution history */
   sessionId?: string
@@ -158,10 +158,10 @@ const executionResult = ref<ScriptExecuteResult | null>(null)
 /** Highlighted code using highlight.js */
 const highlightedCode = computed(() => {
   try {
-    // Register RouterOS language if not already registered
+    // Register RouterOS language for syntax highlighting if not already registered
     if (!hljs.getLanguage('routeros')) {
       hljs.registerLanguage('routeros', () => ({
-        name: 'RouterOS',
+        name: 'DeviceScript',
         keywords: {
           keyword: 'add set remove enable disable print export import find where',
           built_in: 'ip interface system tool user queue firewall routing bridge certificate'

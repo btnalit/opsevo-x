@@ -228,7 +228,7 @@ const validateInterval = (_rule: unknown, value: string, callback: (error?: Erro
     callback(new Error('请输入执行间隔'))
     return
   }
-  // RouterOS interval formats: 1d, 1h30m, 00:30:00, etc.
+  // Interval formats: 1d, 1h30m, 00:30:00, etc.
   const intervalRegex = /^(\d+[wdhms])+$|^(\d{1,2}:){1,2}\d{1,2}$/
   if (!intervalRegex.test(value)) {
     callback(new Error('格式无效，如: 1d, 1h30m, 00:30:00'))
@@ -287,7 +287,7 @@ const loadSchedulers = async () => {
     if (result.success && Array.isArray(result.data)) {
       schedulers.value = result.data.map((s: Scheduler) => ({
         ...s,
-        // RouterOS API 返回的布尔值可能是字符串 "true"/"false"
+        // API 返回的布尔值可能是字符串 "true"/"false"
         disabled: toBool(s.disabled),
         _toggling: false
       }))

@@ -7,7 +7,7 @@
       <p class="empty-hint">
         {{ knowledgeEnhancedMode 
           ? 'AI 助手将结合知识库为您提供更精准的回答' 
-          : 'AI 助手可以帮助您配置 RouterOS，生成脚本，解答网络问题' 
+          : 'AI 助手可以帮助您管理设备，生成脚本，解答运维问题' 
         }}
       </p>
       <!-- Quick Actions for Knowledge Enhanced Mode -->

@@ -313,3 +313,247 @@ async def disable_system_scheduler(
         [task_id, device_id],
     )
     return {"success": True, "message": "Scheduler task disabled"}
+
+
+# ---------------------------------------------------------------------------
+# 全局代理路由 — 兼容前端单设备模式 (不带 device_id)
+# 前端 system.ts 请求 /api/system/scheduler，自动选取第一台设备
+# ---------------------------------------------------------------------------
+
+async def _resolve_device_id(request: Request) -> str:
+    """从当前用户的设备列表中取第一台设备 ID。"""
+    dm = request.app.state.container.device_manager()
+    user = request.state.user if hasattr(request.state, "user") else {}
+    devices = await dm.list_devices(tenant_id=str(user.get("id", "")))
+    if not devices:
+        raise HTTPException(404, "No devices found")
+    return devices[0]["id"]
+
+
+@router.get("/api/system/scheduler")
+async def get_system_schedulers_global(
+    request: Request,
+    ds=Depends(get_datastore),
+    user: dict = Depends(get_current_user),
+):
+    request.state.user = user
+    device_id = await _resolve_device_id(request)
+    rows = await ds.query(
+        "SELECT * FROM system_schedulers WHERE device_id=$1 ORDER BY created_at DESC",
+        [device_id],
+    )
+    return {"success": True, "data": snake_to_camel_list(rows)}
+
+
+@router.post("/api/system/scheduler")
+async def create_system_scheduler_global(
+    request: Request,
+    ds=Depends(get_datastore),
+    user: dict = Depends(get_current_user),
+):
+    request.state.user = user
+    device_id = await _resolve_device_id(request)
+    body = await request.json()
+    tid = str(uuid.uuid4())
+    await ds.execute(
+        "INSERT INTO system_schedulers (id, device_id, name, cron, script_id, enabled, created_at) "
+        "VALUES ($1,$2,$3,$4,$5,$6,NOW())",
+        [tid, device_id, body.get("name", ""), body.get("cron", ""),
+         body.get("scriptId", body.get("script_id", "")), body.get("enabled", True)],
+    )
+    row = await ds.query_one("SELECT * FROM system_schedulers WHERE id=$1", [tid])
+    return {"success": True, "data": snake_to_camel(row)}
+
+
+@router.patch("/api/system/scheduler/{task_id}")
+async def update_system_scheduler_global(
+    task_id: str,
+    request: Request,
+    ds=Depends(get_datastore),
+    user: dict = Depends(get_current_user),
+):
+    _ALLOWED = {"name", "cron", "script_id", "enabled", "description"}
+    body = camel_to_snake_keys(await request.json())
+    sets, params, idx = [], [], 1
+    for k, v in body.items():
+        if k not in _ALLOWED:
+            continue
+        sets.append(f"{k} = ${idx}")
+        params.append(v)
+        idx += 1
+    if sets:
+        params.append(task_id)
+        await ds.execute(
+            f"UPDATE system_schedulers SET {', '.join(sets)} WHERE id = ${idx}",
+            tuple(params),
+        )
+    row = await ds.query_one("SELECT * FROM system_schedulers WHERE id=$1", [task_id])
+    if not row:
+        raise HTTPException(404, "Scheduler task not found")
+    return {"success": True, "data": snake_to_camel(row)}
+
+
+@router.delete("/api/system/scheduler/{task_id}")
+async def delete_system_scheduler_global(
+    task_id: str,
+    ds=Depends(get_datastore),
+    user: dict = Depends(get_current_user),
+):
+    await ds.execute("DELETE FROM system_schedulers WHERE id=$1", [task_id])
+    return {"success": True, "message": "Scheduler task deleted"}
+
+
+@router.post("/api/system/scheduler/{task_id}/enable")
+async def enable_system_scheduler_global(
+    task_id: str,
+    ds=Depends(get_datastore),
+    user: dict = Depends(get_current_user),
+):
+    await ds.execute("UPDATE system_schedulers SET enabled=true WHERE id=$1", [task_id])
+    return {"success": True, "message": "Scheduler task enabled"}
+
+
+@router.post("/api/system/scheduler/{task_id}/disable")
+async def disable_system_scheduler_global(
+    task_id: str,
+    ds=Depends(get_datastore),
+    user: dict = Depends(get_current_user),
+):
+    await ds.execute("UPDATE system_schedulers SET enabled=false WHERE id=$1", [task_id])
+    return {"success": True, "message": "Scheduler task disabled"}
+
+
+# ---------------------------------------------------------------------------
+# 全局代理路由 — Scripts (兼容前端单设备模式)
+# ---------------------------------------------------------------------------
+
+@router.get("/api/system/scripts")
+async def get_system_scripts_global(
+    request: Request,
+    ds=Depends(get_datastore),
+    user: dict = Depends(get_current_user),
+):
+    request.state.user = user
+    device_id = await _resolve_device_id(request)
+    rows = await ds.query(
+        "SELECT * FROM system_scripts WHERE device_id=$1 ORDER BY created_at DESC",
+        [device_id],
+    )
+    return {"success": True, "data": snake_to_camel_list(rows)}
+
+
+@router.post("/api/system/scripts")
+async def create_system_script_global(
+    request: Request,
+    ds=Depends(get_datastore),
+    user: dict = Depends(get_current_user),
+):
+    request.state.user = user
+    device_id = await _resolve_device_id(request)
+    body = await request.json()
+    sid = str(uuid.uuid4())
+    await ds.execute(
+        "INSERT INTO system_scripts (id, device_id, name, content, language, created_at) "
+        "VALUES ($1,$2,$3,$4,$5,NOW())",
+        [sid, device_id, body.get("name", ""), body.get("content", ""), body.get("language", "cli")],
+    )
+    row = await ds.query_one("SELECT * FROM system_scripts WHERE id=$1", [sid])
+    return {"success": True, "data": snake_to_camel(row)}
+
+
+@router.patch("/api/system/scripts/{script_id}")
+async def update_system_script_global(
+    script_id: str,
+    request: Request,
+    ds=Depends(get_datastore),
+    user: dict = Depends(get_current_user),
+):
+    _ALLOWED = {"name", "content", "language", "description"}
+    body = await request.json()
+    sets, params, idx = [], [], 1
+    for k, v in body.items():
+        if k not in _ALLOWED:
+            continue
+        sets.append(f"{k} = ${idx}")
+        params.append(v)
+        idx += 1
+    if sets:
+        params.append(script_id)
+        await ds.execute(
+            f"UPDATE system_scripts SET {', '.join(sets)} WHERE id = ${idx}",
+            tuple(params),
+        )
+    row = await ds.query_one("SELECT * FROM system_scripts WHERE id=$1", [script_id])
+    if not row:
+        raise HTTPException(404, "Script not found")
+    return {"success": True, "data": snake_to_camel(row)}
+
+
+@router.delete("/api/system/scripts/{script_id}")
+async def delete_system_script_global(
+    script_id: str,
+    ds=Depends(get_datastore),
+    user: dict = Depends(get_current_user),
+):
+    await ds.execute("DELETE FROM system_scripts WHERE id=$1", [script_id])
+    return {"success": True, "message": "Script deleted"}
+
+
+@router.post("/api/system/scripts/{script_id}/run")
+async def run_system_script_global(
+    script_id: str,
+    request: Request,
+    ds=Depends(get_datastore),
+    user: dict = Depends(get_current_user),
+):
+    request.state.user = user
+    device_id = await _resolve_device_id(request)
+    row = await ds.query_one(
+        "SELECT * FROM system_scripts WHERE id=$1 AND device_id=$2",
+        [script_id, device_id],
+    )
+    if not row:
+        raise HTTPException(404, "Script not found")
+    pool = request.app.state.container.device_pool()
+    try:
+        driver = await pool.get_driver(device_id)
+        result = await driver.execute("run_script", {"content": row.get("content", "")})
+        return {"success": True, "data": result.data if hasattr(result, "data") else result}
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+
+# ---------------------------------------------------------------------------
+# 全局代理路由 — Power Management
+# ---------------------------------------------------------------------------
+
+@router.post("/api/system/reboot")
+async def reboot_device_global(
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    request.state.user = user
+    device_id = await _resolve_device_id(request)
+    pool = request.app.state.container.device_pool()
+    try:
+        driver = await pool.get_driver(device_id)
+        result = await driver.execute("reboot", {})
+        return {"success": True, "message": "Reboot initiated", "data": result.data if hasattr(result, "data") else None}
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+
+@router.post("/api/system/shutdown")
+async def shutdown_device_global(
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    request.state.user = user
+    device_id = await _resolve_device_id(request)
+    pool = request.app.state.container.device_pool()
+    try:
+        driver = await pool.get_driver(device_id)
+        result = await driver.execute("shutdown", {})
+        return {"success": True, "message": "Shutdown initiated", "data": result.data if hasattr(result, "data") else None}
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}

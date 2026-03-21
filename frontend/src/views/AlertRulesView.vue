@@ -205,7 +205,7 @@
             </template>
           </el-input>
           <div class="form-item-tip">
-            请输入 RouterOS 中的接口名称，可在「接口管理」页面查看
+            请输入设备中的接口名称，可在「接口管理」页面查看
           </div>
         </el-form-item>
 
@@ -384,7 +384,7 @@
             v-model="formData.autoResponse!.script"
             type="textarea"
             :rows="4"
-            placeholder="输入 RouterOS 脚本，告警触发时自动执行"
+            placeholder="输入修复脚本，告警触发时自动执行"
           />
           <div class="form-item-tip">
             示例：/interface enable ether1
@@ -502,7 +502,7 @@
 <script setup lang="ts">
 import { Plus, Refresh } from '@element-plus/icons-vue'
 
-import { ref, computed, reactive, onMounted } from 'vue'
+import { ref, computed, reactive, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
 import {
@@ -644,12 +644,10 @@ const isInterfaceStatus = computed(() => formData.metric === 'interface_status')
 // Load data on mount
 onMounted(() => {
   loadRules()
-  loadRules()
   loadChannels()
 })
 
 // Watch device changes
-import { watch } from 'vue'
 watch(currentDeviceId, () => {
   loadRules()
 })

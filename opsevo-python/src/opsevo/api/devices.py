@@ -216,12 +216,22 @@ async def create_device(
 async def get_device(
     device_id: str,
     request: Request,
+    orchestrator=Depends(get_device_orchestrator),
     user: dict = Depends(get_current_user),
 ):
     dm = _get_device_manager(request)
     device = await dm.get_device(device_id)
     if device is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Device not found")
+    
+    slot = orchestrator.get_device(device_id)
+    if slot:
+        device["status"] = slot.status
+        device["health_score"] = slot.health_score
+    else:
+        device["status"] = "offline"
+        device["health_score"] = 0
+
     return SuccessResponse(data=device).model_dump()
 
 

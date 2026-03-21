@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash VARCHAR(255) NOT NULL,
   role VARCHAR(50) NOT NULL DEFAULT 'viewer',
   tenant_id VARCHAR(100),
+  is_active BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   last_login_at TIMESTAMPTZ
@@ -1098,3 +1099,24 @@ CREATE TABLE IF NOT EXISTS scheduled_tasks (
   metadata JSONB NOT NULL DEFAULT '{}',
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- ============================================================
+-- brain_memory kv cache (ai_ops_kv)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS ai_ops_kv (
+  key VARCHAR(255) PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- ============================================================
+-- knowledge_embeddings for RAG vector store
+-- ============================================================
+CREATE TABLE IF NOT EXISTS knowledge_embeddings (
+    id TEXT PRIMARY KEY,
+    content TEXT NOT NULL,
+    metadata JSONB DEFAULT '{}',
+    embedding vector(384),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_knowledge_embeddings_embedding ON knowledge_embeddings USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);

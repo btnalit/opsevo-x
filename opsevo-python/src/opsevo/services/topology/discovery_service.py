@@ -71,6 +71,9 @@ class TopologyDiscoveryService:
         self._running = False
         self._started_at = 0.0
 
+        # 并发控制信号量 — 限制同时进行的设备查询轮次
+        self._discovery_semaphore = asyncio.Semaphore(1)
+
     # ─── Dependency injection ───
 
     def set_device_provider(self, fn: Callable[[], Awaitable[list[dict[str, Any]]]]) -> None:
@@ -181,49 +184,50 @@ class TopologyDiscoveryService:
             logger.warn("TopologyDiscovery: no device/connection provider set")
             return
 
-        start = time.time()
-        self._stats.total_rounds += 1
+        async with self._discovery_semaphore:
+            start = time.time()
+            self._stats.total_rounds += 1
 
-        try:
-            devices = await self._get_devices()
-            if not devices:
+            try:
+                devices = await self._get_devices()
+                if not devices:
+                    self._stats.successful_rounds += 1
+                    return
+
+                all_data = await collect_all_devices_data(
+                    devices, self._get_connection,
+                    max_concurrent=self._config.max_concurrent_device_queries,
+                )
+
+                # Track query errors
+                for data in all_data:
+                    self._stats.device_query_errors += len(data.errors)
+
+                skipped_ids = [
+                    d["id"] for d in devices
+                    if d["id"] not in {dd.device_id for dd in all_data}
+                ]
+
+                candidate = build_candidate_graph(
+                    all_data, self._config.endpoint_discovery_enabled,
+                )
+
+                self._advance_state_machine(candidate, skipped_ids, tier)
+
+                duration = (time.time() - start) * 1000
                 self._stats.successful_rounds += 1
-                return
+                self._stats.last_discovery_at = time.time()
+                # Running average
+                n = self._stats.successful_rounds
+                self._stats.average_duration_ms = (
+                    (self._stats.average_duration_ms * (n - 1) + duration) / n
+                )
 
-            all_data = await collect_all_devices_data(
-                devices, self._get_connection,
-                max_concurrent=self._config.max_concurrent_device_queries,
-            )
+                await self._save_graph()
 
-            # Track query errors
-            for data in all_data:
-                self._stats.device_query_errors += len(data.errors)
-
-            skipped_ids = [
-                d["id"] for d in devices
-                if d["id"] not in {dd.device_id for dd in all_data}
-            ]
-
-            candidate = build_candidate_graph(
-                all_data, self._config.endpoint_discovery_enabled,
-            )
-
-            self._advance_state_machine(candidate, skipped_ids, tier)
-
-            duration = (time.time() - start) * 1000
-            self._stats.successful_rounds += 1
-            self._stats.last_discovery_at = time.time()
-            # Running average
-            n = self._stats.successful_rounds
-            self._stats.average_duration_ms = (
-                (self._stats.average_duration_ms * (n - 1) + duration) / n
-            )
-
-            await self._save_graph()
-
-        except Exception as exc:
-            self._stats.failed_rounds += 1
-            logger.error("Discovery round failed", tier=tier, error=str(exc))
+            except Exception as exc:
+                self._stats.failed_rounds += 1
+                logger.error("Discovery round failed", tier=tier, error=str(exc))
 
     def _advance_state_machine(
         self, candidate: TopologyGraph, skipped_device_ids: list[str], tier: str,

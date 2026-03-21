@@ -2,7 +2,7 @@
  * Script Extractor Utility
  * 
  * Extracts device script code blocks from AI responses.
- * Supports multiple languages: routeros, bash, python, etc.
+ * Supports multiple languages: routeros, bash, python, cli, etc.
  * 
  * @module scriptExtractor
  */
@@ -124,19 +124,4 @@ export function extractFirstDeviceScript(text: string, language?: string): Scrip
   return scripts.length > 0 ? scripts[0] : null;
 }
 
-// ── Backward-compatible aliases (deprecated) ──
-
-/** @deprecated Use extractDeviceScripts(text, 'routeros') instead */
-export function extractRouterOSScripts(text: string): ScriptBlock[] {
-  return extractDeviceScripts(text, 'routeros');
-}
-
-/** @deprecated Use hasDeviceScripts(text, 'routeros') instead */
-export function hasRouterOSScripts(text: string): boolean {
-  return hasDeviceScripts(text, 'routeros');
-}
-
-/** @deprecated Use extractFirstDeviceScript(text, 'routeros') instead */
-export function extractFirstRouterOSScript(text: string): ScriptBlock | null {
-  return extractFirstDeviceScript(text, 'routeros');
-}
+// ── Backward-compatible aliases (deprecated, no callers — safe to remove in future) ──

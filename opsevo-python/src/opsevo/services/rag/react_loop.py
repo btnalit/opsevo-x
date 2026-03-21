@@ -127,6 +127,11 @@ class ReactLoopController:
         recent_actions: list[tuple[str, str]] = []  # for loop detection
 
         for i in range(max_iter):
+            # Trim message history to prevent context window exhaustion
+            # Keep system + user + last 12 messages (6 turns)
+            if len(messages) > 14:
+                messages = messages[:2] + messages[-12:]
+
             # Pass tools= for native function calling (Req 3.1)
             result = await self._adapter.chat(messages, tools=openai_tool_schemas)
 

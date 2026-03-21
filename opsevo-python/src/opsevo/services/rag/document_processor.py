@@ -74,12 +74,16 @@ class DocumentProcessor:
 
     async def process_batch(self, sources: list[DocumentSource]) -> list[ProcessedDocument]:
         all_docs: list[ProcessedDocument] = []
+        failed_count = 0
         for src in sources:
             try:
                 all_docs.extend(await self.process(src))
             except Exception:
+                failed_count += 1
                 logger.error("document_batch_item_failed", source_id=src.id)
-        logger.info("document_batch_done", total_sources=len(sources), total_chunks=len(all_docs))
+        if failed_count:
+            logger.warning("document_batch_partial_failure", failed=failed_count, total=len(sources))
+        logger.info("document_batch_done", total_sources=len(sources), total_chunks=len(all_docs), failed=failed_count)
         return all_docs
 
     # ------------------------------------------------------------------

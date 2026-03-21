@@ -59,7 +59,7 @@
         />
       </el-tooltip>
       
-      <el-tooltip content="包含 RouterOS 上下文" placement="top">
+      <el-tooltip content="包含设备上下文" placement="top">
         <el-switch
           :model-value="includeContext"
           @update:model-value="$emit('update:includeContext', Boolean($event))"

@@ -72,6 +72,7 @@ class AlertEngine:
         self._severity_map: dict[str, str] = {}
         self._preprocessed_handlers: list[Callable] = []
         self._initialized = False
+        self._load_failed = False
 
     def set_severity_map(self, mappings: dict[str, list[str]]) -> None:
         """Load severity mapping from Profile config, NOT hardcoded."""
@@ -100,6 +101,7 @@ class AlertEngine:
                 )
                 self._rules[rule.id] = rule
         except Exception:
+            self._load_failed = True
             logger.warning("alert_rules_load_failed_using_empty")
 
     async def _load_active_alerts(self) -> None:
@@ -118,6 +120,7 @@ class AlertEngine:
                 )
                 self._active_alerts[evt.id] = evt
         except Exception:
+            self._load_failed = True
             logger.warning("active_alerts_load_failed")
 
     # ------------------------------------------------------------------
@@ -148,21 +151,35 @@ class AlertEngine:
         rule = self._rules.get(rule_id)
         if not rule:
             raise ValueError(f"Rule {rule_id} not found")
-        for k, v in updates.items():
-            if hasattr(rule, k):
-                setattr(rule, k, v)
-        rule.updated_at = int(time.time() * 1000)
+        # 先 DB，成功后再更新内存（防止 DB 失败导致脑裂）
+        now = int(time.time() * 1000)
+        merged = {
+            "name": updates.get("name", rule.name),
+            "metric": updates.get("metric", rule.metric),
+            "operator": updates.get("operator", rule.operator),
+            "threshold": updates.get("threshold", rule.threshold),
+            "severity": updates.get("severity", rule.severity),
+            "enabled": updates.get("enabled", rule.enabled),
+            "cooldown_ms": updates.get("cooldown_ms", rule.cooldown_ms),
+            "auto_response": updates.get("auto_response", rule.auto_response),
+        }
         await self._ds.execute(
             "UPDATE alert_rules SET name=$1,metric=$2,operator=$3,threshold=$4,severity=$5,"
             "enabled=$6,cooldown_ms=$7,auto_response=$8,updated_at=$9 WHERE id=$10",
-            (rule.name, rule.metric, rule.operator, rule.threshold, rule.severity,
-             rule.enabled, rule.cooldown_ms, rule.auto_response, rule.updated_at, rule.id),
+            (merged["name"], merged["metric"], merged["operator"], merged["threshold"],
+             merged["severity"], merged["enabled"], merged["cooldown_ms"],
+             merged["auto_response"], now, rule.id),
         )
+        # DB 成功，更新内存
+        for k, v in merged.items():
+            setattr(rule, k, v)
+        rule.updated_at = now
         return rule
 
     async def delete_rule(self, rule_id: str) -> None:
-        self._rules.pop(rule_id, None)
+        # 先 DB，成功后再清缓存
         await self._ds.execute("DELETE FROM alert_rules WHERE id = $1", (rule_id,))
+        self._rules.pop(rule_id, None)
 
     async def get_rules(self, device_id: str | None = None) -> list[AlertRule]:
         rules = list(self._rules.values())
@@ -362,7 +379,7 @@ class AlertEngine:
                 else:
                     handler(evt)
             except Exception:
-                pass
+                logger.warning("preprocessed_handler_error", handler=str(handler))
 
     @staticmethod
     def _generate_syslog_fingerprint(event: dict[str, Any]) -> str:
@@ -400,4 +417,9 @@ class AlertEngine:
         logger.info("alert_engine_stopped")
 
     async def health_check(self) -> dict[str, Any]:
-        return {"healthy": self._initialized, "rules": len(self._rules), "active_alerts": len(self._active_alerts)}
+        return {
+            "healthy": self._initialized and not self._load_failed,
+            "rules": len(self._rules),
+            "active_alerts": len(self._active_alerts),
+            "load_failed": self._load_failed,
+        }

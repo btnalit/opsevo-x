@@ -81,6 +81,8 @@ class Container(containers.DeclarativeContainer):
     embedding_service = providers.Singleton(
         "opsevo.services.rag.embedding.EmbeddingService",
         settings=settings,
+        datastore=datastore,
+        crypto_service=crypto_service,
     )
 
     vector_store = providers.Singleton(
@@ -93,6 +95,11 @@ class Container(containers.DeclarativeContainer):
         "opsevo.services.rag.knowledge_base.KnowledgeBase",
         datastore=datastore,
         vector_store=vector_store,
+    )
+
+    rag_engine = providers.Singleton(
+        "opsevo.services.rag.rag_engine.RAGEngine",
+        knowledge_base=knowledge_base,
     )
 
     # ── AI-Ops core ──────────────────────────────────────────────────────
@@ -114,6 +121,19 @@ class Container(containers.DeclarativeContainer):
     fault_healer = providers.Singleton(
         "opsevo.services.ai_ops.fault_healer.FaultHealer",
         datastore=datastore,
+    )
+
+    rule_evolution_service = providers.Singleton(
+        "opsevo.services.ai_ops.rule_evolution_service.RuleEvolutionService",
+        datastore=datastore,
+    )
+
+    pattern_learner = providers.Singleton(
+        "opsevo.services.ai_ops.pattern_learner.PatternLearner",
+    )
+
+    evolution_engine = providers.Singleton(
+        "opsevo.services.ai_ops.evolution_engine.EvolutionEngine",
     )
 
     health_monitor = providers.Singleton(
@@ -179,6 +199,10 @@ class Container(containers.DeclarativeContainer):
     security_gateway = providers.Singleton(
         "opsevo.services.mcp.security_gateway.SecurityGateway",
         api_key_manager=api_key_manager,
+    )
+
+    oauth_interceptor = providers.Singleton(
+        "opsevo.services.mcp.oauth_interceptor.OAuthToolCallInterceptor",
     )
 
     # ── Metrics Collector ────────────────────────────────────────────────
@@ -251,6 +275,13 @@ class Container(containers.DeclarativeContainer):
         skill_manager=skill_manager,
     )
 
+    # ── Knowledge Distiller ───────────────────────────────────────────────
+    knowledge_distiller = providers.Singleton(
+        "opsevo.services.brain.knowledge_distiller.KnowledgeDistiller",
+        knowledge_base=knowledge_base,
+        datastore=datastore,
+    )
+
     # ── Brain ─────────────────────────────────────────────────────────────
     brain_tools = providers.Singleton(
         "opsevo.services.brain.brain_tools.BrainTools",
@@ -264,6 +295,11 @@ class Container(containers.DeclarativeContainer):
         skill_registry=skill_registry,
         mcp_client_manager=mcp_client_manager,
         device_orchestrator=device_orchestrator,
+        alert_engine=alert_engine,
+        rule_evolution_service=rule_evolution_service,
+        knowledge_distiller=knowledge_distiller,
+        fault_healer=fault_healer,
+        pattern_learner=pattern_learner,
     )
 
     perception_cache = providers.Singleton(
@@ -283,4 +319,5 @@ class Container(containers.DeclarativeContainer):
         perception_cache=perception_cache,
         tool_registry=tool_registry,
         tool_search=tool_search,
+        knowledge_distiller=knowledge_distiller,
     )

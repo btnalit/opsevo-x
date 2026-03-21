@@ -54,6 +54,7 @@ class AlertPipeline:
         self._fingerprints: dict[str, float] = {}
         self._stats = {"processed": 0, "deduplicated": 0, "filtered": 0, "errors": 0}
         self._semaphore = asyncio.Semaphore(self._config.max_concurrent)
+        self._dedup_lock = asyncio.Lock()
         self._event_bus: Any = None
         self._initialized = False
 
@@ -103,15 +104,16 @@ class AlertPipeline:
     async def _stage_deduplicate(self, event: dict[str, Any]) -> bool:
         fp = self._compute_fingerprint(event)
         now = time.time() * 1000
-        # Purge expired fingerprints to prevent memory leak
-        expired = [k for k, v in self._fingerprints.items() if now - v >= self._config.dedup_window_ms]
-        for k in expired:
-            del self._fingerprints[k]
-        if fp in self._fingerprints:
-            if now - self._fingerprints[fp] < self._config.dedup_window_ms:
-                return True
-        self._fingerprints[fp] = now
-        return False
+        async with self._dedup_lock:
+            # Purge expired fingerprints to prevent memory leak
+            expired = [k for k, v in self._fingerprints.items() if now - v >= self._config.dedup_window_ms]
+            for k in expired:
+                del self._fingerprints[k]
+            if fp in self._fingerprints:
+                if now - self._fingerprints[fp] < self._config.dedup_window_ms:
+                    return True
+            self._fingerprints[fp] = now
+            return False
 
     async def _stage_filter(self, event: dict[str, Any]) -> bool:
         severity = event.get("severity", "info")

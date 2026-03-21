@@ -5,7 +5,7 @@ export const systemRoutes: RouteRecordRaw[] = [
         path: 'system/scheduler',
         name: 'Scheduler',
         component: () => import('@/views/SchedulerView.vue'),
-        meta: { title: '计划任务' }
+        meta: { title: '计划任务', noDeviceRequired: true }
     },
     {
         path: 'system/users',
