@@ -54,7 +54,8 @@ services:
     environment:
       - DATABASE_URL=postgresql://${PG_USER:-opsevo}:${PG_PASSWORD:-opsevo123}@postgres:5432/${PG_DATABASE:-opsevo}
       - LOG_LEVEL=${LOG_LEVEL:-info}
-      - INTERNAL_API_KEY=${INTERNAL_API_KEY:-changeme-internal-key}
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required}
+      - INTERNAL_API_KEY=${INTERNAL_API_KEY:?INTERNAL_API_KEY is required}
     volumes:
       - opsevo-data:/app/data
       - opsevo-logs:/app/logs
