@@ -21,6 +21,28 @@ services:
       retries: 24
       start_period: 60s
 
+  postgres-wait:
+    image: pgvector/pgvector:pg15
+    depends_on:
+      postgres:
+        condition: service_started
+    networks:
+      - opsevo-network
+    environment:
+      PGHOST: postgres
+      PGPORT: 5432
+      PGDATABASE: ${PG_DATABASE:-opsevo}
+      PGUSER: ${PG_USER:-opsevo}
+      PGPASSWORD: ${PG_PASSWORD:-opsevo123}
+    command: >
+      sh -c '
+      until pg_isready -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE"; do
+        echo "[wait] postgres not ready, retrying...";
+        sleep 2;
+      done
+      '
+    restart: "no"
+
   opsevo:
     image: ghcr.io/btnalit/opsevo-x:latest
     container_name: opsevo
@@ -39,8 +61,8 @@ services:
     networks:
       - opsevo-network
     depends_on:
-      postgres:
-        condition: service_healthy
+      postgres-wait:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3099/api/health"]
       interval: 30s
