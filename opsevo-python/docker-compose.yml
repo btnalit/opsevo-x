@@ -59,8 +59,8 @@ services:
       - PORT=3099
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - DATABASE_URL=postgresql://${PG_USER:-opsevo}:${PG_PASSWORD:-opsevo123}@postgres:5432/${PG_DATABASE:-opsevo}
-      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required}
-      - INTERNAL_API_KEY=${INTERNAL_API_KEY:?INTERNAL_API_KEY is required}
+      - JWT_SECRET=${JWT_SECRET:-changeme-jwt-secret}
+      - INTERNAL_API_KEY=${INTERNAL_API_KEY:-changeme-internal-key}
       - AI_PROVIDER=${AI_PROVIDER:-gemini}
       - AI_MODEL_NAME=${AI_MODEL_NAME:-gemini-1.5-flash}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
