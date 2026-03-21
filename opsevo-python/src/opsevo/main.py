@@ -71,7 +71,10 @@ async def lifespan(app: FastAPI):
     app.state.settings = settings
 
     # Phase 0 — Production safety check
-    if not settings.is_development():
+    is_development = settings.is_development
+    if callable(is_development):
+        is_development = is_development()
+    if not bool(is_development):
         problems = settings.validate_production_requirements()
         if problems:
             for p in problems:
