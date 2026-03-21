@@ -11,10 +11,6 @@ follows the generic convention (DATABASE_URL, AI_PROVIDER, etc.).
 
 from __future__ import annotations
 
-import os
-import secrets
-from pathlib import Path
-
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -361,48 +357,6 @@ class Settings(BaseSettings):
                     f"@{self.pg_host}:{self.pg_port}/{self.pg_database}"
                 ),
             )
-        # If secrets are not provided via env, load them from persisted files
-        # (or generate once) so production startup doesn't hard-fail.
-        self._hydrate_runtime_secret(
-            "jwt_secret",
-            invalid_values={"", "changeme-jwt-secret"},
-        )
-        self._hydrate_runtime_secret(
-            "internal_api_key",
-            invalid_values={"", "changeme-internal-key"},
-        )
-
-    def _hydrate_runtime_secret(self, field_name: str, invalid_values: set[str]) -> None:
-        current = getattr(self, field_name, "") or ""
-        if current not in invalid_values:
-            return
-
-        secret_dir = Path(os.environ.get("APP_DATA_DIR", "/app/data")) / "secrets"
-        secret_file = secret_dir / f"{field_name}.txt"
-
-        # Try existing persisted secret first.
-        try:
-            if secret_file.is_file():
-                value = secret_file.read_text(encoding="utf-8").strip()
-                if value:
-                    object.__setattr__(self, field_name, value)
-                    return
-        except Exception:
-            pass
-
-        # Generate and persist a new secret.
-        value = secrets.token_urlsafe(48)
-        try:
-            secret_dir.mkdir(parents=True, exist_ok=True)
-            secret_file.write_text(value, encoding="utf-8")
-            try:
-                os.chmod(secret_file, 0o600)
-            except Exception:
-                pass
-        except Exception:
-            # Fall back to in-memory value if filesystem isn't writable.
-            pass
-        object.__setattr__(self, field_name, value)
 
     @field_validator("log_level")
     @classmethod
@@ -468,12 +422,4 @@ class Settings(BaseSettings):
         problems: list[str] = []
         if not self.database_url:
             problems.append("DATABASE_URL (or PG_* components) is required")
-        if not self.jwt_secret:
-            problems.append("JWT_SECRET is required")
-        if self.jwt_secret == "changeme-jwt-secret":
-            problems.append("JWT_SECRET must be changed from the default value")
-        if self.internal_api_key == "changeme-internal-key":
-            problems.append(
-                "INTERNAL_API_KEY should be changed from the default value"
-            )
         return problems
