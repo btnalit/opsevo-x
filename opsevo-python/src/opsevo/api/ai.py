@@ -167,12 +167,19 @@ async def test_config_connection(config_id: str, request: Request, ds=Depends(ge
     if not row:
         raise HTTPException(404, "Config not found")
     try:
+        provider = row.get("provider", "")
+        model = row.get("model") or row.get("model_name") or ""
+        api_key = row.get("api_key") or ""
+        base_url = row.get("base_url") or ""
         pool = _get_container(request).adapter_pool()
-        adapter = await pool.get_adapter()
-        result = await adapter.chat([{"role": "user", "content": "ping"}])
-        return {"success": True, "message": "Connection test passed", "data": {"latency_ms": 0}}
+        adapter = await pool.get_adapter(provider, model=model, api_key=api_key, base_url=base_url)
+        import time as _time
+        t0 = _time.monotonic()
+        await adapter.chat([{"role": "user", "content": "ping"}])
+        latency = int((_time.monotonic() - t0) * 1000)
+        return {"success": True, "message": "连接成功", "data": {"latency_ms": latency}}
     except Exception as exc:
-        return {"success": False, "error": str(exc)}
+        return {"success": False, "error": f"连接测试失败: {exc}"}
 
 
 # ==================== 聊天功能 ====================

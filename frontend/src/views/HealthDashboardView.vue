@@ -356,6 +356,11 @@ async function loadData() {
     } catch { /* non-critical */ }
   } catch (e) {
     error.value = e instanceof Error ? e.message : '加载数据失败'
+    // 认证失败时停止轮询，避免请求风暴
+    const msg = e instanceof Error ? e.message : ''
+    if (msg.includes('认证已过期') || msg.includes('刷新令牌失败')) {
+      stopAutoRefresh()
+    }
   } finally {
     loading.value = false
     isLoadingData.value = false

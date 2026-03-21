@@ -12,7 +12,7 @@
  */
 
 import { useAuthStore } from '@/stores/auth'
-import api from './index'
+import api, { isRefreshBroken } from './index'
 
 // ==================== 类型定义 ====================
 
@@ -321,6 +321,10 @@ export const chatApi = {
 
         // 处理 Token 过期导致的 401 Error
         if (response.status === 401 && !isRetrying) {
+          if (isRefreshBroken()) {
+            callbacks.onError?.('认证已过期，请重新登录')
+            return
+          }
           isRetrying = true
           const success = await authStore.refreshAccessToken()
           if (success) {
@@ -973,6 +977,10 @@ export const unifiedAgentApi = {
 
         // 处理 Token 过期导致的 401 Error
         if (response.status === 401 && !isRetrying) {
+          if (isRefreshBroken()) {
+            callbacks.onError?.('认证已过期，请重新登录')
+            return
+          }
           isRetrying = true
           const success = await authStore.refreshAccessToken()
           if (success) {
@@ -1172,6 +1180,10 @@ export const unifiedAgentApi = {
         })
 
         if (response.status === 401 && !isRetrying) {
+          if (isRefreshBroken()) {
+            callbacks.onError?.('认证已过期，请重新登录')
+            return
+          }
           isRetrying = true
           const success = await authStore.refreshAccessToken()
           if (success) {

@@ -72,7 +72,13 @@ const loadBrainStatus = async () => {
       brainState.value = res.data.data.state
       brainQueueDepth.value = res.data.data.queueDepth
     }
-  } catch { /* ignore */ }
+  } catch (error) {
+    // 认证失败时停止轮询，避免请求风暴
+    const msg = error instanceof Error ? error.message : ''
+    if (msg.includes('认证已过期') || msg.includes('刷新令牌失败')) {
+      if (brainTimer) { clearInterval(brainTimer); brainTimer = null }
+    }
+  }
 }
 
 // 共享 composable 实例

@@ -79,12 +79,16 @@ const fetchPending = async () => {
     }
   } catch (error) {
     console.warn('Failed to fetch pending intents', error)
+    // 认证失败时停止轮询，避免请求风暴
+    const msg = error instanceof Error ? error.message : ''
+    if (msg.includes('认证已过期') || msg.includes('刷新令牌失败')) {
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
+    }
   }
 }
 
 onMounted(() => {
-  // FIX: 轮询频率从 8 秒缩短到 3 秒，提高高危操作审批响应速度
-  pollTimer = window.setInterval(fetchPending, 3000)
+  pollTimer = window.setInterval(fetchPending, 10000)
   fetchPending()
 })
 
@@ -99,7 +103,7 @@ onDeactivated(() => {
 onActivated(() => {
   if (!pollTimer) {
     fetchPending()
-    pollTimer = window.setInterval(fetchPending, 3000)
+    pollTimer = window.setInterval(fetchPending, 10000)
   }
 })
 

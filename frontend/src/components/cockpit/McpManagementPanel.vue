@@ -240,7 +240,7 @@ import { ref, watch, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '@/api'
 
-defineProps<{ visible: boolean }>()
+const props = defineProps<{ visible: boolean }>()
 defineEmits<{ 'update:visible': [val: boolean] }>()
 
 const activeTab = ref('server')
@@ -253,14 +253,28 @@ async function fetchServerStatus() {
   try {
     const { data } = await api.get('/ai-ops/mcp/server/status')
     if (data.success) serverStatus.value = data.status
-  } catch (err) { console.warn('[McpPanel] fetchServerStatus failed:', err) }
+  } catch (err) {
+    console.warn('[McpPanel] fetchServerStatus failed:', err)
+    stopPollingOnAuthError(err)
+  }
 }
 
 async function fetchApiKeys() {
   try {
     const { data } = await api.get('/ai-ops/mcp/keys')
     if (data.success) apiKeys.value = data.data || []
-  } catch (err) { console.warn('[McpPanel] fetchApiKeys failed:', err) }
+  } catch (err) {
+    console.warn('[McpPanel] fetchApiKeys failed:', err)
+    stopPollingOnAuthError(err)
+  }
+}
+
+/** 认证失败时停止轮询，避免请求风暴 */
+function stopPollingOnAuthError(err: unknown) {
+  const msg = err instanceof Error ? err.message : ''
+  if (msg.includes('认证已过期') || msg.includes('刷新令牌失败')) {
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
+  }
 }
 
 // ── 创建 API Key ──
@@ -316,14 +330,20 @@ async function fetchClientServers() {
   try {
     const { data } = await api.get('/ai-ops/mcp/client/servers')
     if (data.success) clientServers.value = data.data || []
-  } catch (err) { console.warn('[McpPanel] fetchClientServers failed:', err) }
+  } catch (err) {
+    console.warn('[McpPanel] fetchClientServers failed:', err)
+    stopPollingOnAuthError(err)
+  }
 }
 
 async function fetchClientStatus() {
   try {
     const { data } = await api.get('/ai-ops/mcp/client/status')
     if (data.success) clientConnections.value = data.data?.servers || []
-  } catch (err) { console.warn('[McpPanel] fetchClientStatus failed:', err) }
+  } catch (err) {
+    console.warn('[McpPanel] fetchClientStatus failed:', err)
+    stopPollingOnAuthError(err)
+  }
 }
 
 async function toggleServer(serverId: string, enabled: boolean) {
@@ -449,19 +469,39 @@ function formatTime(ts: number) {
 // ── 轮询刷新 ──
 let pollTimer: ReturnType<typeof setInterval> | null = null
 
+// 只在 drawer 打开时才轮询和 fetch，关闭时停止
+
+watch(() => props.visible, (isVisible) => {
+  if (isVisible) {
+    // drawer 打开：立即加载当前 tab 数据并启动轮询
+    if (activeTab.value === 'server') { fetchServerStatus(); fetchApiKeys() }
+    else { fetchClientServers(); fetchClientStatus() }
+    startPolling()
+  } else {
+    // drawer 关闭：停止轮询
+    stopPolling()
+  }
+})
+
 watch(() => activeTab.value, (tab) => {
+  // 仅在 drawer 打开时切换 tab 才 fetch
+  if (!props.visible) return
   if (tab === 'server') { fetchServerStatus(); fetchApiKeys() }
   else { fetchClientServers(); fetchClientStatus() }
-}, { immediate: true })
+})
 
 function startPolling() {
+  if (pollTimer) return // 已在轮询
   pollTimer = setInterval(() => {
     if (activeTab.value === 'client') fetchClientStatus()
   }, 10000)
 }
 
-startPolling()
-onUnmounted(() => { if (pollTimer) clearInterval(pollTimer) })
+function stopPolling() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
+}
+
+onUnmounted(() => { stopPolling() })
 </script>
 
 <style scoped>

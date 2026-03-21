@@ -10,6 +10,7 @@
 
 import { useAuthStore } from '@/stores/auth'
 import { onTokenRefreshed } from '@/stores/auth'
+import { isRefreshBroken } from '@/api/index'
 
 export interface AuthEventSourceOptions {
   /** Max reconnect attempts for NON-auth errors (network etc.) */
@@ -189,6 +190,13 @@ export function createAuthEventSource(
       const likelyAuthError = timeSinceOpen < 3000
 
       if (likelyAuthError && authRetries < maxAuthRetries) {
+        // 熔断检查：refresh 已失败过则不再尝试
+        if (isRefreshBroken()) {
+          source?.close()
+          source = null
+          onAuthFailed?.()
+          return
+        }
         authRetries++
         source?.close()
         source = null
@@ -218,6 +226,8 @@ export function createAuthEventSource(
         setTimeout(() => connect(), delay)
       } else {
         // Exhausted reconnect attempts
+        source?.close()
+        source = null
         onError?.(new Event('error'))
       }
     }
@@ -228,8 +238,9 @@ export function createAuthEventSource(
   // ---- Listen to global token refresh event ----
   const unsubTokenRefresh = onTokenRefreshed((_newToken: string) => {
     if (closed) return
-    // Proactively reconnect with the new token
-    reconnectWithFreshToken()
+    // 随机延迟 0-2 秒，错开多个 SSE 同时重连，避免瞬间请求风暴
+    const jitter = Math.random() * 2000
+    setTimeout(() => reconnectWithFreshToken(), jitter)
   })
 
   connect()

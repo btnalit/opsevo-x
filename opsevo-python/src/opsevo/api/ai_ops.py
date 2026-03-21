@@ -2980,11 +2980,18 @@ async def test_ai_provider(
     if not row:
         raise HTTPException(404, "Provider not found")
     try:
+        provider = row.get("provider", "")
+        model = row.get("model") or row.get("model_name") or ""
+        api_key = row.get("api_key") or ""
+        base_url = row.get("base_url") or ""
         container = request.app.state.container
         pool = container.adapter_pool()
-        adapter = await pool.get_adapter()
+        import time as _time
+        t0 = _time.monotonic()
+        adapter = await pool.get_adapter(provider, model=model, api_key=api_key, base_url=base_url)
         await adapter.chat([{"role": "user", "content": "ping"}])
-        return {"success": True, "message": "Connection test passed"}
+        latency = int((_time.monotonic() - t0) * 1000)
+        return {"success": True, "message": "连接成功", "data": {"latency_ms": latency}}
     except Exception as exc:
         return {"success": False, "error": str(exc)}
 

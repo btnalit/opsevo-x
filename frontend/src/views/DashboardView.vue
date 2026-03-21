@@ -327,6 +327,10 @@ const loadResource = async () => {
     if (!resource.value) {
       ElMessage.error(message)
     }
+    // 认证失败时停止轮询，避免请求风暴
+    if (message.includes('认证已过期') || message.includes('刷新令牌失败')) {
+      stopAutoRefresh()
+    }
   } finally {
     if (currentId === deviceStore.currentDeviceId) {
       loading.value = false

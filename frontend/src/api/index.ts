@@ -9,10 +9,23 @@ const api = axios.create({
 
 // Flag to prevent multiple simultaneous token refresh attempts
 let isRefreshing = false
+let refreshFailed = false  // 防止 refresh 失败后继续重试
 let failedQueue: Array<{
   resolve: (value: unknown) => void
   reject: (reason?: unknown) => void
 }> = []
+
+/** 登录成功后调用，重置 refresh 熔断状态 */
+export function resetRefreshState() {
+  refreshFailed = false
+  isRefreshing = false
+  failedQueue = []
+}
+
+/** 检查 refresh 是否已熔断（供 fetch 流式 API 使用） */
+export function isRefreshBroken(): boolean {
+  return refreshFailed
+}
 
 function processQueue(error: Error | null, token: string | null = null) {
   failedQueue.forEach((prom) => {
@@ -141,6 +154,11 @@ api.interceptors.response.use(
         return Promise.reject(error)
       }
 
+      // 熔断：如果 refresh 已经失败过，直接拒绝，不再尝试
+      if (refreshFailed) {
+        return Promise.reject(new Error('认证已过期，请重新登录'))
+      }
+
       if (isRefreshing) {
         // Queue this request while refresh is in progress
         return new Promise((resolve, reject) => {
@@ -160,16 +178,19 @@ api.interceptors.response.use(
         const authStore = useAuthStore()
         const success = await authStore.refreshAccessToken()
         if (success) {
+          refreshFailed = false
           const newToken = authStore.token
           processQueue(null, newToken)
           originalRequest.headers.Authorization = `Bearer ${newToken}`
           return api(originalRequest)
         } else {
+          refreshFailed = true
           processQueue(new Error('刷新令牌失败'), null)
           authStore.logout()
           return Promise.reject(new Error('认证已过期，请重新登录'))
         }
       } catch (refreshError) {
+        refreshFailed = true
         processQueue(new Error('刷新令牌失败'), null)
         try {
           const authStore = useAuthStore()

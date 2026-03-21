@@ -331,6 +331,17 @@ const loadInsights = async () => {
     evolutionConfigApi.queryLearning({ limit: 5 }),
   ])
 
+  // 认证失败时停止轮询，避免请求风暴
+  for (const r of [statsResult, learningResult]) {
+    if (r.status === 'rejected') {
+      const msg = r.reason instanceof Error ? r.reason.message : ''
+      if (msg.includes('认证已过期') || msg.includes('刷新令牌失败')) {
+        stopPolling()
+        return
+      }
+    }
+  }
+
   if (statsResult.status === 'fulfilled' && statsResult.value.data?.success && statsResult.value.data.data) {
     toolStats.value = statsResult.value.data.data
   }

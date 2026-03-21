@@ -88,6 +88,15 @@ async function fetchHealth(): Promise<void> {
   } catch (error) {
     consecutiveFailures++
     console.warn('[useHealthData] Failed to fetch health data:', error)
+    // 认证失败时停止轮询，避免请求风暴
+    const msg = error instanceof Error ? error.message : ''
+    if (msg.includes('认证已过期') || msg.includes('刷新令牌失败')) {
+      if (pollTimer !== null) {
+        clearInterval(pollTimer)
+        pollTimer = null
+      }
+      activeConsumers = 0
+    }
   } finally {
     isFetchingHealth = false
   }

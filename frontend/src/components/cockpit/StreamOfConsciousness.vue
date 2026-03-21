@@ -317,7 +317,13 @@ const pollAlerts = async () => {
     for (const id of knownAlertIds) {
       if (!activeIds.has(id)) knownAlertIds.delete(id)
     }
-  } catch { /* 静默失败 */ }
+  } catch (error) {
+    // 认证失败时停止轮询，避免请求风暴
+    const msg = error instanceof Error ? error.message : ''
+    if (msg.includes('认证已过期') || msg.includes('刷新令牌失败')) {
+      if (alertPollTimer) { clearInterval(alertPollTimer); alertPollTimer = null }
+    }
+  }
 }
 
 // ==================== 检查大脑服务状态 ====================

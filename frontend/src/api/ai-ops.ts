@@ -18,7 +18,7 @@
 
 import { useAuthStore, onTokenRefreshed } from '@/stores/auth'
 import { useDeviceStore } from '@/stores/device'
-import api from './index'
+import api, { isRefreshBroken } from './index'
 
 // ==================== 类型定义 ====================
 
@@ -1925,6 +1925,12 @@ export const intentsApi = {
           })
 
           if (response.status === 401 && !isRetrying) {
+            if (isRefreshBroken()) {
+              const errorEv = new Event('error')
+              Object.defineProperty(errorEv, 'message', { value: '认证已过期', writable: true })
+              onError?.(errorEv)
+              return
+            }
             isRetrying = true
             const success = await authStore.refreshAccessToken()
             if (success) {

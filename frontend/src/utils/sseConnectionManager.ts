@@ -6,6 +6,7 @@
  */
 
 import { onTokenRefreshed } from '@/stores/auth'
+import { isRefreshBroken } from '@/api/index'
 
 // ==================== 类型定义 ====================
 
@@ -269,13 +270,20 @@ export class SSEConnectionManager implements ISSEConnectionManager {
       if (!response.ok) {
         // Handle 401 specifically - attempt token refresh
         if (response.status === 401) {
+          // 熔断检查：refresh 已失败过则不再尝试
+          if (isRefreshBroken()) {
+            this.setState('error')
+            this.errorCallbacks.forEach(cb => {
+              try { cb(new Error('认证已过期，请重新登录')) } catch {}
+            })
+            return
+          }
           try {
             const { useAuthStore } = await import('@/stores/auth')
             const authStore = useAuthStore()
             const refreshed = await authStore.refreshAccessToken()
             if (refreshed && this.reconnectAttempts < 2) {
-              // FIX: 刷新 token 后必须更新 requestOptions 中的 Authorization 头
-              // 否则重试时仍然使用旧 token，导致 401 循环
+              // 刷新 token 后更新 requestOptions 中的 Authorization 头
               if (this.requestOptions) {
                 const newToken = authStore.token
                 if (newToken) {

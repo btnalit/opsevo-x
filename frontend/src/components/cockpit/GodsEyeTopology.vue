@@ -304,8 +304,14 @@ async function fetchTopology(): Promise<void> {
 
     renderFullGraph()
     discoveryStatus.value = 'live'
-  } catch {
-    await fetchDevicesFallback()
+  } catch (error) {
+    // 认证失败时停止轮询，避免请求风暴
+    const msg = error instanceof Error ? error.message : ''
+    if (msg.includes('认证已过期') || msg.includes('刷新令牌失败')) {
+      if (refreshTimer !== undefined) { clearInterval(refreshTimer); refreshTimer = undefined }
+    } else {
+      await fetchDevicesFallback()
+    }
   } finally {
     isFetching.value = false
   }

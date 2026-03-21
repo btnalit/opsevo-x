@@ -129,8 +129,12 @@ const checkConnectionStatus = async () => {
       } else {
         connectionStore.setConnected(false)
       }
-    } catch {
-      // Don't set disconnected on network errors - might be temporary
+    } catch (error) {
+      // 认证失败时停止轮询，避免请求风暴
+      const msg = error instanceof Error ? error.message : ''
+      if (msg.includes('认证已过期') || msg.includes('刷新令牌失败')) {
+        if (statusCheckInterval) { clearInterval(statusCheckInterval); statusCheckInterval = null }
+      }
     }
   } else {
     // 回退到单设备模式
@@ -145,8 +149,12 @@ const checkConnectionStatus = async () => {
       } else {
         connectionStore.setConnected(false)
       }
-    } catch {
-      // Don't set disconnected on network errors - might be temporary
+    } catch (error) {
+      // 认证失败时停止轮询，避免请求风暴
+      const msg = error instanceof Error ? error.message : ''
+      if (msg.includes('认证已过期') || msg.includes('刷新令牌失败')) {
+        if (statusCheckInterval) { clearInterval(statusCheckInterval); statusCheckInterval = null }
+      }
     }
   }
 }
@@ -172,7 +180,11 @@ const checkEvolutionStatus = async () => {
       }
     }
   } catch (error) {
-    // 忽略此类后台轮询错误
+    // 认证失败时停止轮询，避免请求风暴
+    const msg = error instanceof Error ? error.message : ''
+    if (msg.includes('认证已过期') || msg.includes('刷新令牌失败')) {
+      if (statusCheckInterval) { clearInterval(statusCheckInterval); statusCheckInterval = null }
+    }
   }
 }
 

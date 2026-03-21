@@ -14,6 +14,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { authApi, type AuthUser } from '@/api/auth'
+import { resetRefreshState } from '@/api/index'
 import router from '@/router'
 
 const TOKEN_KEY = 'auth_token'
@@ -170,6 +171,7 @@ export const useAuthStore = defineStore('auth', () => {
         user.value = response.data.data.user
         saveToStorage()
         scheduleProactiveRefresh()
+        resetRefreshState()
       } else {
         throw new Error(response.data.error || '登录失败')
       }
