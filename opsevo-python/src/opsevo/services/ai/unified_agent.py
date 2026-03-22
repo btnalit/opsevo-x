@@ -23,6 +23,7 @@ from opsevo.services.ai.chat_session import ChatSessionService
 from opsevo.services.ai.context_builder import ContextBuilderService
 from opsevo.services.ai.relevance_scorer import RelevanceScorer
 from opsevo.settings import Settings
+from opsevo.utils.crypto import aes_decrypt
 from opsevo.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -73,6 +74,7 @@ class UnifiedAgentService:
         *,
         mode: str = "general",
         session_id: str = "",
+        config_id: str = "",
         device_id: str = "",
         user_id: str = "",
         context: dict[str, Any] | None = None,
@@ -90,11 +92,15 @@ class UnifiedAgentService:
 
         try:
             if mode == "knowledge-enhanced":
-                result = await self._handle_knowledge_chat(message, sid, device_id, context, rag_options)
+                result = await self._handle_knowledge_chat(
+                    message, sid, device_id, context, rag_options, config_id
+                )
             elif mode == "agent":
-                result = await self._handle_agent_chat(message, sid, device_id, context)
+                result = await self._handle_agent_chat(
+                    message, sid, device_id, context, config_id
+                )
             else:
-                result = await self._handle_general_chat(message, sid, context)
+                result = await self._handle_general_chat(message, sid, context, config_id)
 
             duration_ms = int((time.monotonic() - start) * 1000)
             logger.debug("unified_chat_done", mode=mode, duration_ms=duration_ms)
@@ -113,6 +119,7 @@ class UnifiedAgentService:
         *,
         mode: str = "general",
         session_id: str = "",
+        config_id: str = "",
         device_id: str = "",
         user_id: str = "",
         context: dict[str, Any] | None = None,
@@ -128,11 +135,15 @@ class UnifiedAgentService:
         sid = session["id"]
 
         if mode == "knowledge-enhanced":
-            async for chunk in self._stream_knowledge_chat(message, sid, device_id, context, rag_options):
+            async for chunk in self._stream_knowledge_chat(
+                message, sid, device_id, context, rag_options, config_id
+            ):
                 yield chunk
         elif mode == "agent":
             # Agent mode: run ReAct then stream the final answer
-            result = await self._handle_agent_chat(message, sid, device_id, context)
+            result = await self._handle_agent_chat(
+                message, sid, device_id, context, config_id
+            )
             # Emit reasoning steps
             for r in result.get("reasoning", []):
                 yield {"type": "reasoning", "reasoning": r}
@@ -144,7 +155,7 @@ class UnifiedAgentService:
             yield {"type": "content", "content": answer}
             yield {"type": "done", "content": ""}
         else:
-            async for chunk in self._stream_general_chat(message, sid, context):
+            async for chunk in self._stream_general_chat(message, sid, context, config_id):
                 yield chunk
 
     # ------------------------------------------------------------------
@@ -152,9 +163,13 @@ class UnifiedAgentService:
     # ------------------------------------------------------------------
 
     async def _handle_general_chat(
-        self, message: str, session_id: str, context: dict[str, Any] | None,
+        self,
+        message: str,
+        session_id: str,
+        context: dict[str, Any] | None,
+        config_id: str = "",
     ) -> dict[str, Any]:
-        adapter = await self._pool.get_adapter()
+        adapter = await self._get_adapter_for_config(config_id)
 
         # Load conversation history
         history = await self._load_history(session_id)
@@ -175,9 +190,13 @@ class UnifiedAgentService:
         }
 
     async def _stream_general_chat(
-        self, message: str, session_id: str, context: dict[str, Any] | None,
+        self,
+        message: str,
+        session_id: str,
+        context: dict[str, Any] | None,
+        config_id: str = "",
     ) -> AsyncIterator[dict[str, Any]]:
-        adapter = await self._pool.get_adapter()
+        adapter = await self._get_adapter_for_config(config_id)
         history = await self._load_history(session_id)
         messages = self._build_messages(message, context, history)
 
@@ -205,6 +224,7 @@ class UnifiedAgentService:
         device_id: str,
         context: dict[str, Any] | None,
         rag_options: dict[str, Any] | None,
+        config_id: str = "",
     ) -> dict[str, Any]:
         reasoning: list[str] = []
         citations: list[dict[str, Any]] = []
@@ -226,7 +246,7 @@ class UnifiedAgentService:
         reasoning.append(f"检索到 {len(citations)} 条相关知识，耗时 {retrieval_ms}ms")
 
         # 2. Build enhanced messages with knowledge context
-        adapter = await self._pool.get_adapter()
+        adapter = await self._get_adapter_for_config(config_id)
         history = await self._load_history(session_id)
         messages = self._build_enhanced_messages(message, context, history, citations)
 
@@ -264,6 +284,7 @@ class UnifiedAgentService:
         device_id: str,
         context: dict[str, Any] | None,
         rag_options: dict[str, Any] | None,
+        config_id: str = "",
     ) -> AsyncIterator[dict[str, Any]]:
         yield {"type": "reasoning", "reasoning": "正在检索相关知识..."}
 
@@ -282,7 +303,7 @@ class UnifiedAgentService:
 
         yield {"type": "reasoning", "reasoning": f"检索到 {len(citations)} 条相关知识"}
 
-        adapter = await self._pool.get_adapter()
+        adapter = await self._get_adapter_for_config(config_id)
         history = await self._load_history(session_id)
         messages = self._build_enhanced_messages(message, context, history, citations)
 
@@ -309,6 +330,7 @@ class UnifiedAgentService:
         session_id: str,
         device_id: str,
         context: dict[str, Any] | None,
+        config_id: str = "",
     ) -> dict[str, Any]:
         reasoning: list[str] = []
         tool_calls_out: list[dict[str, Any]] = []
@@ -323,7 +345,7 @@ class UnifiedAgentService:
 
         if not driver:
             reasoning.append("无可用设备驱动，回退到标准模式")
-            return await self._handle_general_chat(message, session_id, context)
+            return await self._handle_general_chat(message, session_id, context, config_id)
 
         # Retrieve knowledge for ReAct context
         knowledge_entries: list[dict[str, Any]] = []
@@ -345,7 +367,7 @@ class UnifiedAgentService:
         from opsevo.services.rag.react_loop import ReactLoopController
         from opsevo.services.rag.react_tools import ReactToolExecutor
 
-        adapter = await self._pool.get_adapter()
+        adapter = await self._get_adapter_for_config(config_id)
         executor = ReactToolExecutor(driver)
         manifest = driver.get_capability_manifest()
         loop = ReactLoopController(
@@ -390,6 +412,52 @@ class UnifiedAgentService:
     # ------------------------------------------------------------------
     # Session management helpers
     # ------------------------------------------------------------------
+
+    async def _get_adapter_for_config(self, config_id: str = ""):
+        """Resolve adapter by explicit config -> default config -> global settings."""
+        row = None
+
+        if config_id:
+            row = await self._ds.query_one(
+                "SELECT provider, model, model_name, api_key, api_key_encrypted, base_url "
+                "FROM ai_configs WHERE id=$1",
+                [config_id],
+            )
+            if not row:
+                raise ValueError(f"AI config not found: {config_id}")
+        else:
+            row = await self._ds.query_one(
+                "SELECT provider, model, model_name, api_key, api_key_encrypted, base_url "
+                "FROM ai_configs WHERE is_default=true ORDER BY updated_at DESC LIMIT 1"
+            )
+
+        if not row:
+            return await self._pool.get_adapter()
+
+        provider = row.get("provider") or self._settings.ai_provider
+        model = row.get("model") or row.get("model_name") or self._settings.ai_model_name
+        api_key = row.get("api_key") or ""
+        base_url = row.get("base_url") or ""
+
+        # Backward compatibility: some legacy rows only have encrypted key.
+        if not api_key:
+            encrypted = row.get("api_key_encrypted") or ""
+            if encrypted:
+                try:
+                    api_key = aes_decrypt(encrypted, self._settings.ai_crypto_secret_key)
+                except Exception:
+                    logger.warning(
+                        "ai_config_key_decrypt_failed",
+                        provider=provider,
+                        config_id=config_id or None,
+                    )
+
+        return await self._pool.get_adapter(
+            provider,
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+        )
 
     async def _get_or_create_session(
         self,

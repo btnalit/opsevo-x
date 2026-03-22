@@ -69,6 +69,7 @@ async def chat_stream(
                 body.message,
                 mode=body.mode,
                 session_id=body.session_id or "",
+                config_id=body.config_id or "",
                 user_id=_uid(user),
             ):
                 data = json.dumps(chunk, ensure_ascii=False)
@@ -105,6 +106,7 @@ async def chat(
         body.message,
         mode=body.mode,
         session_id=body.session_id or "",
+        config_id=body.config_id or "",
         user_id=_uid(user),
     )
     return {"success": True, "data": result}

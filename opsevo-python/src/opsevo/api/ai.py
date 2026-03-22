@@ -217,10 +217,12 @@ async def chat(request: Request, ds=Depends(get_datastore), user=Depends(get_cur
     message = body.get("message", "")
     mode = body.get("mode", "general")
     session_id = body.get("sessionId")
+    config_id = body.get("configId")
     result = await agent.chat(
         message=message,
         mode=mode,
         session_id=session_id,
+        config_id=config_id or "",
         user_id=_uid(user),
     )
     return {"success": True, "data": result}
@@ -252,6 +254,7 @@ async def chat_stream(
                 message,
                 mode=mode,
                 session_id=session_id or "",
+                config_id=config_id or "",
                 user_id=_uid(user),
             ):
                 if isinstance(chunk, dict):

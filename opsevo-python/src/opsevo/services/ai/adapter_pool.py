@@ -5,6 +5,7 @@ Requirements: 11.3
 
 from __future__ import annotations
 
+import hashlib
 import time
 from collections import OrderedDict
 from typing import Any
@@ -27,7 +28,9 @@ class AdapterPool:
         self._cache: OrderedDict[str, tuple[AIAdapter, float]] = OrderedDict()
 
     def _cache_key(self, provider: str, model: str = "", api_key: str = "", base_url: str = "") -> str:
-        return f"{provider}:{model}:{base_url}"
+        # Include API key fingerprint so switching keys does not reuse stale adapters.
+        key_fingerprint = hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:16] if api_key else ""
+        return f"{provider}:{model}:{base_url}:{key_fingerprint}"
 
     async def get_adapter(
         self,

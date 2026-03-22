@@ -25,6 +25,7 @@ class ChatRequest(BaseModel):
     message: str
     mode: str = "general"  # general | rag | agent
     session_id: str | None = Field(default=None, alias="sessionId")
+    config_id: str | None = Field(default=None, alias="configId")
     stream: bool = False
     rag_options: RAGOptions | None = Field(default=None, alias="ragOptions")
 
