@@ -190,9 +190,22 @@ async def test_config_connection(config_id: str, request: Request, ds=Depends(ge
         t0 = _time.monotonic()
         await adapter.chat([{"role": "user", "content": "ping"}])
         latency = int((_time.monotonic() - t0) * 1000)
-        return {"success": True, "message": "连接成功", "data": {"latency_ms": latency}}
+        return {
+            "success": True,
+            "message": "连接成功",
+            "data": {
+                "connected": True,
+                "message": "API 可用",
+                "latencyMs": latency,
+                "latency_ms": latency,
+            },
+        }
     except Exception as exc:
-        return {"success": False, "error": f"连接测试失败: {exc}"}
+        return {
+            "success": False,
+            "error": f"连接测试失败: {exc}",
+            "data": {"connected": False, "message": str(exc)},
+        }
 
 
 # ==================== 聊天功能 ====================
