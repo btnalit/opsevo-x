@@ -54,8 +54,8 @@ ENDPOINTS: dict[EmbeddingProvider, str] = {
     "zhipu": "https://open.bigmodel.cn/api/paas/v4/embeddings",
 }
 
-# Provider priority for auto-discovery (Gemini free tier first)
-SUPPORTED_PROVIDERS: list[EmbeddingProvider] = ["gemini", "openai", "qwen", "zhipu"]
+# Provider priority for auto-discovery (Gemini first)
+SUPPORTED_PROVIDERS: list[EmbeddingProvider] = ["gemini", "openai", "deepseek", "qwen", "zhipu"]
 
 CACHE_TTL_MS = 24 * 60 * 60 * 1000  # 24h
 MAX_RETRIES = 3
@@ -99,6 +99,9 @@ class EmbeddingService:
         self._api_key: str | None = None
         self._endpoint: str | None = None
         self._initialized = False
+        # Explicit provider hint from runtime config update.
+        # When set, DB/env key selection will prioritize this provider.
+        self._provider_hint: EmbeddingProvider | None = None
 
         # cache
         self._cache: dict[str, _CacheEntry] = {}
@@ -127,52 +130,36 @@ class EmbeddingService:
 
     async def _refresh_config(self) -> None:
         """Read ai_configs from DB and pick the best provider with a valid key."""
+        # Reset transient runtime values on every refresh to avoid stale key/endpoint reuse.
+        self._api_key = None
+        self._endpoint = None
+
         if not self._ds or not self._crypto:
-            # No DB access — fall back to env vars
+            # No DB access – fall back to env vars
             self._apply_env_fallback()
             return
         try:
-            rows = await self._ds.query(
-                "SELECT id, provider, api_key_encrypted, base_url FROM ai_configs ORDER BY created_at DESC"
-            )
+            rows = await self._query_ai_config_rows()
             if not rows:
                 self._apply_env_fallback()
                 return
 
-            # Try preferred providers first
-            for preferred in SUPPORTED_PROVIDERS:
-                for row in rows:
-                    if row.get("provider") == preferred:
-                        encrypted = row.get("api_key_encrypted", "")
-                        if not encrypted:
-                            continue
-                        key = self._crypto.decrypt(encrypted)
-                        if not key:
-                            continue
-                        self._api_key = key
-                        self._endpoint = ENDPOINTS[preferred]
-                        if self._config.provider != preferred:
-                            self._config.provider = preferred
-                            self._config.model = DEFAULT_MODELS[preferred]
-                            self._config.dimensions = DIMENSIONS[preferred]
-                        return
+            # 1) Explicit/provider preference first: runtime hint > embedding_provider > ai_provider
+            preferred_provider = self._get_preferred_provider()
+            if preferred_provider and self._apply_provider_from_rows(rows, preferred_provider):
+                return
 
-            # Fallback: any row with a known provider
+            # 2) Provider priority fallback
+            for preferred in SUPPORTED_PROVIDERS:
+                if self._apply_provider_from_rows(rows, preferred):
+                    return
+
+            # 3) Any known provider row with usable key
             for row in rows:
                 p = row.get("provider", "")
                 if p in ENDPOINTS:
-                    encrypted = row.get("api_key_encrypted", "")
-                    if not encrypted:
-                        continue
-                    key = self._crypto.decrypt(encrypted)
-                    if not key:
-                        continue
-                    self._api_key = key
-                    self._endpoint = ENDPOINTS[p]  # type: ignore[index]
-                    self._config.provider = p  # type: ignore[assignment]
-                    self._config.model = DEFAULT_MODELS.get(p, "")  # type: ignore[arg-type]
-                    self._config.dimensions = DIMENSIONS.get(p, 1024)  # type: ignore[arg-type]
-                    return
+                    if self._apply_row(row, p):  # type: ignore[arg-type]
+                        return
 
             # Nothing usable in DB
             self._apply_env_fallback()
@@ -180,20 +167,129 @@ class EmbeddingService:
             logger.warning("embedding_refresh_config_failed", exc_info=True)
             self._apply_env_fallback()
 
+    async def _query_ai_config_rows(self) -> list[dict[str, Any]]:
+        """Query ai_configs with backward-compatible SQL variants."""
+        assert self._ds is not None
+        sql_candidates = [
+            (
+                "SELECT id, provider, model, model_name, api_key, api_key_encrypted, base_url "
+                "FROM ai_configs ORDER BY created_at DESC"
+            ),
+            (
+                "SELECT id, provider, model, model_name, api_key, base_url "
+                "FROM ai_configs ORDER BY created_at DESC"
+            ),
+        ]
+        for idx, sql in enumerate(sql_candidates):
+            try:
+                return await self._ds.query(sql)
+            except Exception:
+                # Keep compatibility with historical schemas and continue trying.
+                logger.warning("embedding_ai_config_query_variant_failed", variant=idx + 1, exc_info=True)
+                continue
+        return []
+
+    def _get_preferred_provider(self) -> EmbeddingProvider | None:
+        """Resolve provider preference order anchor."""
+        if self._provider_hint:
+            return self._provider_hint
+        p = (self._settings.embedding_provider or "").lower()
+        if p in ENDPOINTS:
+            return p  # type: ignore[return-value]
+        p2 = (self._settings.ai_provider or "").lower()
+        if p2 in ENDPOINTS:
+            return p2  # type: ignore[return-value]
+        return None
+
+    def _read_key_from_row(self, row: dict[str, Any]) -> str:
+        """Read API key from ai_configs row (plain api_key first, then encrypted)."""
+        plain = (row.get("api_key") or "").strip()
+        if plain:
+            return plain
+        encrypted = (row.get("api_key_encrypted") or "").strip()
+        if not encrypted:
+            return ""
+        try:
+            return (self._crypto.decrypt(encrypted) or "").strip() if self._crypto else ""
+        except Exception:
+            logger.warning("embedding_api_key_decrypt_failed", provider=row.get("provider"))
+            return ""
+
+    def _apply_provider_from_rows(self, rows: list[dict[str, Any]], provider: EmbeddingProvider) -> bool:
+        """Find first row for provider with usable key and apply it."""
+        for row in rows:
+            if row.get("provider") == provider and self._apply_row(row, provider):
+                return True
+        return False
+
+    def _apply_row(self, row: dict[str, Any], provider: EmbeddingProvider) -> bool:
+        """Apply provider/model/key/endpoint from a DB row."""
+        key = self._read_key_from_row(row)
+        if not key:
+            return False
+
+        self._api_key = key
+        base_url = (row.get("base_url") or "").strip()
+        self._endpoint = base_url or ENDPOINTS[provider]
+
+        self._config.provider = provider
+        model = (row.get("model") or row.get("model_name") or "").strip()
+        self._config.model = model or DEFAULT_MODELS[provider]
+        self._config.dimensions = DIMENSIONS[provider]
+        return True
+
     def _apply_env_fallback(self) -> None:
         """Use settings env vars as fallback when DB has no usable config."""
         s = self._settings
-        provider = (s.embedding_provider or s.ai_provider).lower()
-        if provider in ENDPOINTS:
-            self._config.provider = provider  # type: ignore[assignment]
-        if s.embedding_remote_api_key:
-            self._api_key = s.embedding_remote_api_key
-        if s.embedding_remote_url:
-            self._endpoint = s.embedding_remote_url
-        elif provider in ENDPOINTS:
-            self._endpoint = ENDPOINTS[self._config.provider]
+        env_keys: dict[EmbeddingProvider, str] = {
+            "gemini": s.gemini_api_key,
+            "openai": s.openai_api_key,
+            "deepseek": s.deepseek_api_key,
+            "qwen": s.qwen_api_key,
+            "zhipu": s.zhipu_api_key,
+        }
+
+        # Provider candidates: explicit/runtime > embedding_provider > ai_provider > priority list
+        candidates: list[EmbeddingProvider] = []
+        for p in [self._provider_hint, (s.embedding_provider or "").lower(), (s.ai_provider or "").lower()]:
+            if p in ENDPOINTS and p not in candidates:
+                candidates.append(p)  # type: ignore[arg-type]
+        for p in SUPPORTED_PROVIDERS:
+            if p not in candidates:
+                candidates.append(p)
+
+        # 1) Prefer provider-specific env keys
+        for provider in candidates:
+            key = (env_keys.get(provider) or "").strip()
+            if not key:
+                continue
+            self._config.provider = provider
+            self._api_key = key
+            self._endpoint = s.embedding_remote_url or ENDPOINTS[provider]
+            self._config.model = s.embedding_model_name or DEFAULT_MODELS[provider]
+            self._config.dimensions = DIMENSIONS[provider]
+            return
+
+        # 2) Generic embedding key fallback
+        generic_key = (s.embedding_remote_api_key or "").strip()
+        if generic_key:
+            provider = candidates[0] if candidates else "gemini"
+            self._config.provider = provider
+            self._api_key = generic_key
+            self._endpoint = s.embedding_remote_url or ENDPOINTS[provider]
+            self._config.model = s.embedding_model_name or DEFAULT_MODELS[provider]
+            self._config.dimensions = DIMENSIONS[provider]
+            return
+
+        # 3) No key available, keep provider/model sensible for observability
+        provider = candidates[0] if candidates else "gemini"
+        self._config.provider = provider
+        self._endpoint = s.embedding_remote_url or ENDPOINTS[provider]
         if s.embedding_model_name:
             self._config.model = s.embedding_model_name
+        else:
+            self._config.model = DEFAULT_MODELS[provider]
+        self._config.dimensions = DIMENSIONS[provider]
 
     # ── Public API ────────────────────────────────────────────────────────
 
@@ -429,6 +525,7 @@ class EmbeddingService:
             p = cfg["provider"]
             if p in ENDPOINTS:
                 self._config.provider = p
+                self._provider_hint = p
         if "model" in cfg:
             self._config.model = cfg["model"]
         if "dimensions" in cfg:
