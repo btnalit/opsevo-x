@@ -233,10 +233,30 @@ class EmbeddingService:
         self._endpoint = base_url or ENDPOINTS[provider]
 
         self._config.provider = provider
-        model = (row.get("model") or row.get("model_name") or "").strip()
-        self._config.model = model or DEFAULT_MODELS[provider]
+        configured_model = (row.get("model") or row.get("model_name") or "").strip()
+        # ai_configs 主要用于对话模型，RAG 嵌入优先强制使用 embedding 模型，
+        # 仅当显式配置本身就是 embedding 模型时才采用该值。
+        if configured_model and self._is_embedding_model(configured_model):
+            self._config.model = configured_model
+        else:
+            if configured_model:
+                logger.info(
+                    "embedding_model_overridden_to_default",
+                    provider=provider,
+                    configured_model=configured_model,
+                    selected_model=DEFAULT_MODELS[provider],
+                )
+            self._config.model = DEFAULT_MODELS[provider]
         self._config.dimensions = DIMENSIONS[provider]
         return True
+
+    @staticmethod
+    def _is_embedding_model(model_name: str) -> bool:
+        name = model_name.strip().lower()
+        if not name:
+            return False
+        # 通用判定：包含 embedding 关键字则认为是可用于向量化的模型
+        return "embedding" in name
 
     def _apply_env_fallback(self) -> None:
         """Use settings env vars as fallback when DB has no usable config."""
@@ -347,6 +367,10 @@ class EmbeddingService:
                 return await self._do_request(texts)
             except Exception as exc:
                 last_err = exc
+                # If provider key is invalid/forbidden/rate-limited, try a provider failover
+                # (unless user explicitly pinned provider via runtime config).
+                if await self._maybe_failover_provider(exc):
+                    continue
                 logger.warning(
                     "embedding_api_failed",
                     attempt=attempt + 1,
@@ -355,7 +379,47 @@ class EmbeddingService:
                 )
                 if attempt < MAX_RETRIES - 1:
                     await asyncio.sleep(2**attempt)
+        if isinstance(last_err, httpx.HTTPStatusError):
+            status = last_err.response.status_code
+            detail = (last_err.response.text or "").strip()
+            if len(detail) > 500:
+                detail = detail[:500] + "..."
+            raise RuntimeError(
+                f"Embedding API failed (provider={self._config.provider}, status={status}): {detail or last_err}"
+            ) from last_err
+        if isinstance(last_err, httpx.RequestError):
+            raise RuntimeError(
+                f"Embedding network error (provider={self._config.provider}): {last_err}"
+            ) from last_err
         raise last_err or RuntimeError("Embedding API failed after retries")
+
+    async def _maybe_failover_provider(self, exc: Exception) -> bool:
+        """Try switching to another configured provider when current one is unusable."""
+        if self._provider_hint:
+            return False
+        if not isinstance(exc, httpx.HTTPStatusError):
+            return False
+
+        status = exc.response.status_code
+        if status not in (401, 403, 429):
+            return False
+        if not self._ds:
+            return False
+
+        current = self._config.provider
+        rows = await self._query_ai_config_rows()
+        for provider in SUPPORTED_PROVIDERS:
+            if provider == current:
+                continue
+            if self._apply_provider_from_rows(rows, provider):
+                logger.warning(
+                    "embedding_provider_failover",
+                    from_provider=current,
+                    to_provider=provider,
+                    status=status,
+                )
+                return True
+        return False
 
     async def _do_request(self, texts: list[str]) -> list[list[float]]:
         endpoint = self._endpoint or ENDPOINTS[self._config.provider]

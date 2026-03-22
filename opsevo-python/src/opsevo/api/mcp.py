@@ -31,9 +31,11 @@ router = APIRouter(tags=["mcp"])
 # ------------------------------------------------------------------
 
 class CreateKeyRequest(BaseModel):
-    tenant_id: str
-    role: str
-    label: str
+    tenant_id: str | None = None
+    role: str = "viewer"
+    label: str | None = None
+    # 前端兼容字段（某些页面传 name 而非 label）
+    name: str | None = None
 
 
 class AddServerRequest(BaseModel):
@@ -128,9 +130,10 @@ async def create_key(
     mgr = _get_api_key_manager(request)
     if not mgr:
         raise HTTPException(503, "ApiKeyManager not available")
-    if not body.tenant_id or not body.role or not body.label:
-        raise HTTPException(400, "tenantId, role, and label are required")
-    result = await mgr.create_key(body.tenant_id, body.role, body.label)
+    tenant_id = (body.tenant_id or "").strip() or "default"
+    role = (body.role or "").strip() or "viewer"
+    label = (body.label or body.name or "").strip() or "default-key"
+    result = await mgr.create_key(tenant_id, role, label)
     return {"success": True, "data": result}
 
 
@@ -335,7 +338,10 @@ async def create_api_key_alias(
     mgr = _get_api_key_manager(request)
     if not mgr:
         raise HTTPException(503, "ApiKeyManager not available")
-    result = await mgr.create_key(body.tenant_id, body.role, body.label)
+    tenant_id = (body.tenant_id or "").strip() or "default"
+    role = (body.role or "").strip() or "viewer"
+    label = (body.label or body.name or "").strip() or "default-key"
+    result = await mgr.create_key(tenant_id, role, label)
     return {"success": True, "data": result}
 
 

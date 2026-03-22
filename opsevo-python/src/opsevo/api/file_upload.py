@@ -118,6 +118,23 @@ def _generate_progress_id() -> str:
     return f"upload_{int(time.time())}_{uuid.uuid4().hex[:7]}"
 
 
+def _format_upload_error(exc: Exception) -> str:
+    """Normalize backend exception to user-facing API error text."""
+    msg = (str(exc) or "").strip()
+    if not msg:
+        msg = exc.__class__.__name__
+    lower = msg.lower()
+    if "no api key configured for embedding" in lower:
+        return "未配置可用的嵌入 API Key，请先在 AI 服务配置中添加可用密钥"
+    if "embedding api failed" in lower or "embedding network error" in lower:
+        return f"向量化服务调用失败：{msg}"
+    if "vector" in lower and "dimension" in lower:
+        return f"向量维度不匹配：{msg}"
+    if len(msg) > 300:
+        return msg[:300] + "..."
+    return msg
+
+
 # ---------------------------------------------------------------------------
 # GET /upload/types — 获取支持的文件类型
 # ---------------------------------------------------------------------------
@@ -157,8 +174,8 @@ async def validate_files(
 # ---------------------------------------------------------------------------
 @router.post("")
 async def upload_file(
+    request: Request,
     device_id: str | None = Depends(get_device_id),
-    request: Request = None,
     file: UploadFile = File(...),
     user=Depends(get_current_user),
 ) -> JSONResponse:
@@ -181,45 +198,61 @@ async def upload_file(
     }
 
     raw = await file.read()
-    text = _extract_text(raw, ext)
     entries_created: list[dict[str, Any]] = []
 
-    if text.strip():
-        kb = _get_knowledge_base(request)
-        chunks = _chunk_text(text)
-        _progress_store[progress_id].update(progress=30, message=f"正在写入 {len(chunks)} 个分块...")
-        for i, chunk in enumerate(chunks):
-            meta = {
-                "source": "file-upload",
-                "filename": file.filename,
-                "fileType": ext,
-                "chunkIndex": i,
-                "totalChunks": len(chunks),
-                "deviceId": device_id,
-            }
-            doc_id = await kb.add_entry(chunk, metadata=meta, tags=["file-upload", ext.lstrip(".")])
-            entries_created.append({"id": doc_id, "chunkIndex": i, "length": len(chunk)})
-            _progress_store[progress_id]["progress"] = 30 + int(60 * (i + 1) / len(chunks))
-    else:
-        logger.warning("file_upload_no_text", filename=file.filename, ext=ext)
+    try:
+        text = _extract_text(raw, ext)
+        if text.strip():
+            kb = _get_knowledge_base(request)
+            chunks = _chunk_text(text)
+            _progress_store[progress_id].update(progress=30, message=f"正在写入 {len(chunks)} 个分块...")
+            for i, chunk in enumerate(chunks):
+                meta = {
+                    "source": "file-upload",
+                    "filename": file.filename,
+                    "fileType": ext,
+                    "chunkIndex": i,
+                    "totalChunks": len(chunks),
+                    "deviceId": device_id,
+                }
+                doc_id = await kb.add_entry(chunk, metadata=meta, tags=["file-upload", ext.lstrip(".")])
+                entries_created.append({"id": doc_id, "chunkIndex": i, "length": len(chunk)})
+                _progress_store[progress_id]["progress"] = 30 + int(60 * (i + 1) / len(chunks))
+        else:
+            logger.warning("file_upload_no_text", filename=file.filename, ext=ext)
 
-    _progress_store[progress_id].update(
-        status="completed", progress=100, message="处理完成", completedAt=time.time()
-    )
-
-    return JSONResponse(
-        status_code=201,
-        content={
-            "success": True,
-            "data": {
-                "filename": file.filename,
-                "size": len(raw),
-                "entries": entries_created,
-                "entriesCreated": len(entries_created),
+        _progress_store[progress_id].update(
+            status="completed", progress=100, message="处理完成", completedAt=time.time()
+        )
+        return JSONResponse(
+            status_code=201,
+            content={
+                "success": True,
+                "data": {
+                    "filename": file.filename,
+                    "size": len(raw),
+                    "entries": entries_created,
+                    "entriesCreated": len(entries_created),
+                },
+                "progressId": progress_id,
             },
-            "progressId": progress_id,
-        },
-    )
+        )
+    except Exception as exc:
+        msg = _format_upload_error(exc)
+        logger.error("file_upload_error", filename=file.filename, error=msg, exc_info=True)
+        _progress_store[progress_id].update(
+            status="failed",
+            message=msg,
+            completedAt=time.time(),
+        )
+        return JSONResponse(
+            status_code=502,
+            content={
+                "success": False,
+                "error": msg,
+                "progressId": progress_id,
+            },
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -227,8 +260,8 @@ async def upload_file(
 # ---------------------------------------------------------------------------
 @router.post("/batch")
 async def batch_upload_files(
+    request: Request,
     device_id: str | None = Depends(get_device_id),
-    request: Request = None,
     files: list[UploadFile] = File(...),
     user=Depends(get_current_user),
 ) -> JSONResponse:
@@ -260,6 +293,8 @@ async def batch_upload_files(
         error_msg = None
 
         try:
+            if not any(t["extension"] == ext for t in SUPPORTED_FILE_TYPES):
+                raise ValueError(f"不支持的文件类型: {ext}")
             text = _extract_text(raw, ext)
             if text.strip():
                 chunks = _chunk_text(text)
@@ -276,8 +311,8 @@ async def batch_upload_files(
                     file_entries.append({"id": doc_id, "chunkIndex": i, "length": len(chunk)})
         except Exception as exc:
             success = False
-            error_msg = str(exc)
-            logger.error("batch_upload_file_error", filename=fname, error=str(exc))
+            error_msg = _format_upload_error(exc)
+            logger.error("batch_upload_file_error", filename=fname, error=error_msg, exc_info=True)
 
         total_entries += len(file_entries)
         results.append({
@@ -295,10 +330,28 @@ async def batch_upload_files(
         status="completed", progress=100, completedAt=time.time()
     )
 
+    if success_count == 0:
+        first_error = next((r.get("error") for r in results if r.get("error")), "所有文件处理失败")
+        return JSONResponse(
+            status_code=502,
+            content={
+                "success": False,
+                "error": f"批量上传失败：{first_error}",
+                "data": results,
+                "summary": {
+                    "total": len(files),
+                    "success": success_count,
+                    "failed": len(files) - success_count,
+                    "entriesCreated": total_entries,
+                },
+                "progressId": progress_id,
+            },
+        )
+
     return JSONResponse(
-        status_code=201 if success_count > 0 else 400,
+        status_code=201,
         content={
-            "success": success_count > 0,
+            "success": True,
             "data": results,
             "summary": {
                 "total": len(files),
